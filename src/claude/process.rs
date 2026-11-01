@@ -1,6 +1,8 @@
 //! One `claude` child process: its stdin as a queue of lines, its stdout parsed into events, its stderr kept short.
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -35,6 +37,8 @@ pub enum ProcEvent {
 pub struct ClaudeProcess {
     stdin: mpsc::UnboundedSender<String>,
     pid: Option<u32>,
+    /// False once stdout has ended: a line queued after that would never be read.
+    alive: Arc<AtomicBool>,
 }
 
 pub fn claude_bin() -> String {
@@ -72,6 +76,8 @@ impl ClaudeProcess {
         let stdout = child.stdout.take().context("no stdout")?;
         let stderr = child.stderr.take().context("no stderr")?;
 
+        let alive = Arc::new(AtomicBool::new(true));
+        let reader_alive = alive.clone();
         let (line_tx, mut line_rx) = mpsc::unbounded_channel::<String>();
         let (event_tx, event_rx) = mpsc::unbounded_channel::<ProcEvent>();
 
@@ -120,6 +126,7 @@ impl ClaudeProcess {
                     }
                 }
             }
+            reader_alive.store(false, Ordering::SeqCst);
             if too_long {
                 kill_group(pid);
             }
@@ -133,12 +140,22 @@ impl ClaudeProcess {
             let _ = event_tx.send(ProcEvent::Exited(code));
         });
 
-        Ok((Self { stdin: line_tx, pid }, event_rx))
+        Ok((Self { stdin: line_tx, pid, alive }, event_rx))
     }
 
     /// Queues one line for stdin; false when the process is gone.
     pub fn send_line(&self, line: String) -> bool {
-        self.stdin.send(line).is_ok()
+        self.alive.load(Ordering::SeqCst) && self.stdin.send(line).is_ok()
+    }
+
+    /// SIGKILL to the whole group now, for a host that is exiting and cannot wait three seconds.
+    pub fn kill_now(&self) {
+        if let Some(pid) = self.pid {
+            // SAFETY: killpg with a process group id this host created (process_group(0) at spawn).
+            unsafe {
+                libc::killpg(pid as i32, libc::SIGKILL);
+            }
+        }
     }
 
     /// Ends the process and everything it started: SIGTERM to its group, SIGKILL after three seconds.

@@ -23,7 +23,7 @@ pub fn data_dir() -> PathBuf {
 impl Registry {
     /// Opens the data folder and starts a task for every session found in it (none has a process until its next message).
     pub fn open(dir: PathBuf, bin: Option<String>) -> anyhow::Result<Self> {
-        std::fs::create_dir_all(&dir)?;
+        crate::private::create_dir(&dir)?;
         let registry = Self { dir: dir.clone(), bin: bin.unwrap_or_else(claude_bin), sessions: Mutex::new(HashMap::new()) };
         for entry in std::fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
@@ -54,10 +54,17 @@ impl Registry {
         let model = model.filter(|m| !m.trim().is_empty() && m.len() <= 100 && m.chars().all(|c| c.is_ascii_alphanumeric() || "-_.:/[]".contains(c)));
         let meta = session::new_meta(real, model);
         let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
-        std::fs::write(session::meta_path(&self.dir, &meta.sid), text).map_err(|e| e.to_string())?;
+        crate::private::write(&session::meta_path(&self.dir, &meta.sid), &text).map_err(|e| e.to_string())?;
         let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new() });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok(handle)
+    }
+
+    /// Ends every session's process and its children at once (the host is going away).
+    pub fn kill_all(&self) {
+        for handle in self.sessions.lock().expect("registry lock").values() {
+            handle.kill();
+        }
     }
 
     pub fn get(&self, sid: &str) -> Option<SessionHandle> {

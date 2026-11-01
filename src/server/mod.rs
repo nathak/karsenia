@@ -18,6 +18,7 @@ use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -25,8 +26,8 @@ use crate::claude::protocol::Image;
 use crate::random_hex;
 use crate::registry::Registry;
 
-/// The biggest WebSocket message: room for a few 5 MB images in base64.
-pub const MAX_WS_MESSAGE: usize = 32 * 1024 * 1024;
+/// The biggest WebSocket message: five 5 MB images are about 35 MB in base64.
+pub const MAX_WS_MESSAGE: usize = 40 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -44,6 +45,7 @@ pub struct Config {
 }
 
 pub struct Running {
+    pub registry: Arc<Registry>,
     pub addr: SocketAddr,
     pub token: String,
     pub task: JoinHandle<()>,
@@ -61,7 +63,7 @@ pub async fn start(config: Config) -> anyhow::Result<Running> {
     let addr = listener.local_addr()?;
     let token = random_hex(32);
     let registry = Arc::new(Registry::open(config.data_dir, config.bin)?);
-    let state = AppState { registry, token: Arc::new(token.clone()), port: addr.port() };
+    let state = AppState { registry: registry.clone(), token: Arc::new(token.clone()), port: addr.port() };
     let app = Router::new()
         .route("/ws", get(ws_upgrade))
         .route("/api/file", get(file))
@@ -72,7 +74,7 @@ pub async fn start(config: Config) -> anyhow::Result<Running> {
         let _ = axum::serve(listener, app).await;
     });
 
-    Ok(Running { addr, token, task })
+    Ok(Running { registry, addr, token, task })
 }
 
 // ---- static files ----
@@ -124,10 +126,13 @@ async fn file(State(state): State<AppState>, headers: HeaderMap, Query(query): Q
     let Some(info) = handle.info().await else { return StatusCode::NOT_FOUND.into_response() };
     let Some(real) = files::resolve(&info.meta.cwd, &query.path) else { return StatusCode::NOT_FOUND.into_response() };
     let Some(kind) = files::image_type(&real) else { return StatusCode::NOT_FOUND.into_response() };
-    match tokio::fs::read(&real).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, kind)], bytes).into_response(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    // Read through one open handle and never past the limit, whatever the file grew to since it was checked.
+    let Ok(opened) = tokio::fs::File::open(&real).await else { return StatusCode::NOT_FOUND.into_response() };
+    let mut bytes = Vec::new();
+    if opened.take(files::MAX_FILE + 1).read_to_end(&mut bytes).await.is_err() || bytes.len() as u64 > files::MAX_FILE {
+        return StatusCode::NOT_FOUND.into_response();
     }
+    ([(header::CONTENT_TYPE, kind)], bytes).into_response()
 }
 
 // ---- the WebSocket ----
@@ -261,22 +266,31 @@ async fn attach(handle: &crate::session::SessionHandle, after: u64, out: &mpsc::
         old.abort();
     }
     let Some((missed, mut rx)) = handle.subscribe(after).await else { return };
+    let mut last = after;
     for envelope in missed {
+        last = last.max(envelope.seq);
         let _ = out.send(serde_json::to_string(&envelope).unwrap_or_default());
     }
     let _ = out.send(plain("attached", Some(&handle.sid), json!({})));
     let out = out.clone();
-    let sid = handle.sid.clone();
+    let follow = handle.clone();
     let task = tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(envelope) => {
+                    last = last.max(envelope.seq);
                     if out.send(serde_json::to_string(&envelope).unwrap_or_default()).is_err() {
                         break;
                     }
                 }
+                // Events were dropped for a slow reader: take them again from the log, so a permission is never missed.
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    let _ = out.send(plain("error", Some(&sid), json!({"message": "events were missed; reattach"})));
+                    let Some((missed, fresh)) = follow.subscribe(last).await else { break };
+                    rx = fresh;
+                    for envelope in missed {
+                        last = last.max(envelope.seq);
+                        let _ = out.send(serde_json::to_string(&envelope).unwrap_or_default());
+                    }
                 }
                 Err(_) => break,
             }

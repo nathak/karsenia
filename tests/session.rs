@@ -223,3 +223,90 @@ async fn a_folder_that_is_not_safe_is_refused() {
     assert!(fx.registry.create("relative/dir", None).is_err());
     assert!(fx.registry.create("/no/such/dir/at/all", None).is_err());
 }
+
+#[tokio::test]
+async fn a_session_read_back_after_a_crash_has_nothing_left_open() {
+    let fx = fixture("");
+    let data = fx.root.join("data");
+    let meta = serde_json::json!({"sid": "dead01", "cwd": fx.project, "model": null, "claude_session_id": "C1", "title": "x", "created": 1});
+    std::fs::write(data.join("dead01.meta.json"), meta.to_string()).unwrap();
+    let env = |seq: u64, kind: &str, data: serde_json::Value| serde_json::json!({"v": 1, "sid": "dead01", "seq": seq, "kind": kind, "data": data}).to_string();
+    let log = [
+        env(1, "state", serde_json::json!({"state": "running"})),
+        env(2, "permission", serde_json::json!({"request_id": "old", "tool_name": "Bash", "input": {}})),
+    ]
+    .join("\n");
+    std::fs::write(data.join("dead01.jsonl"), format!("{log}\n")).unwrap();
+
+    let reopened = Registry::open(data, None).unwrap();
+    let session = reopened.get("dead01").unwrap();
+    let info = session.info().await.unwrap();
+    assert_eq!(info.pending, 0);
+    assert_eq!(serde_json::to_value(&info.state).unwrap()["state"], "idle");
+    let (all, _) = session.subscribe(0).await.unwrap();
+    let tail: Vec<(&str, String)> = all.iter().skip(2).map(|e| (e.kind.as_str(), e.data.to_string())).collect();
+    assert_eq!(tail.len(), 2, "{tail:?}");
+    assert_eq!(tail[0].0, "permission_resolved");
+    assert!(tail[0].1.contains("cancelled") && tail[0].1.contains("old"));
+    assert_eq!(tail[1].0, "state");
+    assert!(tail[1].1.contains("idle"));
+}
+
+#[tokio::test]
+async fn the_end_of_a_turn_cancels_a_request_nobody_answered() {
+    let fx = fixture(
+        r#"{"$wait":"user"}
+{"type":"system","subtype":"init","session_id":"S6"}
+{"type":"control_request","request_id":"r9","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"x"}}}
+{"$sleep":300}
+{"type":"result","subtype":"error_during_execution","is_error":true}
+{"$wait":"user"}
+"#,
+    );
+    let session = fx.session();
+    let (_, mut rx) = session.subscribe(0).await.unwrap();
+    session.send("go".into(), vec![]).await.unwrap();
+    until(&mut rx, kind("permission")).await;
+    let gone = until(&mut rx, kind("permission_resolved")).await;
+    assert_eq!(gone.data["outcome"], "cancelled");
+    until(&mut rx, state("idle")).await;
+    assert!(session.permission("r9".into(), true, None).await.is_err(), "a dead request is not answered");
+    assert!(!fx.log_text().contains("control_response"));
+}
+
+#[tokio::test]
+async fn streaming_pieces_reach_the_page_but_are_not_kept() {
+    let fx = fixture(
+        r#"{"$wait":"user"}
+{"type":"system","subtype":"init","session_id":"S7"}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"PIECE"}}}
+{"type":"result","subtype":"success","is_error":false}
+{"$wait":"user"}
+"#,
+    );
+    let session = fx.session();
+    let (_, mut rx) = session.subscribe(0).await.unwrap();
+    session.send("go".into(), vec![]).await.unwrap();
+    let piece = until(&mut rx, |e| e.kind == "claude" && e.data["type"] == "stream_event").await;
+    assert_eq!(piece.data["event"]["delta"]["text"], "PIECE");
+    until(&mut rx, state("idle")).await;
+    let (kept, _) = session.subscribe(0).await.unwrap();
+    assert!(kept.iter().all(|e| e.data["type"] != "stream_event"), "not in memory");
+    let disk = std::fs::read_to_string(fx.root.join("data").join(format!("{}.jsonl", session.sid))).unwrap();
+    assert!(!disk.contains("PIECE"), "not on disk");
+}
+
+#[tokio::test]
+async fn at_most_five_images_and_the_host_can_end_every_process_at_once() {
+    let fx = fixture("{\"$wait\":\"user\"}\n{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"S8\"}\n{\"$sleep\":30000}\n");
+    let session = fx.session();
+    let six: Vec<Image> = (0..6).map(|_| Image { media_type: "image/png".into(), data: "iVBORw0KGgo=".into() }).collect();
+    assert!(session.send("x".into(), six).await.is_err());
+
+    let (_, mut rx) = session.subscribe(0).await.unwrap();
+    session.send("go".into(), vec![]).await.unwrap();
+    until(&mut rx, |e| e.kind == "claude" && e.data["subtype"] == "init").await;
+    fx.registry.kill_all();
+    let ended = until(&mut rx, |e| e.kind == "state" && e.data["state"] == "exited").await;
+    assert!(ended.data["code"].is_null(), "ended by a signal, no exit code");
+}

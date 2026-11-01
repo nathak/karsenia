@@ -34,10 +34,13 @@ export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=~/.cache/swb-tools/cc
 ## What it does
 
 - One `claude` process per chat, stdin kept open for several turns, `--include-partial-messages` for streaming text.
-- **Permissions**: it starts `claude` with `--permission-prompt-tool stdio`, so every permission request arrives here as a
-  `can_use_tool` control request and waits for a click. Nothing is approved on its own: no timeout, no auto-allow, a closed
-  page leaves the request pending, an answer carries the request's own `input` (never one the page sent), each request is
-  answered once, Esc in the dialog is a refusal.
+- **Permissions**: it starts `claude` with `--permission-prompt-tool stdio`, so a permission request that Claude Code decides to
+  ask arrives here as a `can_use_tool` control request and waits for a click. This host approves nothing on its own: no timeout,
+  no auto-allow, a closed page leaves the request pending, an answer carries the request's own `input` (never one the page
+  sent), each request is answered once, a request that the turn's end or the CLI cancels is withdrawn, Esc in the dialog is a refusal.
+  **Claude Code's own settings still apply**: an `allow` rule, a permission mode or a hook in the user, project or local
+  settings decides before anything reaches this app, so a project whose `.claude/settings.json` allows `Bash(*)` runs commands
+  without a click here, exactly as in the terminal. Open only projects you would run `claude` in.
 - **Images**: paste, drop or pick (png, jpeg, gif, webp, 5 MB each, five per message) go in as base64 image blocks; images in tool
   results show in the tool card; an image file inside the project that a tool names (or a result mentions) is fetched through
   `GET /api/file`, which needs the token, resolves links and refuses anything outside the project or not an image (no SVG).
@@ -49,7 +52,13 @@ export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=~/.cache/swb-tools/cc
 Local only: binds `127.0.0.1`; every request needs the right `Host` (DNS rebinding gets 421); a WebSocket needs the exact
 `Origin` and the token as its first message within 5 s; the file endpoint needs a `Bearer` token; a strict CSP (no inline script,
 no remote image or script), `nosniff`, `no-referrer`. Markdown goes through DOMPurify (images and forms are removed).
-The app can run commands through Claude Code, so treat its address like a terminal.
+The app can run commands through Claude Code, so treat its address like a terminal. The data folder (prompts, images and
+tool results) is `0700` and its files `0600`. Streaming text pieces are shown but never stored; a session read back after a
+crash has its open requests cancelled. On Ctrl-C or SIGTERM the host kills every `claude` process group.
+
+Known limits: a local program that forges the `Origin` header can open a socket and make the host buffer up to 40 MB before the
+token is checked; a link swapped into the project folder between the path check and the read is not defended against
+(an attacker who can write there can already do more); the event log and its base64 images are held in memory per session.
 
 ## Tests
 

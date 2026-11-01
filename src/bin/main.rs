@@ -37,7 +37,16 @@ async fn main() {
     match swb_app::server::start(config).await {
         Ok(running) => {
             println!("SmartWorkbench App is running. Open:\n  {}", running.url());
-            let _ = running.task.await;
+            let swb_app::server::Running { registry, task, .. } = running;
+            let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("could not listen for SIGTERM");
+            tokio::select! {
+                _ = task => {}
+                _ = tokio::signal::ctrl_c() => {}
+                _ = terminate.recv() => {}
+            }
+            // Leave no claude, and nothing it started, behind.
+            registry.kill_all();
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
         Err(error) => {
             eprintln!("could not start: {error:#}");

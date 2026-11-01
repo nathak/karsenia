@@ -3,8 +3,6 @@
 //! The rule the whole host stands on: nothing is approved here. A permission request waits, without a timeout, until a
 //! person answers it through `permission`, and the answer carries the request's own input back, never one a client sent.
 use std::collections::HashMap;
-use std::fs::OpenOptions;
-use std::io::Write as _;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -57,6 +55,7 @@ enum Cmd {
     Permission { request_id: String, allow: bool, message: Option<String>, reply: oneshot::Sender<Result<(), String>> },
     Interrupt { reply: oneshot::Sender<Result<(), String>> },
     Stop,
+    Kill,
     Subscribe { after: u64, reply: oneshot::Sender<(Vec<Envelope>, broadcast::Receiver<Envelope>)> },
     Info { reply: oneshot::Sender<Info> },
 }
@@ -88,6 +87,11 @@ impl SessionHandle {
 
     pub fn stop(&self) {
         let _ = self.tx.send(Cmd::Stop);
+    }
+
+    /// SIGKILL to the process group now (the host is exiting).
+    pub fn kill(&self) {
+        let _ = self.tx.send(Cmd::Kill);
     }
 
     /// The events after `after`, and a receiver of the ones to come; taken together so none is missed or doubled.
@@ -128,7 +132,8 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
+    actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
 }
@@ -173,17 +178,56 @@ impl Actor {
         self.seq += 1;
         let envelope = Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, kind: kind.to_owned(), data };
         if let Ok(line) = serde_json::to_string(&envelope) {
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path(&self.dir, &self.meta.sid)) {
-                let _ = writeln!(file, "{line}");
-            }
+            let _ = crate::private::append_line(&log_path(&self.dir, &self.meta.sid), &line);
         }
         self.log.push(envelope.clone());
         let _ = self.bcast.send(envelope);
     }
 
+    /// For what only matters while it happens (streaming text pieces): sent to whoever is attached, never kept, never numbered.
+    fn emit_transient(&self, kind: &str, data: Value) {
+        let _ = self.bcast.send(Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, kind: kind.to_owned(), data });
+    }
+
+    /// A session read back from disk has no process: whatever the log left open (a waiting permission, a running turn) is over.
+    fn settle_restored(&mut self) {
+        let mut open: Vec<String> = Vec::new();
+        let mut last_state: Option<String> = None;
+        for e in &self.log {
+            match e.kind.as_str() {
+                "permission" => {
+                    if let Some(id) = e.data["request_id"].as_str() {
+                        open.push(id.to_owned());
+                    }
+                }
+                "permission_resolved" => {
+                    if let Some(id) = e.data["request_id"].as_str() {
+                        open.retain(|x| x != id);
+                    }
+                }
+                "state" => last_state = e.data["state"].as_str().map(str::to_owned),
+                _ => {}
+            }
+        }
+        for request_id in open {
+            self.emit("permission_resolved", json!({"request_id": request_id, "outcome": "cancelled"}));
+        }
+        if last_state.as_deref() == Some("running") {
+            self.set_state(State::Idle);
+        }
+    }
+
+    /// Every request still waiting is dead (the turn ended or the process went).
+    fn cancel_pending(&mut self) {
+        let waiting: Vec<String> = self.pending.drain().map(|(id, _)| id).collect();
+        for request_id in waiting {
+            self.emit("permission_resolved", json!({"request_id": request_id, "outcome": "cancelled"}));
+        }
+    }
+
     fn save_meta(&self) {
         if let Ok(text) = serde_json::to_string_pretty(&self.meta) {
-            let _ = std::fs::write(meta_path(&self.dir, &self.meta.sid), text);
+            let _ = crate::private::write(&meta_path(&self.dir, &self.meta.sid), &text);
         }
     }
 
@@ -223,6 +267,11 @@ impl Actor {
                     process.stop();
                 }
             }
+            Cmd::Kill => {
+                if let Some(process) = &self.process {
+                    process.kill_now();
+                }
+            }
             Cmd::Subscribe { after, reply } => {
                 let missed: Vec<Envelope> = self.log.iter().filter(|e| e.seq > after).cloned().collect();
                 let _ = reply.send((missed, self.bcast.subscribe()));
@@ -240,6 +289,9 @@ impl Actor {
         }
         if text.trim().is_empty() && images.is_empty() {
             return (Err("nothing to send".into()), None);
+        }
+        if images.len() > 5 {
+            return (Err("at most five images per message".into()), None);
         }
         for image in &images {
             if !IMAGE_TYPES.contains(&image.media_type.as_str()) {
@@ -310,10 +362,23 @@ impl Actor {
                 self.emit("permission", data);
             }
             ProcEvent::Line(Event::Result { raw, .. }) => {
+                self.cancel_pending();
                 self.emit("claude", raw);
                 self.set_state(State::Idle);
             }
-            ProcEvent::Line(Event::ControlResponse { raw, .. }) | ProcEvent::Line(Event::Raw(raw)) => self.emit("claude", raw),
+            ProcEvent::Line(Event::ControlResponse { raw, .. }) => self.emit("claude", raw),
+            ProcEvent::Line(Event::Raw(raw)) => match raw["type"].as_str() {
+                Some("stream_event") => self.emit_transient("claude", raw),
+                Some("control_cancel_request") => {
+                    if let Some(request_id) = raw["request_id"].as_str().map(str::to_owned) {
+                        if self.pending.remove(&request_id).is_some() {
+                            self.emit("permission_resolved", json!({"request_id": request_id, "outcome": "cancelled"}));
+                        }
+                    }
+                    self.emit("claude", raw);
+                }
+                _ => self.emit("claude", raw),
+            },
             ProcEvent::Line(Event::Unparsed(text)) => self.emit("claude", json!({"type": "unparsed", "text": text})),
             ProcEvent::Stderr(text) => {
                 if !text.trim().is_empty() {
@@ -321,10 +386,7 @@ impl Actor {
                 }
             }
             ProcEvent::Exited(code) => {
-                let waiting: Vec<String> = self.pending.drain().map(|(id, _)| id).collect();
-                for request_id in waiting {
-                    self.emit("permission_resolved", json!({"request_id": request_id, "outcome": "cancelled"}));
-                }
+                self.cancel_pending();
                 self.process = None;
                 self.set_state(State::Exited { code });
             }

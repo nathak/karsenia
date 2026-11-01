@@ -1,5 +1,6 @@
 //! SmartWorkbench App: runs `claude` headless and serves a chat UI for it on this machine only.
 pub mod claude;
+pub mod private;
 pub mod registry;
 pub mod server;
 pub mod session;
