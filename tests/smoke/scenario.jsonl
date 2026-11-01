@@ -1,0 +1,13 @@
+{"$wait":"user"}
+{"type":"system","subtype":"init","session_id":"SMOKE1","cwd":"/p","model":"haiku"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"안녕하세요, "}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"**굵게** 스트리밍 중입니다."}}}
+{"$sleep":600}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"안녕하세요, **굵게** 스트리밍 중입니다.\n\n```js\nconsole.log(1)\n```\n\n<img src=x onerror=alert(1)> [링크](https://example.com)"}]}}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"shot.png"}}]}}
+{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","display_name":"Bash","input":{"command":"touch done.txt"},"description":"파일 만들기","permission_suggestions":[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"touch done.txt"}]}]}}
+{"$wait":"control_response"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}
+{"type":"assistant","message":{"id":"m2","content":[{"type":"text","text":"끝났습니다."}]}}
+{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0123,"duration_ms":2400}
+{"$wait":"user"}

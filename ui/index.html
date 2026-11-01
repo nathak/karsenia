@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartWorkbench App</title>
+<link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <div class="brand"><span>SmartWorkbench</span><button id="theme" class="icon" title="theme" aria-label="theme">◐</button></div>
+    <button id="new-toggle" class="primary wide"></button>
+    <form id="new-form" hidden>
+      <label><span data-i="folder"></span><input id="new-cwd" type="text" spellcheck="false" autocomplete="off" placeholder="/home/you/project"></label>
+      <label><span data-i="model"></span>
+        <select id="new-model"><option value="">default</option><option>haiku</option><option>sonnet</option><option>opus</option></select>
+      </label>
+      <div class="row"><button type="submit" class="primary" data-i="create"></button><button type="button" id="new-cancel" data-i="cancel"></button></div>
+    </form>
+    <div id="sessions" role="list"></div>
+    <div id="conn" class="muted"></div>
+  </aside>
+  <main id="main">
+    <header id="top"><div id="title" class="grow"></div><span id="pill" class="pill"></span><button id="debug-toggle" class="icon" title="debug" aria-label="debug">⋯</button></header>
+    <div id="messages" aria-live="polite"><div id="empty" class="empty" data-i="empty"></div></div>
+    <div id="debug" hidden></div>
+    <form id="composer">
+      <div id="chips"></div>
+      <div class="box">
+        <button type="button" id="attach" class="icon" data-i-title="attach" aria-label="attach">＋</button>
+        <textarea id="input" rows="1" data-i-ph="placeholder"></textarea>
+        <button type="button" id="stop" class="danger" hidden data-i="stop"></button>
+        <button type="submit" id="send" class="primary" data-i="send"></button>
+      </div>
+      <input id="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+    </form>
+  </main>
+</div>
+<dialog id="perm"></dialog>
+<dialog id="zoom"><img id="zoom-img" alt=""></dialog>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
