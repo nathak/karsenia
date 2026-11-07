@@ -50,6 +50,35 @@ export function fmtTurn(result) {
   return bits.join(' · ')
 }
 
+// The text of a search excerpt as plain pieces, with the matched ones marked (the page draws them as text nodes, never as HTML).
+export const MARK_OPEN = '\u0002'
+export const MARK_CLOSE = '\u0003'
+export function markParts(snippet) {
+  const parts = []
+  let marked = false
+  let buf = ''
+  for (const ch of String(snippet)) {
+    if (ch === MARK_OPEN || ch === MARK_CLOSE) {
+      if (buf) parts.push({ text: buf, mark: marked })
+      buf = ''
+      marked = ch === MARK_OPEN
+    } else buf += ch
+  }
+  if (buf) parts.push({ text: buf, mark: marked })
+  return parts
+}
+
+/** The number closest to the target, preferring one at or before it (a result of a call sits after the call). */
+export function nearestSeq(seqs, target) {
+  let before = -1
+  let after = -1
+  for (const s of seqs) {
+    if (s <= target && s > before) before = s
+    if (s > target && (after === -1 || s < after)) after = s
+  }
+  return before !== -1 ? before : after
+}
+
 const TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 export const MAX_IMAGE = 5 * 1024 * 1024
 export const MAX_IMAGES = 5

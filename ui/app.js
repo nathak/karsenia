@@ -1,6 +1,6 @@
 import { marked } from './vendor/marked.js'
 import DOMPurify from './vendor/purify.js'
-import { baseName, checkImage, fmtTurn, imagePaths, pathsInText, resultBlocks, toolSummary } from './util.js'
+import { baseName, checkImage, fmtTurn, imagePaths, markParts, nearestSeq, pathsInText, resultBlocks, toolSummary } from './util.js'
 
 // ---- text ----
 const TEXT = {
@@ -12,6 +12,8 @@ const TEXT = {
     allowed: '허용했습니다', denied: '거절했습니다', cancelled: '승인 요청이 취소되었습니다', running_tool: '실행 중', done: '완료', failed: '오류', more: '더 있음',
     imgType: '이미지는 png, jpeg, gif, webp만 됩니다', imgSize: '이미지는 장당 5MB까지입니다', imgCount: '이미지는 5장까지입니다', thinking: '생각', interrupted: '중단했습니다',
     noSession: '먼저 대화를 만들거나 고르세요.', input: '입력', result: '결과',
+    searchPh: '모든 대화에서 검색', noResults: '결과가 없습니다', searchFailed: '검색할 수 없습니다', allowChat: '이 대화에서 이 도구 허용 (읽기 전용)',
+    roleUser: '나', roleAssistant: 'Claude', roleTool: '도구', roleResult: '결과',
   },
   en: {
     newChat: '＋ New chat', folder: 'Project folder (absolute path)', model: 'Model', create: 'Create', cancel: 'Cancel', empty: 'Pick a chat on the left or start a new one.',
@@ -21,6 +23,8 @@ const TEXT = {
     allowed: 'allowed', denied: 'denied', cancelled: 'the approval request was cancelled', running_tool: 'running', done: 'done', failed: 'error', more: 'more',
     imgType: 'Only png, jpeg, gif and webp images', imgSize: 'An image can be 5 MB at most', imgCount: 'Up to 5 images', thinking: 'thinking', interrupted: 'stopped',
     noSession: 'Create or pick a chat first.', input: 'input', result: 'result',
+    searchPh: 'Search all chats', noResults: 'No results', searchFailed: 'Search is not available', allowChat: 'Allow this tool in this chat (read-only)',
+    roleUser: 'me', roleAssistant: 'Claude', roleTool: 'tool', roleResult: 'result',
   },
 }
 const LANG = (navigator.language || 'ko').toLowerCase().startsWith('en') ? 'en' : 'ko'
@@ -71,13 +75,14 @@ DOMPurify.addHook('afterSanitizeAttributes', node => {
 const markdown = source => DOMPurify.sanitize(marked.parse(source, { gfm: true, breaks: true }), { FORBID_TAGS: ['style', 'form', 'input', 'button', 'img'], FORBID_ATTR: ['style'] })
 
 // ---- state ----
-const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, images: [], debug: [], connected: false, wasConnected: false }
+const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, images: [], debug: [], connected: false, wasConnected: false }
 
 const messages = $('messages')
 function stick() { return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120 }
 function add(node) {
   const follow = stick()
   $('empty')?.remove()
+  if (S.curSeq) node.dataset.seq = String(S.curSeq)
   messages.appendChild(node)
   if (follow) messages.scrollTop = messages.scrollHeight
   return node
@@ -111,6 +116,7 @@ function connect() {
 function showConn() { $('conn').textContent = S.connected ? t('connected') : t('reconnecting') }
 
 function onMessage(m) {
+  if (m.kind === 'search_results') { showResults(m.data); return }
   if (m.kind === 'hello') {
     S.sessions = m.data.sessions || []
     renderSessions()
@@ -123,10 +129,10 @@ function onMessage(m) {
     openView(m.sid, false)
     return
   }
-  if (m.kind === 'attached') { S.replaying = false; showPerm(); return }
+  if (m.kind === 'attached') { S.replaying = false; showPerm(); doJump(); return }
   if (m.kind === 'error' && !m.seq) { addNote(m.data.message, true); return }
   if (m.sid !== S.cur) { trackOther(m); return }
-  if (typeof m.seq === 'number') S.lastSeq = Math.max(S.lastSeq, m.seq)
+  if (typeof m.seq === 'number') { S.lastSeq = Math.max(S.lastSeq, m.seq); S.curSeq = m.seq }
   handle(m)
 }
 
@@ -154,6 +160,7 @@ function renderSessions() {
 function openView(sid, attach) {
   S.cur = sid
   S.lastSeq = 0
+  S.curSeq = 0
   S.replaying = true
   S.pending.clear()
   shownAsk = null
@@ -322,6 +329,7 @@ function addTool(block, sub) {
 function setToolResult(block) {
   const tool = S.tools.get(block.tool_use_id)
   if (!tool) return
+  tool.card.dataset.resultSeq = String(S.curSeq)
   tool.card.classList.add(block.is_error ? 'err' : 'done')
   tool.status.textContent = block.is_error ? t('failed') : t('done')
   tool.result.replaceChildren()
@@ -406,17 +414,25 @@ function showPerm() {
   const allow = el('button', 'primary', t('allowOnce'))
   const deny = el('button', 'danger', t('deny'))
   allow.type = deny.type = 'button'
-  const answer = ok => {
-    wsSend({ op: 'permission', sid: S.cur, request_id: first.request_id, allow: ok, message: ok ? undefined : reason.value.trim() || undefined })
+  const answer = (ok, remember) => {
+    wsSend({ op: 'permission', sid: S.cur, request_id: first.request_id, allow: ok, remember: remember || undefined, message: ok ? undefined : reason.value.trim() || undefined })
     S.pending.delete(first.request_id)
     shownAsk = null
     dialog.close('answered')
     showPerm()
   }
-  allow.addEventListener('click', () => answer(true))
-  deny.addEventListener('click', () => answer(false))
+  allow.addEventListener('click', () => answer(true, false))
+  deny.addEventListener('click', () => answer(false, false))
   const actions = el('div', 'actions')
-  actions.append(reason, deny, allow)
+  actions.append(reason, deny)
+  // Offered for this app's own read-only search tool only; Claude Code keeps the rule for this chat's process.
+  if (first.tool_name === 'mcp__swb_app__search_history') {
+    const always = el('button', '', t('allowChat'))
+    always.type = 'button'
+    always.addEventListener('click', () => answer(true, true))
+    actions.append(always)
+  }
+  actions.append(allow)
   dialog.append(actions)
   if (!dialog.open) dialog.showModal()
   deny.focus()
@@ -495,6 +511,62 @@ input.addEventListener('paste', event => {
 for (const name of ['dragenter', 'dragover']) document.addEventListener(name, event => { event.preventDefault(); document.body.classList.add('drag') })
 for (const name of ['dragleave', 'drop']) document.addEventListener(name, event => { event.preventDefault(); if (name === 'drop' || event.target === document.documentElement) document.body.classList.remove('drag') })
 document.addEventListener('drop', event => { const files = [...(event.dataTransfer ? event.dataTransfer.files : [])].filter(f => f.type.startsWith('image/')); if (files.length) addFiles(files) })
+
+// ---- search ----
+const searchBox = $('search')
+let searchTimer = 0
+searchBox.addEventListener('input', () => {
+  clearTimeout(searchTimer)
+  const q = searchBox.value.trim()
+  if (!q) return hideResults()
+  searchTimer = setTimeout(() => { S.searchReq += 1; wsSend({ op: 'search', req: S.searchReq, q, limit: 30 }) }, 250)
+})
+searchBox.addEventListener('keydown', event => { if (event.key === 'Escape') { searchBox.value = ''; hideResults() } })
+function hideResults() { $('results').hidden = true; $('sessions').hidden = false; $('results').replaceChildren() }
+
+function showResults(data) {
+  // An answer to an older keystroke is dropped.
+  if (data.req !== S.searchReq || !searchBox.value.trim()) return
+  const box = $('results')
+  box.replaceChildren()
+  $('sessions').hidden = true
+  box.hidden = false
+  if (data.error) return void box.appendChild(el('div', 'muted', t('searchFailed')))
+  if (!data.hits.length) return void box.appendChild(el('div', 'muted', t('noResults')))
+  for (const hit of data.hits) {
+    const b = el('button', 'res')
+    b.type = 'button'
+    const meta = el('div', 'm')
+    meta.append(el('span', '', t('role' + hit.role[0].toUpperCase() + hit.role.slice(1))), el('span', '', new Date(hit.ts || 0).toLocaleDateString()), el('span', '', hit.title || baseName(hit.cwd)))
+    const text = el('div', 's')
+    for (const part of markParts(hit.snippet)) text.append(part.mark ? el('mark', '', part.text) : document.createTextNode(part.text))
+    b.append(meta, text)
+    b.addEventListener('click', () => open(hit))
+    box.appendChild(b)
+  }
+}
+
+// Opens the chat of a result and scrolls to the message (or the nearest one that is drawn).
+function open(hit) {
+  S.jumpTo = hit.seq
+  if (hit.sid === S.cur && !S.replaying) return doJump()
+  openView(hit.sid, true)
+}
+function doJump() {
+  if (S.jumpTo === null) return
+  const target = S.jumpTo
+  S.jumpTo = null
+  const nodes = [...messages.querySelectorAll('[data-seq],[data-result-seq]')]
+  const seqs = nodes.flatMap(n => [n.dataset.seq, n.dataset.resultSeq]).filter(Boolean).map(Number)
+  const near = nearestSeq(seqs, target)
+  const node = nodes.find(n => Number(n.dataset.seq) === near || Number(n.dataset.resultSeq) === near)
+  if (!node) return
+  if (node.tagName === 'DETAILS') node.open = true
+  node.scrollIntoView({ block: 'center' })
+  node.classList.remove('hit')
+  void node.offsetWidth
+  node.classList.add('hit')
+}
 
 showConn()
 connect()

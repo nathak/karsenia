@@ -2,6 +2,7 @@
 //! It binds 127.0.0.1 only and every request must carry the run's token (see `auth`).
 pub mod auth;
 pub mod files;
+pub mod mcp_host;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -23,6 +24,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::claude::protocol::Image;
+use crate::index::SearchQuery;
 use crate::random_hex;
 use crate::registry::Registry;
 
@@ -42,6 +44,8 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// The `claude` program (default: SWB_CLAUDE, else `claude`).
     pub bin: Option<String>,
+    /// The program `claude` runs as the MCP server (`<exe> mcp`); None turns history search for Claude off.
+    pub mcp_bin: Option<PathBuf>,
 }
 
 pub struct Running {
@@ -62,7 +66,15 @@ pub async fn start(config: Config) -> anyhow::Result<Running> {
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], config.port))).await?;
     let addr = listener.local_addr()?;
     let token = random_hex(32);
-    let registry = Arc::new(Registry::open(config.data_dir, config.bin)?);
+    let registry = Arc::new(Registry::open_with(config.data_dir, config.bin, config.mcp_bin)?);
+    if let Some(gate) = registry.gate() {
+        match mcp_host::listen(&gate) {
+            Ok(listener) => {
+                tokio::spawn(mcp_host::serve(listener, gate, registry.clone()));
+            }
+            Err(error) => tracing::warn!("the MCP socket is off: {error}"),
+        }
+    }
     let state = AppState { registry: registry.clone(), token: Arc::new(token.clone()), port: addr.port() };
     let app = Router::new()
         .route("/ws", get(ws_upgrade))
@@ -238,12 +250,48 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
                 let request_id = op["request_id"].as_str().unwrap_or_default().to_owned();
                 let allow = op["allow"].as_bool() == Some(true);
                 let message = op["message"].as_str().map(str::to_owned);
-                if let Err(message) = handle.permission(request_id, allow, message).await {
+                let remember = op["remember"].as_bool() == Some(true);
+                if let Err(message) = handle.permission(request_id, allow, message, remember).await {
                     fail(&message);
                 }
             }
             None => fail("no such session"),
         },
+        "search" => {
+            let req = op["req"].clone();
+            let query = SearchQuery {
+                q: op["q"].as_str().unwrap_or_default().to_owned(),
+                cwd: op["cwd"].as_str().map(str::to_owned),
+                sid: op["sid"].as_str().map(str::to_owned),
+                since: op["since"].as_u64(),
+                limit: op["limit"].as_u64().unwrap_or(30) as usize,
+            };
+            let (out, registry) = (out.clone(), state.registry.clone());
+            // A search can take a moment: it runs beside the socket's other messages.
+            tokio::spawn(async move {
+                let found = match registry.index() {
+                    Some(index) => tokio::task::spawn_blocking(move || index.search(&query)).await.ok().and_then(Result::ok),
+                    None => None,
+                };
+                let data = match found {
+                    Some(hits) => {
+                        let titles: std::collections::HashMap<String, String> = registry.list().await.into_iter().map(|i| (i.meta.sid, i.meta.title)).collect();
+                        let hits: Vec<Value> = hits
+                            .into_iter()
+                            .map(|hit| {
+                                let title = titles.get(&hit.sid).cloned().unwrap_or_default();
+                                let mut value = serde_json::to_value(&hit).unwrap_or(Value::Null);
+                                value["title"] = Value::String(title);
+                                value
+                            })
+                            .collect();
+                        json!({"req": req, "hits": hits})
+                    }
+                    None => json!({"req": req, "hits": [], "error": "search is not available"}),
+                };
+                let _ = out.send(plain("search_results", None, data));
+            });
+        }
         "interrupt" => match state.registry.get(&sid) {
             Some(handle) => {
                 if let Err(message) = handle.interrupt().await {

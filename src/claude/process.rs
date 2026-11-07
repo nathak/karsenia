@@ -24,6 +24,8 @@ pub struct SpawnOpts {
     pub model: Option<String>,
     /// The CLI's own session id, to continue an earlier conversation.
     pub resume: Option<String>,
+    /// A file naming the MCP servers this chat gets (it holds a secret, so it is a file and not part of argv).
+    pub mcp_config: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -55,6 +57,9 @@ pub fn args(opts: &SpawnOpts) -> Vec<String> {
     }
     if let Some(resume) = &opts.resume {
         args.extend(["--resume".to_owned(), resume.clone()]);
+    }
+    if let Some(config) = &opts.mcp_config {
+        args.extend(["--mcp-config".to_owned(), config.display().to_string()]);
     }
     args
 }
@@ -211,13 +216,14 @@ mod tests {
 
     #[test]
     fn the_arguments_include_the_permission_prompt_tool_and_resume() {
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()) };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()) };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
         assert!(a.windows(2).any(|w| w == ["--model", "haiku"]));
         assert!(a.windows(2).any(|w| w == ["--resume", "abc"]));
-        let plain = args(&SpawnOpts { resume: None, model: None, ..opts });
-        assert!(!plain.iter().any(|x| x == "--resume" || x == "--model"));
+        assert!(a.windows(2).any(|w| w == ["--mcp-config", "/d/run/x.mcp.json"]));
+        let plain = args(&SpawnOpts { resume: None, model: None, mcp_config: None, ..opts });
+        assert!(!plain.iter().any(|x| x == "--resume" || x == "--model" || x == "--mcp-config"));
     }
 
     #[test]

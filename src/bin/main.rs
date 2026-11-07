@@ -25,6 +25,10 @@ mod clap_free {
 
 #[tokio::main]
 async fn main() {
+    // `smart-workbench-app mcp`: the MCP server that claude starts for a chat (stdio), not the app itself.
+    if std::env::args().nth(1).as_deref() == Some("mcp") {
+        std::process::exit(swb_app::mcp::run_stdio().await);
+    }
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
     let args = match parse() {
         Ok(args) => args,
@@ -33,7 +37,7 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    let config = swb_app::server::Config { port: args.port, data_dir: args.data.unwrap_or_else(swb_app::registry::data_dir), bin: args.claude };
+    let config = swb_app::server::Config { port: args.port, data_dir: args.data.unwrap_or_else(swb_app::registry::data_dir), bin: args.claude, mcp_bin: std::env::current_exe().ok() };
     match swb_app::server::start(config).await {
         Ok(running) => {
             println!("SmartWorkbench App is running. Open:\n  {}", running.url());

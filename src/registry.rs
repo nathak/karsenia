@@ -1,14 +1,18 @@
 //! The sessions of this app: created here, kept on disk (a meta file and a log each), listed for the sidebar.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::claude::process::{claude_bin, is_safe_cwd};
+use crate::index::Index;
+use crate::mcp::McpGate;
 use crate::session::{self, Envelope, Info, Meta, SessionHandle, Setup};
 
 pub struct Registry {
     dir: PathBuf,
     bin: String,
+    index: Option<Arc<Index>>,
+    gate: Option<Arc<McpGate>>,
     sessions: Mutex<HashMap<String, SessionHandle>>,
 }
 
@@ -23,8 +27,30 @@ pub fn data_dir() -> PathBuf {
 impl Registry {
     /// Opens the data folder and starts a task for every session found in it (none has a process until its next message).
     pub fn open(dir: PathBuf, bin: Option<String>) -> anyhow::Result<Self> {
+        Self::open_with(dir, bin, None)
+    }
+
+    /// `mcp_exe` is the program `claude` runs as this app's MCP server (`<exe> mcp`); None leaves history search off.
+    pub fn open_with(dir: PathBuf, bin: Option<String>, mcp_exe: Option<PathBuf>) -> anyhow::Result<Self> {
         crate::private::create_dir(&dir)?;
-        let registry = Self { dir: dir.clone(), bin: bin.unwrap_or_else(claude_bin), sessions: Mutex::new(HashMap::new()) };
+        let index = match Index::open(&dir.join("index.sqlite")) {
+            Ok(index) => Some(index),
+            Err(error) => {
+                tracing::warn!("history search is off: {error:#}");
+                None
+            }
+        };
+        let gate = mcp_exe.and_then(|exe| {
+            let sock = socket_path(&dir)?;
+            match McpGate::new(sock, exe, dir.join("run")) {
+                Ok(gate) => Some(Arc::new(gate)),
+                Err(error) => {
+                    tracing::warn!("the MCP gate is off: {error:#}");
+                    None
+                }
+            }
+        });
+        let registry = Self { dir: dir.clone(), bin: bin.unwrap_or_else(claude_bin), index, gate, sessions: Mutex::new(HashMap::new()) };
         for entry in std::fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
@@ -35,8 +61,16 @@ impl Registry {
                 continue;
             }
             let log = read_log(&session::log_path(&dir, sid));
-            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log });
+            // The index is brought up to date before the session can emit anything of its own.
+            if let Some(index) = &registry.index {
+                index.catch_up(sid, &meta.cwd.to_string_lossy(), meta.created, log.clone());
+            }
+            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log, index: registry.index.clone(), mcp: registry.gate.clone() });
             registry.sessions.lock().expect("registry lock").insert(sid.to_owned(), handle);
+        }
+        if let Some(index) = &registry.index {
+            let keep = registry.sessions.lock().expect("registry lock").keys().cloned().collect();
+            index.keep_only(keep);
         }
         Ok(registry)
     }
@@ -55,7 +89,7 @@ impl Registry {
         let meta = session::new_meta(real, model);
         let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
         crate::private::write(&session::meta_path(&self.dir, &meta.sid), &text).map_err(|e| e.to_string())?;
-        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new() });
+        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), index: self.index.clone(), mcp: self.gate.clone() });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok(handle)
     }
@@ -65,6 +99,14 @@ impl Registry {
         for handle in self.sessions.lock().expect("registry lock").values() {
             handle.kill();
         }
+    }
+
+    pub fn index(&self) -> Option<Arc<Index>> {
+        self.index.clone()
+    }
+
+    pub fn gate(&self) -> Option<Arc<McpGate>> {
+        self.gate.clone()
     }
 
     pub fn get(&self, sid: &str) -> Option<SessionHandle> {
@@ -83,6 +125,17 @@ impl Registry {
         all.sort_by_key(|s| std::cmp::Reverse(s.meta.created));
         all
     }
+}
+
+/// Where the MCP socket goes: the data folder when its path fits a Unix socket (108 bytes), else the user's runtime folder.
+fn socket_path(dir: &Path) -> Option<PathBuf> {
+    let here = dir.join("mcp.sock");
+    if here.as_os_str().len() <= 100 {
+        return Some(here);
+    }
+    let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?);
+    let there = runtime.join(format!("swb-app-{}.sock", crate::random_hex(4)));
+    (there.as_os_str().len() <= 100).then_some(there)
 }
 
 fn read_log(path: &Path) -> Vec<Envelope> {

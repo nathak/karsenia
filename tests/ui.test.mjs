@@ -47,3 +47,19 @@ test('small formatters', () => {
   assert.equal(fmtTurn({ duration_ms: 1500, total_cost_usd: 0.0123 }), '1.5s · $0.0123')
   assert.equal(fmtTurn({}), '')
 })
+
+import { markParts, nearestSeq } from '../ui/util.js'
+
+test('an excerpt is split into plain and marked pieces, and markup in it stays text', () => {
+  assert.deepEqual(markParts('a \u0002hit\u0003 b'), [{ text: 'a ', mark: false }, { text: 'hit', mark: true }, { text: ' b', mark: false }])
+  assert.deepEqual(markParts('<img src=x onerror=alert(1)>'), [{ text: '<img src=x onerror=alert(1)>', mark: false }])
+  assert.deepEqual(markParts(''), [])
+  assert.deepEqual(markParts('\u0002x\u0003'), [{ text: 'x', mark: true }])
+})
+
+test('a jump goes to the nearest drawn message, at or before the wanted one first', () => {
+  assert.equal(nearestSeq([2, 5, 9], 5), 5)
+  assert.equal(nearestSeq([2, 5, 9], 7), 5)
+  assert.equal(nearestSeq([5, 9], 3), 5)
+  assert.equal(nearestSeq([], 3), -1)
+})

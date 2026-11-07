@@ -11,7 +11,10 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::claude::process::{ClaudeProcess, ProcEvent, SpawnOpts};
 use crate::claude::protocol::{self, CanUseTool, Event, Image, IMAGE_TYPES, MAX_IMAGE_BYTES};
+use crate::index::Index;
+use crate::mcp::McpGate;
 use crate::random_hex;
+use std::sync::Arc;
 
 /// What the browser reads: a numbered event of one session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +22,9 @@ pub struct Envelope {
     pub v: u8,
     pub sid: String,
     pub seq: u64,
+    /// When it happened (ms since the epoch); logs written before this field have 0.
+    #[serde(default)]
+    pub ts: u64,
     pub kind: String,
     pub data: Value,
 }
@@ -52,7 +58,7 @@ pub struct Info {
 
 enum Cmd {
     Send { text: String, images: Vec<Image>, reply: oneshot::Sender<Result<(), String>> },
-    Permission { request_id: String, allow: bool, message: Option<String>, reply: oneshot::Sender<Result<(), String>> },
+    Permission { request_id: String, allow: bool, message: Option<String>, remember: bool, reply: oneshot::Sender<Result<(), String>> },
     Interrupt { reply: oneshot::Sender<Result<(), String>> },
     Stop,
     Kill,
@@ -77,8 +83,9 @@ impl SessionHandle {
         ask(&self.tx, |reply| Cmd::Send { text, images, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
     }
 
-    pub async fn permission(&self, request_id: String, allow: bool, message: Option<String>) -> Result<(), String> {
-        ask(&self.tx, |reply| Cmd::Permission { request_id, allow, message, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    /// `remember` asks Claude Code to allow this one read-only tool for the rest of this process; only the person's click sets it.
+    pub async fn permission(&self, request_id: String, allow: bool, message: Option<String>, remember: bool) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::Permission { request_id, allow, message, remember, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
     }
 
     pub async fn interrupt(&self) -> Result<(), String> {
@@ -109,6 +116,8 @@ pub struct Setup {
     pub bin: String,
     pub dir: PathBuf,
     pub log: Vec<Envelope>,
+    pub index: Option<Arc<Index>>,
+    pub mcp: Option<Arc<McpGate>>,
 }
 
 fn now_ms() -> u64 {
@@ -132,7 +141,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, index: setup.index, mcp: setup.mcp, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -143,6 +152,8 @@ struct Actor {
     bin: String,
     dir: PathBuf,
     log: Vec<Envelope>,
+    index: Option<Arc<Index>>,
+    mcp: Option<Arc<McpGate>>,
     seq: u64,
     bcast: broadcast::Sender<Envelope>,
     state: State,
@@ -172,13 +183,19 @@ impl Actor {
         if let Some(process) = &self.process {
             process.stop();
         }
+        if let Some(gate) = &self.mcp {
+            gate.revoke(&self.meta.sid);
+        }
     }
 
     fn emit(&mut self, kind: &str, data: Value) {
         self.seq += 1;
-        let envelope = Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, kind: kind.to_owned(), data };
+        let envelope = Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, ts: now_ms(), kind: kind.to_owned(), data };
         if let Ok(line) = serde_json::to_string(&envelope) {
             let _ = crate::private::append_line(&log_path(&self.dir, &self.meta.sid), &line);
+        }
+        if let Some(index) = &self.index {
+            index.add(&self.meta.cwd.to_string_lossy(), self.meta.created, &envelope);
         }
         self.log.push(envelope.clone());
         let _ = self.bcast.send(envelope);
@@ -186,7 +203,7 @@ impl Actor {
 
     /// For what only matters while it happens (streaming text pieces): sent to whoever is attached, never kept, never numbered.
     fn emit_transient(&self, kind: &str, data: Value) {
-        let _ = self.bcast.send(Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, kind: kind.to_owned(), data });
+        let _ = self.bcast.send(Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, ts: now_ms(), kind: kind.to_owned(), data });
     }
 
     /// A session read back from disk has no process: whatever the log left open (a waiting permission, a running turn) is over.
@@ -249,8 +266,8 @@ impl Actor {
                 let _ = reply.send(result);
                 return events;
             }
-            Cmd::Permission { request_id, allow, message, reply } => {
-                let _ = reply.send(self.permission(&request_id, allow, message));
+            Cmd::Permission { request_id, allow, message, remember, reply } => {
+                let _ = reply.send(self.permission(&request_id, allow, message, remember));
             }
             Cmd::Interrupt { reply } => {
                 let result = match (&self.state, &self.process) {
@@ -304,13 +321,26 @@ impl Actor {
 
         let mut events = None;
         if self.process.is_none() {
-            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model: self.meta.model.clone(), resume: self.meta.claude_session_id.clone() };
+            let mcp_config = match &self.mcp {
+                Some(gate) => match gate.grant(&self.meta.sid) {
+                    Ok(path) => Some(path),
+                    Err(error) => {
+                        self.emit("error", json!({"message": format!("history search is off for this chat: {error:#}")}));
+                        None
+                    }
+                },
+                None => None,
+            };
+            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model: self.meta.model.clone(), resume: self.meta.claude_session_id.clone(), mcp_config };
             match ClaudeProcess::spawn(&opts) {
                 Ok((process, rx)) => {
                     self.process = Some(process);
                     events = Some(rx);
                 }
                 Err(error) => {
+                    if let Some(gate) = &self.mcp {
+                        gate.revoke(&self.meta.sid);
+                    }
                     self.emit("error", json!({"message": format!("{error:#}")}));
                     return (Err(format!("{error:#}")), None);
                 }
@@ -333,11 +363,14 @@ impl Actor {
         (Ok(()), events)
     }
 
-    fn permission(&mut self, request_id: &str, allow: bool, message: Option<String>) -> Result<(), String> {
+    fn permission(&mut self, request_id: &str, allow: bool, message: Option<String>, remember: bool) -> Result<(), String> {
         let Some(ask) = self.pending.remove(request_id) else {
             return Err("unknown or already answered".into());
         };
-        let line = if allow { protocol::allow(request_id, &ask.input) } else { protocol::deny(request_id, message.as_deref().unwrap_or("The user declined this.")) };
+        // Only the one read-only tool of this app, only on a person's click, and Claude Code decides how long it holds (this process).
+        let rules = (allow && remember && ask.tool_name == crate::index::OWN_TOOL)
+            .then(|| json!([{"type": "addRules", "rules": [{"toolName": ask.tool_name}], "behavior": "allow", "destination": "session"}]));
+        let line = if allow { protocol::allow(request_id, &ask.input, rules) } else { protocol::deny(request_id, message.as_deref().unwrap_or("The user declined this.")) };
         let sent = self.process.as_ref().map(|p| p.send_line(line)).unwrap_or(false);
         self.emit("permission_resolved", json!({"request_id": request_id, "outcome": if allow { "allowed" } else { "denied" }}));
         if sent {
@@ -387,6 +420,9 @@ impl Actor {
             }
             ProcEvent::Exited(code) => {
                 self.cancel_pending();
+                if let Some(gate) = &self.mcp {
+                    gate.revoke(&self.meta.sid);
+                }
                 self.process = None;
                 self.set_state(State::Exited { code });
             }

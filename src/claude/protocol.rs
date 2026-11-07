@@ -108,8 +108,12 @@ pub fn user_message(text: &str, images: &[Image]) -> String {
 }
 
 /// The answer to a permission request. The input is the one the request carried, never one the browser sent.
-pub fn allow(request_id: &str, input: &Value) -> String {
-    one_line(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": {"behavior": "allow", "updatedInput": input}}}))
+pub fn allow(request_id: &str, input: &Value, updated_permissions: Option<Value>) -> String {
+    let mut response = json!({"behavior": "allow", "updatedInput": input});
+    if let Some(rules) = updated_permissions {
+        response["updatedPermissions"] = rules;
+    }
+    one_line(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": response}}))
 }
 
 pub fn deny(request_id: &str, message: &str) -> String {
@@ -170,13 +174,17 @@ mod tests {
         let v: Value = serde_json::from_str(&user_message("hi", &[image])).unwrap();
         assert_eq!(v["message"]["content"][0]["type"], "image");
         assert_eq!(v["message"]["content"][1]["text"], "hi");
-        let v: Value = serde_json::from_str(&allow("r1", &json!({"command": "ls"}))).unwrap();
+        let v: Value = serde_json::from_str(&allow("r1", &json!({"command": "ls"}), None)).unwrap();
+        assert!(v["response"]["response"].get("updatedPermissions").is_none());
+        let rules = json!([{"type": "addRules"}]);
+        let v2: Value = serde_json::from_str(&allow("r1", &json!({}), Some(rules.clone()))).unwrap();
+        assert_eq!(v2["response"]["response"]["updatedPermissions"], rules);
         assert_eq!(v["response"]["response"]["behavior"], "allow");
         assert_eq!(v["response"]["response"]["updatedInput"]["command"], "ls");
         let v: Value = serde_json::from_str(&deny("r1", "no")).unwrap();
         assert_eq!(v["response"]["response"]["message"], "no");
         let v: Value = serde_json::from_str(&interrupt("c1")).unwrap();
         assert_eq!(v["request"]["subtype"], "interrupt");
-        assert!(!allow("r", &json!({})).contains('\n'));
+        assert!(!allow("r", &json!({}), None).contains('\n'));
     }
 }

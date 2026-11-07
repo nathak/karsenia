@@ -23,12 +23,23 @@ so a chat can be reopened and replayed, and continues with `claude --resume` aft
 
 ### Building on a machine without a C compiler
 
-Rust needs a linker driver named `cc`. If there is none (and no `sudo`), a user-level Zig works as one:
+Rust needs a linker driver named `cc`, and the bundled SQLite is C. If there is no compiler (and no `sudo`), a user-level Zig works as one:
 
 ```sh
+mkdir -p ~/.cache/swb-tools/bin
 pip install --target ~/.cache/swb-tools/py ziglang
-printf '#!/bin/sh\nPYTHONPATH=%s/py exec python3 -m ziglang cc "$@"\n' ~/.cache/swb-tools > ~/.cache/swb-tools/cc && chmod +x ~/.cache/swb-tools/cc
-export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=~/.cache/swb-tools/cc
+cat > ~/.cache/swb-tools/bin/cc <<'WRAPPER'
+#!/bin/sh
+# zig cc as a cc: zig spells the target x86_64-linux-gnu, rustc and cc-rs say x86_64-unknown-linux-gnu.
+for a in "$@"; do
+  shift
+  case "$a" in --target=x86_64-unknown-linux-gnu) a=--target=x86_64-linux-gnu ;; --target=aarch64-unknown-linux-gnu) a=--target=aarch64-linux-gnu ;; esac
+  set -- "$@" "$a"
+done
+PYTHONPATH=$HOME/.cache/swb-tools/py exec python3 -m ziglang cc "$@"
+WRAPPER
+chmod +x ~/.cache/swb-tools/bin/cc
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=~/.cache/swb-tools/bin/cc CC=~/.cache/swb-tools/bin/cc
 ```
 
 ## What it does
@@ -47,13 +58,28 @@ export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=~/.cache/swb-tools/cc
 - **Interrupt** sends the CLI's `interrupt` control request; the turn ends with `error_during_execution`.
 - Events the host does not know are passed to the UI as raw JSON (and shown in the debug drawer), so a new CLI version cannot break parsing.
 
+## Search your history (step 1 of the Hermes-like features)
+
+- **Index**: every chat's log is indexed in SQLite FTS5 (`<data>/index.sqlite`, `0600`), one row per message block: what you wrote, what
+  Claude answered, a tool call's name and summary, and the first 2 KB of a tool result. Images, thinking, sub-agent messages,
+  permissions, stderr and the search tool's own results are not indexed. The index is only a cache of the `.jsonl` logs: it is
+  brought up to date at start, is rebuilt when it is old or damaged, and drops chats that are gone.
+- **Sidebar search** (Korean and English, any part of a word; a two-letter Korean word works too): the match is marked, a click opens the chat
+  and scrolls to the message.
+- **`search_history` for Claude**: each chat's `claude` is started with an MCP server (`smart-workbench-app mcp`, stdio) that asks the host over
+  a `0600` Unix socket. It searches this chat's **project folder** by default (`scope: "all"` for every chat), returns at most
+  six short excerpts, and frames them as untrusted data quoted from the past (old tool outputs can carry instructions). The chat is
+  identified by a per-process secret in a `0600` config file, never by an argument the model passes; the secret and the file go when the process ends.
+  Calls go through Claude Code's normal permission flow, so the dialog asks; **"Allow this tool in this chat"** (shown for this tool only)
+  adds a session allow rule that Claude Code applies until that process ends. The host never approves on its own.
+
 ## Security
 
 Local only: binds `127.0.0.1`; every request needs the right `Host` (DNS rebinding gets 421); a WebSocket needs the exact
 `Origin` and the token as its first message within 5 s; the file endpoint needs a `Bearer` token; a strict CSP (no inline script,
 no remote image or script), `nosniff`, `no-referrer`. Markdown goes through DOMPurify (images and forms are removed).
 The app can run commands through Claude Code, so treat its address like a terminal. The data folder (prompts, images and
-tool results) is `0700` and its files `0600`. Streaming text pieces are shown but never stored; a session read back after a
+tool results) is `0700` and its files `0600`. The MCP socket and its per-chat config files are `0600` too. Streaming text pieces are shown but never stored; a session read back after a
 crash has its open requests cancelled. On Ctrl-C or SIGTERM the host kills every `claude` process group.
 
 Known limits: a local program that forges the `Origin` header can open a socket and make the host buffer up to 40 MB before the
@@ -67,7 +93,7 @@ cargo test                       # protocol, process, session, server (a fake cl
 cargo clippy --all-targets -- -D warnings
 node --test tests/ui.test.mjs    # the UI's pure helpers
 PLAYWRIGHT=/path/to/playwright/index.mjs tests/smoke/run.sh   # headless-Chromium run of the UI against the fake
-SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude (costs a few cents)
+SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude, two tests (costs a few cents)
 ```
 
 `fake-claude` replays a scenario file: lines are printed as they are, or are directives (`{"$wait":"user"|"control_response"|"interrupt"}`,
@@ -76,16 +102,15 @@ SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude 
 ## Layout
 
 `src/claude/` everything specific to the CLI (protocol, process) · `src/session.rs` one chat's task (state, pending permissions, log) ·
-`src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files · `ui/` plain ES modules, `ui/vendor/` marked and DOMPurify (pinned, licenses included).
+`src/index.rs` the FTS5 index · `src/mcp.rs` the stdio MCP server and the per-chat secrets · `src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files + the MCP socket · `ui/` plain ES modules, `ui/vendor/` marked and DOMPurify (pinned, licenses included).
 
 ## Verified against Claude Code 2.1.316
 
 Multi-turn over one process, `--resume <session id>` (remembers), image input, `can_use_tool` allow and deny, `interrupt`
 (`control_response` then `result/error_during_execution` within 0.1 s), and the whole permission round trip through this host
-with the real `claude` (the live test). Not yet checked: how SmartWorkbench's guard questions (`$.ui.ask`) behave in a headless
+with the real `claude` (the live test). Also checked: a stdio MCP server (tool name `mcp__swb_app__search_history`, env passed to it, connected before the first turn, a session allow rule through `updatedPermissions`, the CLI's `server/discover` probe answered with -32601) and the real tool call in the live test. Not yet checked: how SmartWorkbench's guard questions (`$.ui.ask`) behave in a headless
 host, the IDE connection protocol, and Windows/macOS.
 
 ## Next
 
-Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages) · file tree and editor · PTY terminal · Hermes Agent as a second backend
-(ACP over stdio or its `/v1/runs` API) · an "always allow" choice that writes `updatedPermissions`.
+Memory (SQLite, saved only with a click) · skill proposals with an approval screen · a scheduler with a fixed tool list for unattended runs · per-chat model provider (`ANTHROPIC_BASE_URL`) and a container launcher · a Telegram gateway · Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages) · file tree and editor · PTY terminal.

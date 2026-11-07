@@ -89,14 +89,14 @@ async fn a_permission_waits_for_a_person_and_the_answer_carries_the_requests_own
     assert!(!fx.log_text().contains("control_response"), "nothing may be answered before a person does");
     assert_eq!(session.info().await.unwrap().pending, 1);
 
-    session.permission("r1".into(), true, None).await.unwrap();
+    session.permission("r1".into(), true, None, false).await.unwrap();
     until(&mut rx, state("idle")).await;
     let log = fx.log_text();
     let reply = log.lines().find(|l| l.starts_with("IN ") && l.contains("control_response")).expect("the allow was written");
     let v: Value = serde_json::from_str(&reply[3..]).unwrap();
     assert_eq!(v["response"]["response"]["behavior"], "allow");
     assert_eq!(v["response"]["response"]["updatedInput"]["command"], "touch a");
-    assert!(session.permission("r1".into(), true, None).await.is_err(), "a request is answered once");
+    assert!(session.permission("r1".into(), true, None, false).await.is_err(), "a request is answered once");
 }
 
 #[tokio::test]
@@ -106,7 +106,7 @@ async fn a_denial_goes_back_with_its_message() {
     let (_, mut rx) = session.subscribe(0).await.unwrap();
     session.send("go".into(), vec![]).await.unwrap();
     until(&mut rx, kind("permission")).await;
-    session.permission("r1".into(), false, Some("not now".into())).await.unwrap();
+    session.permission("r1".into(), false, Some("not now".into()), false).await.unwrap();
     let resolved = until(&mut rx, kind("permission_resolved")).await;
     assert_eq!(resolved.data["outcome"], "denied");
     until(&mut rx, state("idle")).await;
@@ -183,7 +183,7 @@ async fn a_process_that_dies_cancels_what_waited() {
     assert_eq!(gone.data["outcome"], "cancelled");
     let exited = until(&mut rx, state("exited")).await;
     assert_eq!(exited.data["code"], 3);
-    assert!(session.permission("r7".into(), true, None).await.is_err());
+    assert!(session.permission("r7".into(), true, None, false).await.is_err());
 }
 
 #[tokio::test]
@@ -270,7 +270,7 @@ async fn the_end_of_a_turn_cancels_a_request_nobody_answered() {
     let gone = until(&mut rx, kind("permission_resolved")).await;
     assert_eq!(gone.data["outcome"], "cancelled");
     until(&mut rx, state("idle")).await;
-    assert!(session.permission("r9".into(), true, None).await.is_err(), "a dead request is not answered");
+    assert!(session.permission("r9".into(), true, None, false).await.is_err(), "a dead request is not answered");
     assert!(!fx.log_text().contains("control_response"));
 }
 
