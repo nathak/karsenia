@@ -105,20 +105,21 @@ rebuilt: a file that cannot be read is renamed `.broken` and you are told). A no
 ## Skills (step 3 of the Hermes-like features)
 
 A skill is a procedure Claude follows when it applies (`SKILL.md`). It is **instructions for Claude**, so the app never enables one by itself:
-a proposal always waits, you read the whole file, and only then it is approved.
+a proposal always waits, you read the whole file, and only then it is approved. (That is a promise of this app, not of the file system: a chat
+with broad Bash permission can write the data folder, and a skill planted there would pass only the block checks when a chat starts.)
 
 - **Proposals**: the **Skills** tab has "Propose a skill from this chat" (with an optional hint, a scope, and "improve skill X"), and an
   optional **automatic** mode (off by default): after a turn that used 8 or more tools and ended well, 90 seconds of quiet, at most one per
-  chat and five a day (counted on disk), and **never** in a chat that used a web tool or an outside MCP tool (third-party text may have
-  shaped it). An automatic proposal only creates new skills, never changes one.
+  chat a day and five a day in all (counted on disk), and **never** in a chat that used, at any time, a web tool, an outside MCP tool, a
+  subagent (`Task`/`Agent`) or a shell command that fetches (`curl`, `wget`, a URL): third-party text may have shaped it. An automatic proposal only creates new skills, never changes one.
 - **What the proposer reads**: a separate `claude -p --model sonnet` run (no tools, no MCP, no slash commands, no settings, no session, an
   empty folder, 120 s) reads **your own messages** and **one-line summaries of the tool calls that succeeded** (never tool results, never
   Claude's own text, nothing with a secret), plus your hint, plus the names of existing skills (or, when improving, the current text). It
   answers in strict JSON; anything else discards the run. About $0.03-0.06 a run.
 - **Checks the host does itself**, on the text as it will be written and again at every approval (the report is shown next to the full text):
   *blocks* (Approve is not offered until fixed): a bad or reserved name, a description that is not one line without `---`/`<`/`>`, a body
-  that starts with `---`, a `` !`command` `` that would run when the skill loads, a secret, control, invisible or direction-changing
-  characters, a line over 1000 characters, a body over 7 KB or 200 lines. *Warnings* (you must tick "I read the warnings"): `curl | sh`,
+  that starts with `---`, a `` !`command` `` or a ```` ```! ```` block that would run when the skill loads, a secret, control, invisible or direction-changing
+  characters (also in the name and the description, which every chat loads), a line over 1000 characters, a body over 7 KB or 200 lines. *Warnings* (you must tick "I read the warnings"): `curl | sh`,
   `sudo`, `rm -rf`, `eval`, `$(...)`, `base64 -d`, ssh/scp/nc, URLs, "ignore the rules / without asking / silently", permission words
   (`settings.json`, `allowed-tools`), credential paths, HTML or comments, long lines. Editing then approving goes through the same checks.
 - **What is written**: the host builds `SKILL.md` itself: the frontmatter holds `name` and `description` and **nothing else** (no

@@ -27,7 +27,7 @@ const TEXT = {
     skPending: '승인 대기 제안', skActive: '사용 중인 스킬', skDeleted: '삭제됨 (7일 안에 되돌리기)', skApprove: '승인', skEditApprove: '수정 후 승인', skReject: '거절', skEnable: '켜기', skDisable: '끄기', skDelete: '삭제', skHistory: '이력',
     skRollback: '이 버전으로', skBlocked: '고쳐야 할 문제', skWarn: '읽어야 할 경고', skAck: '경고를 모두 읽었고, 이 내용을 Claude가 따라도 괜찮습니다', skFull: 'SKILL.md 전문 (그대로 저장됩니다)', skDiff: '현재 버전과 비교',
     skLastUsed: '마지막 사용', skNever: '아직 쓰이지 않음', skProposed: '스킬 제안이 도착했습니다', skImproveTag: '개선', skDisabledTag: '꺼짐', skSaveApprove: '저장하고 승인', skName: '이름', skDescription: '설명 (한 줄)', skBody: '본문',
-    skVersion: '버전', skGiven: 'Claude에게 스킬을 전달했습니다',
+    skVersion: '버전', skGiven: 'Claude에게 스킬을 전달했습니다', skEditedReport: '수정한 최종 내용의 검사 결과',
   },
   en: {
     newChat: '＋ New chat', folder: 'Project folder (absolute path)', model: 'Model', create: 'Create', cancel: 'Cancel', empty: 'Pick a chat on the left or start a new one.',
@@ -52,7 +52,7 @@ const TEXT = {
     skPending: 'Proposals waiting', skActive: 'Skills in use', skDeleted: 'Deleted (undo within 7 days)', skApprove: 'Approve', skEditApprove: 'Edit, then approve', skReject: 'Reject', skEnable: 'Turn on', skDisable: 'Turn off', skDelete: 'Delete', skHistory: 'History',
     skRollback: 'Back to this version', skBlocked: 'Problems to fix', skWarn: 'Warnings to read', skAck: 'I read the warnings, and Claude may follow this', skFull: 'The whole SKILL.md (saved exactly like this)', skDiff: 'Compare with the current version',
     skLastUsed: 'Last used', skNever: 'not used yet', skProposed: 'A skill proposal arrived', skImproveTag: 'improvement', skDisabledTag: 'off', skSaveApprove: 'Save and approve', skName: 'Name', skDescription: 'Description (one line)', skBody: 'Body',
-    skVersion: 'version', skGiven: 'Claude was given skills',
+    skVersion: 'version', skGiven: 'Claude was given skills', skEditedReport: 'Findings for the edited text',
   },
 }
 const LANG = (navigator.language || 'ko').toLowerCase().startsWith('en') ? 'en' : 'ko'
@@ -103,7 +103,7 @@ DOMPurify.addHook('afterSanitizeAttributes', node => {
 const markdown = source => DOMPurify.sanitize(marked.parse(source, { gfm: true, breaks: true }), { FORBID_TAGS: ['style', 'form', 'input', 'button', 'img'], FORBID_ATTR: ['style'] })
 
 // ---- state ----
-const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, skills: null, skEditing: 0, skHistory: null, images: [], debug: [], connected: false, wasConnected: false }
+const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, skills: null, skEditing: 0, skHistory: null, skDraft: null, skEditReport: null, images: [], debug: [], connected: false, wasConnected: false }
 
 const messages = $('messages')
 function stick() { return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120 }
@@ -152,7 +152,7 @@ function onMessage(m) {
   if (m.kind === 'memory_notice') { toast(m.data.text); return }
   if (m.kind === 'memory_auto') { autoSaved(m.data.items || []); return }
   if (m.kind === 'skills') { S.skills = m.data; renderSkills(); return }
-  if (m.kind === 'skills_changed') { askSkills(); return }
+  if (m.kind === 'skills_changed') { S.skHistory = null; askSkills(); return }
   if (m.kind === 'skill_result') { skResult(m.data); return }
   if (m.kind === 'skill_versions') { S.skHistory = m.data; renderSkills(); return }
   if (m.kind === 'skill_notice') { toast(m.data.text); return }
@@ -810,10 +810,15 @@ function skSend(op, tag) {
 function skResult(d) {
   const last = S.memOps.get(d.rid)
   S.memOps.delete(d.rid)
-  if (!d.ok) { if (d.error) toast(d.error); return }
+  if (!d.ok) {
+    if (d.error) toast(d.error)
+    // A refused approval brings the findings of the text that would have been written.
+    if (last && last.op === 'skill_approve' && d.risks) { S.skEditReport = { id: d.id, risks: d.risks }; renderSkills() }
+    return
+  }
   if (last && last.op === 'skill_propose') toast(t('skStarted'))
   if (last && last.op === 'skill_delete' && d.undo) toast(t('skDeleted').split(' (')[0], { label: t('memUndo'), run: () => skSend({ op: 'skill_undo', id: d.undo }) })
-  S.skEditing = 0
+  if (last && last.op === 'skill_approve') { S.skEditing = 0; S.skDraft = null; S.skEditReport = null }
 }
 
 $('sk-auto').addEventListener('change', () => skSend({ op: 'skill_setting', auto: $('sk-auto').checked }))
@@ -900,20 +905,35 @@ function skProposal(p) {
   card.appendChild(acts)
 
   if (S.skEditing === p.id) {
+    // What is typed is kept in a draft, so a redraw (another page changed something) does not wipe it.
+    const draft = S.skDraft && S.skDraft.id === p.id ? S.skDraft : (S.skDraft = { id: p.id, name: p.name, description: p.description, body: p.body, ack: false })
     const form = el('div', 'sk')
+    const field = (label, node, key) => {
+      node.value = draft[key]
+      node.addEventListener('input', () => { draft[key] = node.value })
+      form.append(el('div', 'muted', label), node)
+    }
     const name = el('input')
     name.type = 'text'
-    name.value = p.name
     name.disabled = Boolean(p.target)
     const description = el('textarea')
-    description.value = p.description
     const body = el('textarea')
-    body.value = p.body
     body.style.minHeight = '160px'
+    field(t('skName'), name, 'name')
+    field(t('skDescription'), description, 'description')
+    field(t('skBody'), body, 'body')
+    // The findings of the EDITED text (from the server's last refusal), never only those of the original.
+    if (S.skEditReport && S.skEditReport.id === p.id) form.append(el('div', 'muted', t('skEditedReport')), skRisks({ risks: S.skEditReport.risks }).node)
+    const editAck = el('input')
+    editAck.type = 'checkbox'
+    editAck.checked = draft.ack
+    editAck.addEventListener('change', () => { draft.ack = editAck.checked })
+    const label = el('label', 'muted')
+    label.append(editAck, document.createTextNode(' ' + t('skAck')))
     const save = el('button', 'primary', t('skSaveApprove'))
     save.type = 'button'
-    save.addEventListener('click', () => skSend({ op: 'skill_approve', id: p.id, ack_risk: ack.checked, edit: { name: name.value, description: description.value.replace(/\s+/g, ' ').trim(), body: body.value } }))
-    form.append(el('div', 'muted', t('skName')), name, el('div', 'muted', t('skDescription')), description, el('div', 'muted', t('skBody')), body, save)
+    save.addEventListener('click', () => skSend({ op: 'skill_approve', id: p.id, ack_risk: editAck.checked, edit: { name: draft.name, description: draft.description.replace(/\s+/g, ' ').trim(), body: draft.body } }))
+    form.append(label, save)
     card.appendChild(form)
   }
   return card

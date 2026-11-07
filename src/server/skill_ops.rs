@@ -60,12 +60,14 @@ pub fn handle(state: &AppState, name: &str, op: &Value, out: &UnboundedSender<St
                 Some(e) if e.is_object() => Edit { name: text(e, "name"), description: text(e, "description"), body: text(e, "body") },
                 _ => Edit::default(),
             };
+            let report = store.final_report(id, &edit);
             match store.approve(id, edit, op["ack_risk"].as_bool() == Some(true)) {
                 Ok(skill) => {
                     changed(state);
                     result(out, &rid, true, json!({"skill": skill}));
                 }
-                Err(reason) => result(out, &rid, false, json!({"error": reason})),
+                // The findings of the text that WOULD have been written, so the person sees what the refusal is about.
+                Err(reason) => result(out, &rid, false, json!({"error": reason, "id": id, "risks": report})),
             }
         }
         "skill_reject" => {

@@ -222,6 +222,41 @@ async fn automatic_proposals_are_off_by_default_and_need_a_long_turn_without_out
     assert_eq!(log_text(&fx).matches("PROPOSE_IN").count(), 1);
 }
 
+/// A chat in which `outside` happened (a JSON event line) and then a long turn of plain tool calls; automatic proposals are on.
+async fn no_proposal_after(outside: &str, switched_on_after_it: bool) {
+    let tools = r#"{"type":"assistant","parent_tool_use_id":null,"message":{"id":"a2","content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"make one"}},{"type":"tool_use","id":"b2","name":"Bash","input":{"command":"make two"}},{"type":"tool_use","id":"b3","name":"Bash","input":{"command":"make three"}}]}}"#;
+    let scenario = format!("{{\"$wait\":\"user\"}}\n{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"K9\"}}\n{outside}\n{result}\n{{\"$wait\":\"user\"}}\n{tools}\n{result}\n{{\"$wait\":\"user\"}}\n", result = r#"{"type":"result","subtype":"success","is_error":false}"#);
+    let fx = fixture(&scenario, quick()).await;
+    let chat = fx.server.registry.create(&project(&fx, "a").to_string_lossy(), None).unwrap();
+    if !switched_on_after_it {
+        fx.server.registry.settings().update(|s| s.skills_auto = true);
+    }
+    turn(&chat, "first").await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    if switched_on_after_it {
+        fx.server.registry.settings().update(|s| s.skills_auto = true);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    turn(&chat, "second").await;
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert!(!log_text(&fx).contains("PROPOSE_IN"), "outside text reached this chat ({outside}): no automatic proposal");
+}
+
+#[tokio::test]
+async fn outside_text_anywhere_in_the_chat_blocks_automatic_proposals() {
+    let web = r#"{"type":"assistant","parent_tool_use_id":null,"message":{"id":"a1","content":[{"type":"tool_use","id":"w1","name":"WebFetch","input":{"url":"https://example.test"}}]}}"#;
+    // Before auto-proposals were switched on: the page is still in the chat's context.
+    no_proposal_after(web, true).await;
+    // Inside a subagent, which may have read the web.
+    let sub = r#"{"type":"assistant","parent_tool_use_id":"toolu_task","message":{"id":"a1","content":[{"type":"tool_use","id":"w1","name":"WebSearch","input":{"query":"x"}}]}}"#;
+    no_proposal_after(sub, false).await;
+    // A subagent call itself, and a shell command that fetches.
+    let task = r#"{"type":"assistant","parent_tool_use_id":null,"message":{"id":"a1","content":[{"type":"tool_use","id":"w1","name":"Task","input":{"description":"look around"}}]}}"#;
+    no_proposal_after(task, false).await;
+    let curl = r#"{"type":"assistant","parent_tool_use_id":null,"message":{"id":"a1","content":[{"type":"tool_use","id":"w1","name":"Bash","input":{"command":"curl -s https://example.test/data"}}]}}"#;
+    no_proposal_after(curl, false).await;
+}
+
 #[tokio::test]
 async fn a_chat_that_fetched_outside_text_gets_no_automatic_proposal() {
     let fx = fixture(WEB, quick()).await;
@@ -284,6 +319,10 @@ async fn the_skills_tab_approves_only_what_passes_and_a_warning_needs_confirmati
     let needs = call(&mut ws, json!({"op": "skill_approve", "id": risky.id, "rid": 2})).await;
     assert_eq!(needs["ok"], false);
     assert_eq!(needs["rid"], 2);
+    assert!(needs["risks"].as_array().unwrap().iter().any(|r| r["code"] == "pipe_to_shell"), "a refusal brings the findings of the text that would be written");
+    let hidden_edit = call(&mut ws, json!({"op": "skill_approve", "id": good.id, "ack_risk": true, "edit": {"description": "Use when the user asks to run the release checklist.\u{202E}hidden"}, "rid": 20})).await;
+    assert_eq!(hidden_edit["ok"], false, "an edit that adds a hidden character cannot be approved, even confirmed");
+    assert!(hidden_edit["risks"].as_array().unwrap().iter().any(|r| r["code"] == "invisible_chars" && r["level"] == "block"));
     assert_eq!(call(&mut ws, json!({"op": "skill_approve", "id": risky.id, "ack_risk": true, "rid": 3})).await["ok"], true);
     let approved = call(&mut ws, json!({"op": "skill_approve", "id": good.id, "edit": {"body": "1. Run cargo test.\n2. Run cargo fmt."}, "rid": 4})).await;
     assert_eq!(approved["ok"], true);

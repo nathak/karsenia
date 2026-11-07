@@ -31,6 +31,19 @@ pub struct ProposalInput {
     pub last_seq: u64,
 }
 
+/// A tool call through which text from outside the person's own files and words can enter the chat: the web, a tool of another MCP
+/// server, a subagent (it may have read the web), or a shell command that fetches (curl, wget, a URL).
+pub fn is_external_tool(name: &str, input: &Value) -> bool {
+    if matches!(name, "WebFetch" | "WebSearch" | "Task" | "Agent") || (name.starts_with("mcp__") && !name.starts_with("mcp__swb_app__")) {
+        return true;
+    }
+    if name == "Bash" {
+        let command = input["command"].as_str().unwrap_or_default().to_lowercase();
+        return ["curl", "wget", "http://", "https://"].iter().any(|word| command.contains(word));
+    }
+    false
+}
+
 /// What the browser reads: a numbered event of one session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope {
@@ -532,7 +545,10 @@ impl Actor {
         let mut calls: Vec<(String, String)> = Vec::new();
         let mut failed: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut turn_tools = 0usize;
-        let mut external = false;
+        // Outside text is looked for in the WHOLE log, subagents included, whenever it came: it stays in the chat's context.
+        let external = self.log.iter().any(|e| {
+            e.kind == "claude" && e.data["type"] == "assistant" && e.data["message"]["content"].as_array().into_iter().flatten().any(|b| b["type"] == "tool_use" && is_external_tool(b["name"].as_str().unwrap_or_default(), &b["input"]))
+        });
         for e in self.log.iter().filter(|e| e.ts >= since) {
             match e.kind.as_str() {
                 "user" => {
@@ -548,7 +564,6 @@ impl Actor {
                             for block in blocks.into_iter().flatten().filter(|b| b["type"] == "tool_use") {
                                 let name = block["name"].as_str().unwrap_or_default();
                                 turn_tools += 1;
-                                external |= name == "WebFetch" || name == "WebSearch" || (name.starts_with("mcp__") && !name.starts_with("mcp__swb_app__"));
                                 if !name.starts_with("mcp__swb_app__") {
                                     calls.push((block["id"].as_str().unwrap_or_default().to_owned(), format!("{name}: {}", crate::index::summary(&block["input"]))));
                                 }
