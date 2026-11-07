@@ -32,6 +32,17 @@ fn matches(line: &str, wanted: &str) -> bool {
 fn main() {
     let log_path = std::env::var("FAKE_LOG").ok();
     log(&log_path, &format!("ARGV {}", std::env::args().skip(1).collect::<Vec<_>>().join(" ")));
+
+    // The auto-save extractor asks for one JSON answer (--output-format json) and writes its prompt on stdin, whole.
+    let args: Vec<String> = std::env::args().collect();
+    if args.windows(2).any(|w| w[0] == "--output-format" && w[1] == "json") {
+        let mut prompt = String::new();
+        let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut prompt);
+        log(&log_path, &format!("EXTRACT_IN {}", prompt.replace('\n', "\\n")));
+        let answer = std::env::var("FAKE_EXTRACT").ok().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_else(|| r#"{"type":"result","subtype":"success","is_error":false,"result":"{}","structured_output":{"memories":[]}}"#.to_owned());
+        println!("{}", answer.trim());
+        return;
+    }
     let scenario = std::env::var("FAKE_SCENARIO").ok().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
 
     let (tx, rx) = mpsc::channel::<String>();

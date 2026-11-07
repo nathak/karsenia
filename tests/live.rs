@@ -51,6 +51,7 @@ async fn live_claude_calls_the_history_search_tool_after_a_click() {
         data_dir: dir.path().join("data"),
         bin: None,
         mcp_bin: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_smart-workbench-app"))),
+        extract: Default::default(),
     })
     .await
     .unwrap();
@@ -83,4 +84,64 @@ async fn live_claude_calls_the_history_search_tool_after_a_click() {
         }
     }
     assert!(said.contains("PELICAN-NONCE-7731"), "Claude's answer should quote the old chat: {said}");
+}
+
+#[tokio::test]
+#[ignore = "uses the real claude; run with SWB_LIVE=1 and --ignored"]
+async fn live_memory_a_stated_preference_is_auto_saved_and_a_new_chat_knows_it() {
+    if std::env::var_os("SWB_LIVE").is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let server = swb_app::server::start(swb_app::server::Config {
+        port: 0,
+        data_dir: dir.path().join("data"),
+        bin: None,
+        mcp_bin: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_smart-workbench-app"))),
+        extract: swb_app::extract::ExtractConfig { debounce: Duration::from_millis(500), batch_turns: 3, daily_cap: 40, retries: 1 },
+    })
+    .await
+    .unwrap();
+    server.registry.settings().update(|s| s.memory_auto = swb_app::settings::Auto::Project);
+
+    let first = server.registry.create(project.to_str().unwrap(), Some("haiku".into())).unwrap();
+    let (_, mut rx) = first.subscribe(0).await.unwrap();
+    first.send("I use pnpm as the package manager in this project. Reply with just OK.".into(), vec![]).await.unwrap();
+    until(&mut rx, |e| e.kind == "state" && e.data["state"] == "idle").await;
+
+    let store = server.registry.memory().unwrap();
+    let cwd = first.info().await.unwrap().meta.cwd.to_string_lossy().into_owned();
+    let mut saved = false;
+    for _ in 0..120 {
+        if store.overview(Some(&cwd)).project.iter().any(|m| m.text.to_lowercase().contains("pnpm")) {
+            saved = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(saved, "the preference should be auto-saved: {:?}", store.overview(Some(&cwd)));
+
+    let second = server.registry.create(project.to_str().unwrap(), Some("haiku".into())).unwrap();
+    let (_, mut rx2) = second.subscribe(0).await.unwrap();
+    second.send("Which package manager does this project use, according to the notes you were given? Answer with one word and do not use any tool.".into(), vec![]).await.unwrap();
+    let mut said = String::new();
+    let mut used_tool = false;
+    loop {
+        let e = until(&mut rx2, |_| true).await;
+        if e.kind == "claude" && e.data["type"] == "assistant" {
+            for block in e.data["message"]["content"].as_array().into_iter().flatten() {
+                if let Some(t) = block["text"].as_str() {
+                    said.push_str(t);
+                }
+                used_tool |= block["type"] == "tool_use";
+            }
+        }
+        if e.kind == "state" && e.data["state"] == "idle" {
+            break;
+        }
+    }
+    assert!(said.to_lowercase().contains("pnpm"), "the new chat should know: {said}");
+    assert!(!used_tool, "it should answer from the notes it was given, without a tool");
 }

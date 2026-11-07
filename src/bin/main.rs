@@ -37,7 +37,7 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    let config = swb_app::server::Config { port: args.port, data_dir: args.data.unwrap_or_else(swb_app::registry::data_dir), bin: args.claude, mcp_bin: std::env::current_exe().ok() };
+    let config = swb_app::server::Config { port: args.port, data_dir: args.data.unwrap_or_else(swb_app::registry::data_dir), bin: args.claude, mcp_bin: std::env::current_exe().ok(), extract: Default::default() };
     match swb_app::server::start(config).await {
         Ok(running) => {
             println!("SmartWorkbench App is running. Open:\n  {}", running.url());

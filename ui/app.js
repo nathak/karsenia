@@ -1,6 +1,6 @@
 import { marked } from './vendor/marked.js'
 import DOMPurify from './vendor/purify.js'
-import { baseName, checkImage, fmtTurn, imagePaths, markParts, nearestSeq, pathsInText, resultBlocks, toolSummary } from './util.js'
+import { baseName, checkImage, fmtBytes, fmtTurn, imagePaths, markParts, nearestSeq, pathsInText, resultBlocks, toolSummary } from './util.js'
 
 // ---- text ----
 const TEXT = {
@@ -14,6 +14,14 @@ const TEXT = {
     noSession: '먼저 대화를 만들거나 고르세요.', input: '입력', result: '결과',
     searchPh: '모든 대화에서 검색', noResults: '결과가 없습니다', searchFailed: '검색할 수 없습니다', allowChat: '이 대화에서 이 도구 허용 (읽기 전용)',
     roleUser: '나', roleAssistant: 'Claude', roleTool: '도구', roleResult: '결과',
+    tabChats: '대화', tabMemory: '메모리', memAuto: '자동 저장', memAutoOff: '끔', memAutoProject: '이 프로젝트 메모만', memAutoBoth: '프로젝트 + 나에 대한 메모',
+    memScopeProject: '프로젝트', memScopeUser: '나', memAddPh: '기억할 내용 (300자까지)', memAdd: '추가', memExport: '메모 내보내기 (JSON)',
+    memPending: '승인 대기', memProject: '이 프로젝트', memUser: '나에 대한 메모', memRecent: '최근 자동 저장', memOthers: '다른 프로젝트', memDeleted: '삭제됨 (7일 안에 되돌리기)',
+    memApprove: '승인', memReject: '거절', memEdit: '수정', memDelete: '삭제', memPin: '고정', memUnpin: '고정 해제', memSave: '저장', memCancel: '취소', memUndo: '되돌리기',
+    memInstr: '명령처럼 보임', memSrcManual: '직접', memSrcClaude: 'Claude', memSrcAuto: '자동', memGoto: '원래 대화로',
+    memSecretConfirm: '키나 비밀번호처럼 보입니다. 그래도 저장할까요?', memInstrConfirm: 'AI에게 내리는 명령처럼 보이는 메모입니다. 승인하면 이후 대화에서 사용됩니다. 승인할까요?',
+    memCardText: '자동 저장을 켜면 앱이 내가 쓴 메시지에서 오래 기억할 사실과 선호를 골라 저장합니다. Claude의 답이나 도구 결과는 읽지 않고, 키·비밀번호처럼 보이는 것은 저장하지 않으며, 명령처럼 보이는 것은 승인을 기다립니다. 언제든 끄거나 삭제할 수 있습니다.',
+    memCardOn: '이 프로젝트만 켜기', memCardLater: '나중에', memAutoSaved: '자동 저장', memNoChat: '프로젝트 메모는 대화를 연 뒤에 추가할 수 있습니다.', memEmpty: '아직 메모가 없습니다.', memUsed: 'Claude에게 메모를 전달했습니다',
   },
   en: {
     newChat: '＋ New chat', folder: 'Project folder (absolute path)', model: 'Model', create: 'Create', cancel: 'Cancel', empty: 'Pick a chat on the left or start a new one.',
@@ -25,6 +33,14 @@ const TEXT = {
     noSession: 'Create or pick a chat first.', input: 'input', result: 'result',
     searchPh: 'Search all chats', noResults: 'No results', searchFailed: 'Search is not available', allowChat: 'Allow this tool in this chat (read-only)',
     roleUser: 'me', roleAssistant: 'Claude', roleTool: 'tool', roleResult: 'result',
+    tabChats: 'Chats', tabMemory: 'Memory', memAuto: 'Auto-save', memAutoOff: 'Off', memAutoProject: 'This project only', memAutoBoth: 'Project + about me',
+    memScopeProject: 'Project', memScopeUser: 'Me', memAddPh: 'What to remember (300 characters)', memAdd: 'Add', memExport: 'Export notes (JSON)',
+    memPending: 'Waiting for approval', memProject: 'This project', memUser: 'About me', memRecent: 'Recently auto-saved', memOthers: 'Other projects', memDeleted: 'Deleted (undo within 7 days)',
+    memApprove: 'Approve', memReject: 'Reject', memEdit: 'Edit', memDelete: 'Delete', memPin: 'Pin', memUnpin: 'Unpin', memSave: 'Save', memCancel: 'Cancel', memUndo: 'Undo',
+    memInstr: 'looks like an order', memSrcManual: 'manual', memSrcClaude: 'Claude', memSrcAuto: 'auto', memGoto: 'to the chat',
+    memSecretConfirm: 'This looks like a key or a password. Save it anyway?', memInstrConfirm: 'This note reads like an order to the AI. If you approve it, later chats will use it. Approve?',
+    memCardText: 'With auto-save on, the app picks lasting facts and preferences out of the messages you write. It does not read Claude\'s answers or tool results, never saves what looks like a key or a password, and holds anything that reads like an order for your approval. You can turn it off or delete notes any time.',
+    memCardOn: 'Turn on for this project', memCardLater: 'Later', memAutoSaved: 'Auto-saved', memNoChat: 'Open a chat first: a project note belongs to its folder.', memEmpty: 'No notes yet.', memUsed: 'Claude was given notes',
   },
 }
 const LANG = (navigator.language || 'ko').toLowerCase().startsWith('en') ? 'en' : 'ko'
@@ -75,7 +91,7 @@ DOMPurify.addHook('afterSanitizeAttributes', node => {
 const markdown = source => DOMPurify.sanitize(marked.parse(source, { gfm: true, breaks: true }), { FORBID_TAGS: ['style', 'form', 'input', 'button', 'img'], FORBID_ATTR: ['style'] })
 
 // ---- state ----
-const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, images: [], debug: [], connected: false, wasConnected: false }
+const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, lastMem: null, editing: 0, images: [], debug: [], connected: false, wasConnected: false }
 
 const messages = $('messages')
 function stick() { return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120 }
@@ -117,9 +133,16 @@ function showConn() { $('conn').textContent = S.connected ? t('connected') : t('
 
 function onMessage(m) {
   if (m.kind === 'search_results') { showResults(m.data); return }
+  if (m.kind === 'memory') { S.mem = m.data; renderMemory(); return }
+  if (m.kind === 'memory_changed') { askMemory(); return }
+  if (m.kind === 'memory_result') { memResult(m.data); return }
+  if (m.kind === 'memory_export') { downloadJson('memories.json', m.data); return }
+  if (m.kind === 'memory_notice') { toast(m.data.text); return }
+  if (m.kind === 'memory_auto') { autoSaved(m.data.items || []); return }
   if (m.kind === 'hello') {
     S.sessions = m.data.sessions || []
     renderSessions()
+    askMemory()
     if (S.cur && S.wasConnected) { S.replaying = true; wsSend({ op: 'attach', sid: S.cur, after_seq: S.lastSeq }) }
     S.wasConnected = true
     return
@@ -209,6 +232,7 @@ function handle(m) {
     case 'permission': S.pending.set(d.request_id, d); if (!S.replaying) showPerm(); return
     case 'permission_resolved': S.pending.delete(d.request_id); showPerm(); if (!S.replaying) addNote(t(d.outcome)); return
     case 'state': return setState(d.state)
+    case 'memory_used': return addNote(`${t('memUsed')}: ${d.ids.length} (${fmtBytes(d.bytes)})`)
     case 'stderr': debugLog(d.text); return addNote(String(d.text).trim().slice(-300), true)
     case 'error': return addNote(d.message, true)
     default: debugLog(JSON.stringify(m).slice(0, 300))
@@ -569,6 +593,181 @@ function doJump() {
   node.classList.remove('hit')
   void node.offsetWidth
   node.classList.add('hit')
+}
+
+// ---- memory ----
+const curCwd = () => (S.sessions.find(s => s.sid === S.cur) || {}).cwd
+function askMemory() { wsSend({ op: 'memory_list', cwd: curCwd() }) }
+function memSend(op) { S.lastMem = op; wsSend(op) }
+
+function showSide(name) {
+  S.side = name
+  $('chats').hidden = name !== 'chats'
+  $('memory').hidden = name !== 'memory'
+  $('tab-chats').classList.toggle('on', name === 'chats')
+  $('tab-memory').classList.toggle('on', name === 'memory')
+  if (name === 'memory') askMemory()
+}
+$('tab-chats').addEventListener('click', () => showSide('chats'))
+$('tab-memory').addEventListener('click', () => showSide('memory'))
+
+function toast(text, action, ms = 10000) {
+  const box = el('div', 'toast')
+  box.append(el('span', '', text))
+  if (action) {
+    const b = el('button', '', action.label)
+    b.type = 'button'
+    b.addEventListener('click', () => { action.run(); box.remove() })
+    box.append(b)
+  }
+  $('toasts').appendChild(box)
+  setTimeout(() => box.remove(), ms)
+}
+
+function downloadJson(name, data) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
+  const a = el('a')
+  a.href = url
+  a.download = name
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 2000)
+}
+
+// What the app saved by itself: shown at once, with a way back.
+function autoSaved(items) {
+  if (!items.length) return
+  const text = items.length === 1 ? items[0].text : `${items.length}`
+  toast(`${t('memAutoSaved')}: ${text}`, {
+    label: t('memUndo'),
+    run: () => { S.lastMem = { op: 'memory_delete_quiet' }; for (const m of items) wsSend({ op: 'memory_delete', id: m.id }) },
+  })
+}
+
+function memResult(d) {
+  const last = S.lastMem
+  S.lastMem = null
+  if (!d.ok) {
+    if (d.needs_confirm && last && confirm(t('memSecretConfirm'))) return memSend({ ...last, confirm: true })
+    if (d.error) toast(d.error)
+    return
+  }
+  if (last && last.op === 'memory_add') $('mem-text').value = ''
+  if (last && (last.op === 'memory_delete' || last.op === 'memory_reject') && d.undo) {
+    toast(t('memDeleted').split(' (')[0], { label: t('memUndo'), run: () => wsSend({ op: 'memory_undo', id: d.undo }) })
+  }
+}
+
+$('mem-add').addEventListener('submit', event => {
+  event.preventDefault()
+  const text = $('mem-text').value.trim()
+  const scope = $('mem-scope').value
+  if (!text) return
+  if (scope === 'project' && !curCwd()) return toast(t('memNoChat'))
+  memSend({ op: 'memory_add', text, scope, cwd: curCwd() })
+})
+$('mem-auto').addEventListener('change', () => memSend({ op: 'memory_setting', auto: $('mem-auto').value, card_seen: true }))
+$('mem-export').addEventListener('click', () => wsSend({ op: 'memory_export' }))
+
+// The chat a note came from, at the message it was taken from.
+function openFromNote(m) {
+  S.jumpTo = m.seq ? { sid: m.sid, seq: m.seq } : null
+  if (m.sid === S.cur && !S.replaying) return doJump()
+  openView(m.sid, true)
+}
+
+function memRow(m, mode) {
+  const row = el('div', 'mem')
+  if (S.editing === m.id) {
+    const input = el('input')
+    input.type = 'text'
+    input.value = m.text
+    input.maxLength = 300
+    const save = el('button', 'primary', t('memSave'))
+    const cancel = el('button', '', t('memCancel'))
+    save.type = cancel.type = 'button'
+    save.addEventListener('click', () => { S.editing = 0; memSend({ op: 'memory_edit', id: m.id, text: input.value }) })
+    cancel.addEventListener('click', () => { S.editing = 0; renderMemory() })
+    const acts = el('div', 'acts')
+    acts.append(save, cancel)
+    row.append(input, acts)
+    setTimeout(() => input.focus(), 0)
+    return row
+  }
+  row.appendChild(el('div', '', m.text))
+  const meta = el('div', 'meta')
+  meta.appendChild(el('span', 'tag', t('memSrc' + m.source[0].toUpperCase() + m.source.slice(1))))
+  if (m.instr) meta.appendChild(el('span', 'tag warn', t('memInstr')))
+  if (m.pinned) meta.appendChild(el('span', 'tag', '📌'))
+  if (m.sid && S.sessions.some(s => s.sid === m.sid)) {
+    const go = el('button', '', '↗ ' + t('memGoto'))
+    go.type = 'button'
+    go.addEventListener('click', () => openFromNote(m))
+    meta.appendChild(go)
+  }
+  row.appendChild(meta)
+  const acts = el('div', 'acts')
+  const button = (label, run, cls) => { const b = el('button', cls || '', label); b.type = 'button'; b.addEventListener('click', run); acts.appendChild(b) }
+  if (mode === 'pending') {
+    button(t('memApprove'), () => { if (m.instr && !confirm(t('memInstrConfirm'))) return; memSend({ op: 'memory_approve', id: m.id, instruction: m.instr }) }, 'primary')
+    button(t('memReject'), () => memSend({ op: 'memory_reject', id: m.id }))
+  } else if (mode === 'deleted') {
+    button(t('memUndo'), () => memSend({ op: 'memory_undo', id: m.id }))
+  } else {
+    if (mode === 'active') {
+      button(m.pinned ? t('memUnpin') : t('memPin'), () => memSend({ op: 'memory_pin', id: m.id, pinned: !m.pinned }))
+      button(t('memEdit'), () => { S.editing = m.id; renderMemory() })
+    }
+    button(t('memDelete'), () => memSend({ op: 'memory_delete', id: m.id }))
+  }
+  row.appendChild(acts)
+  return row
+}
+
+function memSection(list, title, items, mode, folded) {
+  if (!items.length) return
+  const wrap = folded ? el('details') : el('div')
+  const head = folded ? el('summary', '', `${title} (${items.length})`) : el('h4', '', `${title} (${items.length})`)
+  wrap.appendChild(head)
+  for (const m of items) wrap.appendChild(memRow(m, mode))
+  list.appendChild(wrap)
+}
+
+function renderMemory() {
+  const d = S.mem
+  const list = $('mem-list')
+  list.replaceChildren()
+  const notice = $('mem-notice')
+  const card = $('mem-card')
+  if (!d) return
+  notice.hidden = !d.notice
+  notice.textContent = d.notice || ''
+  if (!d.available) return
+  const pending = d.counts.pending
+  $('mem-badge').hidden = !pending
+  $('mem-badge').textContent = String(pending)
+  $('mem-auto').value = d.settings.memory_auto
+
+  card.hidden = Boolean(d.settings.memory_card_seen)
+  if (!card.hidden) {
+    card.replaceChildren(el('div', '', t('memCardText')))
+    const acts = el('div', 'row')
+    const on = el('button', 'primary', t('memCardOn'))
+    const later = el('button', '', t('memCardLater'))
+    on.type = later.type = 'button'
+    on.addEventListener('click', () => memSend({ op: 'memory_setting', auto: 'project', card_seen: true }))
+    later.addEventListener('click', () => memSend({ op: 'memory_setting', card_seen: true }))
+    acts.append(on, later)
+    card.appendChild(acts)
+  }
+
+  const o = d.overview
+  memSection(list, t('memPending'), o.pending, 'pending')
+  memSection(list, `${t('memProject')}${d.cwd ? ' · ' + baseName(d.cwd) : ''}`, o.project, 'active')
+  memSection(list, t('memUser'), o.user, 'active')
+  memSection(list, t('memRecent'), o.recent_auto, 'readonly', true)
+  memSection(list, t('memOthers'), o.others, 'others', true)
+  memSection(list, t('memDeleted'), o.deleted, 'deleted', true)
+  if (!list.childNodes.length) list.appendChild(el('div', 'muted', t('memEmpty')))
 }
 
 showConn()

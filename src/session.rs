@@ -11,7 +11,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::claude::process::{ClaudeProcess, ProcEvent, SpawnOpts};
 use crate::claude::protocol::{self, CanUseTool, Event, Image, IMAGE_TYPES, MAX_IMAGE_BYTES};
+use crate::extract::TurnEnd;
 use crate::index::Index;
+use crate::memory::{recall_block, MemoryStore};
 use crate::mcp::McpGate;
 use crate::random_hex;
 use std::sync::Arc;
@@ -62,6 +64,7 @@ enum Cmd {
     Interrupt { reply: oneshot::Sender<Result<(), String>> },
     Stop,
     Kill,
+    UserTexts { after: u64, reply: oneshot::Sender<Vec<(u64, String)>> },
     Subscribe { after: u64, reply: oneshot::Sender<(Vec<Envelope>, broadcast::Receiver<Envelope>)> },
     Info { reply: oneshot::Sender<Info> },
 }
@@ -96,6 +99,11 @@ impl SessionHandle {
         let _ = self.tx.send(Cmd::Stop);
     }
 
+    /// What the person wrote after sequence number `after`, for auto-save.
+    pub async fn user_texts(&self, after: u64) -> Option<Vec<(u64, String)>> {
+        ask(&self.tx, |reply| Cmd::UserTexts { after, reply }).await
+    }
+
     /// SIGKILL to the process group now (the host is exiting).
     pub fn kill(&self) {
         let _ = self.tx.send(Cmd::Kill);
@@ -118,6 +126,9 @@ pub struct Setup {
     pub log: Vec<Envelope>,
     pub index: Option<Arc<Index>>,
     pub mcp: Option<Arc<McpGate>>,
+    pub memory: Option<Arc<MemoryStore>>,
+    /// Told when a turn ends well, so auto-save can read what the person wrote.
+    pub turns: Option<mpsc::UnboundedSender<TurnEnd>>,
 }
 
 fn now_ms() -> u64 {
@@ -141,7 +152,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, index: setup.index, mcp: setup.mcp, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, index: setup.index, mcp: setup.mcp, memory: setup.memory, turns: setup.turns, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -154,6 +165,8 @@ struct Actor {
     log: Vec<Envelope>,
     index: Option<Arc<Index>>,
     mcp: Option<Arc<McpGate>>,
+    memory: Option<Arc<MemoryStore>>,
+    turns: Option<mpsc::UnboundedSender<TurnEnd>>,
     seq: u64,
     bcast: broadcast::Sender<Envelope>,
     state: State,
@@ -204,6 +217,24 @@ impl Actor {
     /// For what only matters while it happens (streaming text pieces): sent to whoever is attached, never kept, never numbered.
     fn emit_transient(&self, kind: &str, data: Value) {
         let _ = self.bcast.send(Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, ts: now_ms(), kind: kind.to_owned(), data });
+    }
+
+    fn recall_path(&self) -> PathBuf {
+        self.dir.join("run").join(format!("{}.mem.txt", self.meta.sid))
+    }
+
+    /// The notes this chat starts with, written to a 0600 file for `--append-system-prompt-file` (never into argv).
+    /// It is rebuilt at every start, so a resumed chat gets the notes as they are now.
+    fn write_recall(&mut self) -> Option<PathBuf> {
+        let store = self.memory.clone()?;
+        let notes = store.recall(&self.meta.cwd.to_string_lossy());
+        let block = recall_block(&notes)?;
+        let path = self.recall_path();
+        crate::private::create_dir(path.parent()?).ok()?;
+        crate::private::write(&path, &block).ok()?;
+        let ids: Vec<i64> = notes.iter().map(|n| n.id).collect();
+        self.emit("memory_used", json!({"ids": ids, "bytes": block.len()}));
+        Some(path)
     }
 
     /// A session read back from disk has no process: whatever the log left open (a waiting permission, a running turn) is over.
@@ -289,6 +320,10 @@ impl Actor {
                     process.kill_now();
                 }
             }
+            Cmd::UserTexts { after, reply } => {
+                let texts = self.log.iter().filter(|e| e.kind == "user" && e.seq > after).filter_map(|e| e.data["text"].as_str().map(|t| (e.seq, t.to_owned()))).collect();
+                let _ = reply.send(texts);
+            }
             Cmd::Subscribe { after, reply } => {
                 let missed: Vec<Envelope> = self.log.iter().filter(|e| e.seq > after).cloned().collect();
                 let _ = reply.send((missed, self.bcast.subscribe()));
@@ -331,7 +366,8 @@ impl Actor {
                 },
                 None => None,
             };
-            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model: self.meta.model.clone(), resume: self.meta.claude_session_id.clone(), mcp_config };
+            let system_file = self.write_recall();
+            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model: self.meta.model.clone(), resume: self.meta.claude_session_id.clone(), mcp_config, system_file };
             match ClaudeProcess::spawn(&opts) {
                 Ok((process, rx)) => {
                     self.process = Some(process);
@@ -368,8 +404,14 @@ impl Actor {
             return Err("unknown or already answered".into());
         };
         // Only the one read-only tool of this app, only on a person's click, and Claude Code decides how long it holds (this process).
-        let rules = (allow && remember && ask.tool_name == crate::index::OWN_TOOL)
+        let rules = (allow && remember && crate::mcp::is_read_only(&ask.tool_name))
             .then(|| json!([{"type": "addRules", "rules": [{"toolName": ask.tool_name}], "behavior": "allow", "destination": "session"}]));
+        // A person allowed this exact note: the save that follows with the same input may be active at once (see mcp_host).
+        if allow && ask.tool_name == crate::mcp::full_name(crate::mcp::MEMORY_SAVE) {
+            if let Some(gate) = &self.mcp {
+                gate.add_ticket(&self.meta.sid, &ask.input.to_string());
+            }
+        }
         let line = if allow { protocol::allow(request_id, &ask.input, rules) } else { protocol::deny(request_id, message.as_deref().unwrap_or("The user declined this.")) };
         let sent = self.process.as_ref().map(|p| p.send_line(line)).unwrap_or(false);
         self.emit("permission_resolved", json!({"request_id": request_id, "outcome": if allow { "allowed" } else { "denied" }}));
@@ -394,10 +436,15 @@ impl Actor {
                 self.pending.insert(ask.request_id.clone(), ask);
                 self.emit("permission", data);
             }
-            ProcEvent::Line(Event::Result { raw, .. }) => {
+            ProcEvent::Line(Event::Result { raw, subtype, .. }) => {
                 self.cancel_pending();
                 self.emit("claude", raw);
                 self.set_state(State::Idle);
+                if subtype == "success" {
+                    if let Some(turns) = &self.turns {
+                        let _ = turns.send(TurnEnd { sid: self.meta.sid.clone(), cwd: self.meta.cwd.to_string_lossy().into_owned() });
+                    }
+                }
             }
             ProcEvent::Line(Event::ControlResponse { raw, .. }) => self.emit("claude", raw),
             ProcEvent::Line(Event::Raw(raw)) => match raw["type"].as_str() {
@@ -423,6 +470,7 @@ impl Actor {
                 if let Some(gate) = &self.mcp {
                     gate.revoke(&self.meta.sid);
                 }
+                let _ = std::fs::remove_file(self.recall_path());
                 self.process = None;
                 self.set_state(State::Exited { code });
             }

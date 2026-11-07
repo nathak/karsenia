@@ -73,6 +73,33 @@ export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=~/.cache/swb-tools/bin/cc CC
   Calls go through Claude Code's normal permission flow, so the dialog asks; **"Allow this tool in this chat"** (shown for this tool only)
   adds a session allow rule that Claude Code applies until that process ends. The host never approves on its own.
 
+## Memory (step 2 of the Hermes-like features)
+
+Short notes the app keeps between chats, in `<data>/memory.sqlite` (`0600`; unlike the history index this is primary data and is never
+rebuilt: a file that cannot be read is renamed `.broken` and you are told). A note is at most 300 characters, either about a
+**project folder** or about **you**, and has a source: you, Claude (through a tool you approved), or auto-save.
+
+- **Checks every save goes through**: size, caps (200 notes / 32 KB per project, 100 / 16 KB for you, 50 waiting; a full store refuses,
+  nothing is evicted), a secret filter (keys, tokens, passwords, long mixed strings: refused, never redacted; a manual note can be
+  kept after a confirmation), duplicates (the same words, and for automatic sources near-duplicates), and an order-like check
+  (`always`, `run`, `curl`, a link, a shell operator, `항상`, `앞으로`, ...): such a note from Claude or auto-save waits for a click and is
+  not given to chats until you approve it.
+- **The Memory tab** (sidebar): waiting notes (approve / reject), this project's notes, notes about you, recent auto-saves with a link
+  back to the message they came from, other projects, deleted notes (undo for 7 days), add / edit / pin / delete, export as JSON.
+- **Claude's tools** (`mcp__swb_app__...`): `memory_search` (read-only, this project and your notes) and `memory_save` (at most five a
+  minute). A save is **active only if you allowed that exact input in the permission dialog**; otherwise, and always for a note about you,
+  it is saved as waiting. "Allow this tool in this chat" is offered for the read-only tools only, never for `memory_save`.
+- **Recall**: a new (or resumed) chat is started with `--append-system-prompt-file` naming a `0600` file with up to 20 notes / 2 KB
+  (pinned first, then yours, then the project's; waiting and order-like notes left out; `<` in a note is neutralised), framed as
+  background facts and not instructions. The notes are never in argv. The chat shows how many notes Claude was given.
+- **Auto-save** (off by default; the switch is in the Memory tab, `settings.json`): after a turn ends well, and 20 seconds of quiet (or
+  three turns), a separate small `claude` run (`haiku`, `--tools ""`, no MCP, no slash commands, no settings, no session, an empty
+  folder, 60 s limit) reads **only your own messages since the last run** (not Claude's text, not tool results, nothing over 2000
+  characters, nothing with a code fence or a secret) and proposes at most three notes as strict JSON; an answer that does not parse is
+  discarded whole. The host then applies the checks above, and the setting decides which scopes may be saved (this project only, or
+  also about you). One run at a time, 40 runs a day, about $0.0005 each. A saved note appears at once with an Undo toast; progress is
+  kept per chat, so a restart never reads old messages again.
+
 ## Security
 
 Local only: binds `127.0.0.1`; every request needs the right `Host` (DNS rebinding gets 421); a WebSocket needs the exact
@@ -82,7 +109,7 @@ The app can run commands through Claude Code, so treat its address like a termin
 tool results) is `0700` and its files `0600`. The MCP socket and its per-chat config files are `0600` too. Streaming text pieces are shown but never stored; a session read back after a
 crash has its open requests cancelled. On Ctrl-C or SIGTERM the host kills every `claude` process group.
 
-Known limits: the project scope is a guarantee of this tool only (a tool that can read files, such as Read or Bash through Claude Code's own permission flow, can read the data folder, and a secret read that way ends with its process); a local program that forges the `Origin` header can open a socket and make the host buffer up to 40 MB before the
+Known limits: auto-save and a note you approved are trusted as your words: a message you paste from elsewhere can still say something you did not mean, so read the Memory tab now and then; the order-like check is a pattern list, not a judge; the project scope is a guarantee of this tool only (a tool that can read files, such as Read or Bash through Claude Code's own permission flow, can read the data folder, and a secret read that way ends with its process); a local program that forges the `Origin` header can open a socket and make the host buffer up to 40 MB before the
 token is checked; a link swapped into the project folder between the path check and the read is not defended against
 (an attacker who can write there can already do more); the event log and its base64 images are held in memory per session.
 
@@ -93,7 +120,7 @@ cargo test                       # protocol, process, session, server (a fake cl
 cargo clippy --all-targets -- -D warnings
 node --test tests/ui.test.mjs    # the UI's pure helpers
 PLAYWRIGHT=/path/to/playwright/index.mjs tests/smoke/run.sh   # headless-Chromium run of the UI against the fake
-SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude, two tests (costs a few cents)
+SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude, three tests (costs a few cents)
 ```
 
 `fake-claude` replays a scenario file: lines are printed as they are, or are directives (`{"$wait":"user"|"control_response"|"interrupt"}`,
@@ -102,7 +129,7 @@ SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude,
 ## Layout
 
 `src/claude/` everything specific to the CLI (protocol, process) · `src/session.rs` one chat's task (state, pending permissions, log) ·
-`src/index.rs` the FTS5 index · `src/mcp.rs` the stdio MCP server and the per-chat secrets · `src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files + the MCP socket · `ui/` plain ES modules, `ui/vendor/` marked and DOMPurify (pinned, licenses included).
+`src/index.rs` the FTS5 index · `src/memory.rs` the notes, their checks and the recall block · `src/extract.rs` auto-save · `src/settings.rs` · `src/mcp.rs` the stdio MCP server and the per-chat secrets · `src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files + the MCP socket · `ui/` plain ES modules, `ui/vendor/` marked and DOMPurify (pinned, licenses included).
 
 ## Verified against Claude Code 2.1.316
 
@@ -113,4 +140,4 @@ host, the IDE connection protocol, and Windows/macOS.
 
 ## Next
 
-Memory (SQLite, saved only with a click) · skill proposals with an approval screen · a scheduler with a fixed tool list for unattended runs · per-chat model provider (`ANTHROPIC_BASE_URL`) and a container launcher · a Telegram gateway · Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages) · file tree and editor · PTY terminal.
+Skill proposals with an approval screen · a scheduler with a fixed tool list for unattended runs · per-chat model provider (`ANTHROPIC_BASE_URL`) and a container launcher · a Telegram gateway · Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages) · file tree and editor · PTY terminal.

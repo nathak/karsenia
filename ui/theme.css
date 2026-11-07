@@ -34,6 +34,26 @@ input[type=text], select, textarea { background: var(--card); border: 1px solid 
 #new-form { display: flex; flex-direction: column; gap: 8px; }
 #new-form label span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 #search { background: var(--card); }
+.pane { display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1; }
+.side-tabs { display: flex; gap: 4px; }
+.side-tabs button { flex: 1; border-radius: 8px; }
+.side-tabs button.on { background: var(--card); border-color: var(--accent); }
+.badge { background: var(--accent); color: var(--accent-text); border-radius: 99px; font-size: 11px; padding: 0 6px; }
+.note-card { border: 1px solid var(--accent); background: var(--card); border-radius: 8px; padding: 8px 10px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+.mem-auto span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+#mem-add { flex-wrap: wrap; } #mem-add input { flex: 1; min-width: 0; } #mem-add select { width: auto; }
+.mem-list { overflow: auto; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.mem-list h4 { margin: 8px 0 2px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.mem { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 6px 8px; font-size: 13px; overflow-wrap: anywhere; }
+.mem .meta { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 3px; align-items: center; }
+.mem .tag { border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; }
+.mem .tag.warn { color: var(--danger); border-color: var(--danger); }
+.mem .acts { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+.mem .acts button { padding: 1px 8px; font-size: 12px; }
+.mem input { width: 100%; }
+#toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 30; max-width: min(360px, 90vw); }
+.toast { background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 8px 12px; font-size: 13px; display: flex; gap: 10px; align-items: center; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+.toast button { padding: 1px 8px; }
 #results { overflow: auto; display: flex; flex-direction: column; gap: 4px; flex: 1; }
 .res { text-align: left; border: 1px solid transparent; background: transparent; padding: 7px 9px; border-radius: 8px; width: 100%; white-space: normal; }
 .res:hover { background: var(--card); border-color: var(--line); }

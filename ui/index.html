@@ -10,6 +10,11 @@
 <div id="app">
   <aside id="side">
     <div class="brand"><span>SmartWorkbench</span><button id="theme" class="icon" title="theme" aria-label="theme">◐</button></div>
+    <div class="side-tabs" role="tablist">
+      <button id="tab-chats" class="on" role="tab" type="button" data-i="tabChats"></button>
+      <button id="tab-memory" role="tab" type="button"><span data-i="tabMemory"></span> <span id="mem-badge" class="badge" hidden></span></button>
+    </div>
+    <div id="chats" class="pane">
     <button id="new-toggle" class="primary wide"></button>
     <form id="new-form" hidden>
       <label><span data-i="folder"></span><input id="new-cwd" type="text" spellcheck="false" autocomplete="off" placeholder="/home/you/project"></label>
@@ -21,6 +26,21 @@
     <input id="search" type="search" spellcheck="false" autocomplete="off" data-i-ph="searchPh" aria-label="search">
     <div id="results" role="list" hidden></div>
     <div id="sessions" role="list"></div>
+    </div>
+    <div id="memory" class="pane" hidden>
+      <div id="mem-notice" class="note-card" hidden></div>
+      <div id="mem-card" class="note-card" hidden></div>
+      <label class="mem-auto"><span data-i="memAuto"></span>
+        <select id="mem-auto"><option value="off" data-i="memAutoOff"></option><option value="project" data-i="memAutoProject"></option><option value="project_user" data-i="memAutoBoth"></option></select>
+      </label>
+      <form id="mem-add" class="row">
+        <select id="mem-scope"><option value="project" data-i="memScopeProject"></option><option value="user" data-i="memScopeUser"></option></select>
+        <input id="mem-text" type="text" maxlength="300" autocomplete="off" data-i-ph="memAddPh">
+        <button type="submit" class="primary" data-i="memAdd"></button>
+      </form>
+      <div id="mem-list" class="mem-list"></div>
+      <button id="mem-export" type="button" class="wide" data-i="memExport"></button>
+    </div>
     <div id="conn" class="muted"></div>
   </aside>
   <main id="main">
@@ -40,6 +60,7 @@
   </main>
 </div>
 <dialog id="perm"></dialog>
+<div id="toasts" aria-live="polite"></div>
 <dialog id="zoom"><img id="zoom-img" alt=""></dialog>
 <script type="module" src="/app.js"></script>
 </body>

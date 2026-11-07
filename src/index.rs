@@ -142,16 +142,16 @@ pub struct Hit {
 }
 
 #[derive(Debug, PartialEq)]
-struct Plan {
+pub(crate) struct Plan {
     /// Terms of three or more characters, each quoted for FTS5 (trigram) and joined by AND.
-    fts: Option<String>,
+    pub(crate) fts: Option<String>,
     /// Shorter terms (a two-letter Korean word): trigram cannot see them, so they are LIKE filters.
-    likes: Vec<String>,
+    pub(crate) likes: Vec<String>,
     /// Every term as typed (quotes removed), for marking the match in the text.
-    terms: Vec<String>,
+    pub(crate) terms: Vec<String>,
 }
 
-fn plan(q: &str) -> Option<Plan> {
+pub(crate) fn plan(q: &str) -> Option<Plan> {
     // Quote marks only separate words here: a quoted word is searched as the word.
     let cleaned: String = q.chars().map(|c| if c == '"' { ' ' } else { c }).filter(|c| !c.is_control()).take(200).collect();
     let words: Vec<&str> = cleaned.split_whitespace().take(8).collect();
@@ -164,7 +164,7 @@ fn plan(q: &str) -> Option<Plan> {
     Some(Plan { fts, likes: short.into_iter().map(str::to_owned).collect(), terms })
 }
 
-fn like_pattern(term: &str) -> String {
+pub(crate) fn like_pattern(term: &str) -> String {
     let escaped = term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
     format!("%{escaped}%")
 }

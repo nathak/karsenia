@@ -63,3 +63,12 @@ test('a jump goes to the nearest drawn message, at or before the wanted one firs
   assert.equal(nearestSeq([5, 9], 3), 5)
   assert.equal(nearestSeq([], 3), -1)
 })
+
+import { fmtBytes } from '../ui/util.js'
+
+test('sizes are shown in plain units', () => {
+  assert.equal(fmtBytes(512), '512 B')
+  assert.equal(fmtBytes(1536), '1.5 KB')
+  assert.equal(fmtBytes(-1), '')
+  assert.equal(fmtBytes(NaN), '')
+})

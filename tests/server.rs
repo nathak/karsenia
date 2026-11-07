@@ -38,7 +38,7 @@ async fn fixture() -> Fx {
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
     let project = root.join("project");
     std::fs::create_dir_all(&project).unwrap();
-    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: None }).await.unwrap();
+    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: None, extract: Default::default() }).await.unwrap();
 
     Fx { _dir: dir, server, project, log }
 }
@@ -181,4 +181,62 @@ async fn image_files_need_the_token_and_stay_inside_the_project() {
     assert_eq!(http.get(url("missing.png")).header("Authorization", &bearer).send().await.unwrap().status(), 404);
     let absolute = url(&outside.display().to_string().replace('/', "%2F"));
     assert_eq!(http.get(absolute).header("Authorization", &bearer).send().await.unwrap().status(), 404);
+}
+
+#[tokio::test]
+async fn the_memory_panel_adds_edits_approves_and_undoes_and_every_page_hears_of_it() {
+    let fx = fixture().await;
+    let mut ws = good(&fx).await;
+    until_kind(&mut ws, "hello").await;
+    let mut other = good(&fx).await;
+    until_kind(&mut other, "hello").await;
+    let cwd = fx.project.canonicalize().unwrap().to_string_lossy().into_owned();
+    let send = |v: Value| Message::Text(v.to_string());
+
+    ws.send(send(json!({"op": "memory_add", "text": "I use pnpm", "scope": "project", "cwd": cwd}))).await.unwrap();
+    let added = until_kind(&mut ws, "memory_result").await;
+    assert_eq!(added["data"]["ok"], true);
+    let id = added["data"]["saved"]["id"].as_i64().unwrap();
+    assert_eq!(until_kind(&mut other, "memory_changed").await["kind"], "memory_changed", "another page hears of the change");
+
+    ws.send(send(json!({"op": "memory_add", "text": "I use pnpm", "scope": "project", "cwd": cwd}))).await.unwrap();
+    assert_eq!(until_kind(&mut ws, "memory_result").await["data"]["ok"], false, "the same note twice");
+    ws.send(send(json!({"op": "memory_add", "text": "password: hunter2", "scope": "project", "cwd": cwd}))).await.unwrap();
+    let refused = until_kind(&mut ws, "memory_result").await;
+    assert_eq!(refused["data"]["needs_confirm"], true, "a secret-like note needs the person to confirm");
+    ws.send(send(json!({"op": "memory_add", "text": "password: hunter2", "scope": "project", "cwd": cwd, "confirm": true}))).await.unwrap();
+    assert_eq!(until_kind(&mut ws, "memory_result").await["data"]["ok"], true);
+    ws.send(send(json!({"op": "memory_add", "text": "no folder given", "scope": "project"}))).await.unwrap();
+    assert_eq!(until_kind(&mut ws, "memory_result").await["data"]["ok"], false);
+
+    ws.send(send(json!({"op": "memory_edit", "id": id, "text": "I use yarn"}))).await.unwrap();
+    assert_eq!(until_kind(&mut ws, "memory_result").await["data"]["ok"], true);
+    ws.send(send(json!({"op": "memory_pin", "id": id, "pinned": true}))).await.unwrap();
+    assert_eq!(until_kind(&mut ws, "memory_result").await["data"]["ok"], true);
+    ws.send(send(json!({"op": "memory_list", "cwd": cwd}))).await.unwrap();
+    let list = until_kind(&mut ws, "memory").await;
+    assert_eq!(list["data"]["overview"]["project"][0]["text"], "I use yarn");
+    assert_eq!(list["data"]["overview"]["project"][0]["pinned"], true);
+    assert_eq!(list["data"]["settings"]["memory_auto"], "off", "auto-save starts off");
+
+    ws.send(send(json!({"op": "memory_delete", "id": id}))).await.unwrap();
+    assert_eq!(until_kind(&mut ws, "memory_result").await["data"]["ok"], true);
+    ws.send(send(json!({"op": "memory_undo", "id": id}))).await.unwrap();
+    assert_eq!(until_kind(&mut ws, "memory_result").await["data"]["ok"], true);
+
+    ws.send(send(json!({"op": "memory_setting", "auto": "project"}))).await.unwrap();
+    until_kind(&mut ws, "memory_result").await;
+    ws.send(send(json!({"op": "memory_setting", "auto": "everything"}))).await.unwrap();
+    until_kind(&mut ws, "memory_result").await;
+    ws.send(send(json!({"op": "memory_list"}))).await.unwrap();
+    assert_eq!(until_kind(&mut ws, "memory").await["data"]["settings"]["memory_auto"], "project", "an unknown value changes nothing");
+
+    ws.send(send(json!({"op": "memory_export"}))).await.unwrap();
+    let export = until_kind(&mut ws, "memory_export").await;
+    assert!(export["data"]["notes"].as_array().unwrap().len() >= 2);
+    assert!(!ws_text_has_token(&export, &fx.server.token));
+}
+
+fn ws_text_has_token(value: &Value, token: &str) -> bool {
+    value.to_string().contains(token)
 }

@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod files;
 pub mod mcp_host;
+pub mod memory_ops;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -46,6 +47,8 @@ pub struct Config {
     pub bin: Option<String>,
     /// The program `claude` runs as the MCP server (`<exe> mcp`); None turns history search for Claude off.
     pub mcp_bin: Option<PathBuf>,
+    /// When auto-save reads (tests make the waits short).
+    pub extract: crate::extract::ExtractConfig,
 }
 
 pub struct Running {
@@ -66,7 +69,7 @@ pub async fn start(config: Config) -> anyhow::Result<Running> {
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], config.port))).await?;
     let addr = listener.local_addr()?;
     let token = random_hex(32);
-    let registry = Arc::new(Registry::open_with(config.data_dir, config.bin, config.mcp_bin)?);
+    let registry = Arc::new(Registry::open_full(config.data_dir, config.bin, config.mcp_bin, config.extract)?);
     if let Some(gate) = registry.gate() {
         match mcp_host::listen(&gate) {
             Ok(listener) => {
@@ -156,7 +159,7 @@ async fn ws_upgrade(State(state): State<AppState>, headers: HeaderMap, upgrade: 
     upgrade.max_message_size(MAX_WS_MESSAGE).max_frame_size(MAX_WS_MESSAGE).on_upgrade(move |socket| connection(socket, state))
 }
 
-fn plain(kind: &str, sid: Option<&str>, data: Value) -> String {
+pub(crate) fn plain(kind: &str, sid: Option<&str>, data: Value) -> String {
     json!({"v": 1, "kind": kind, "sid": sid, "data": data}).to_string()
 }
 
@@ -184,6 +187,24 @@ async fn connection(socket: WebSocket, state: AppState) {
         }
     });
 
+    // What every page should hear (a note changed, an auto-save happened) goes to this one too.
+    let mut heard = state.registry.events.subscribe();
+    let forward = {
+        let out = out_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                match heard.recv().await {
+                    Ok(value) => {
+                        if out.send(value.to_string()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+        })
+    };
     let mut attached: std::collections::HashMap<String, JoinHandle<()>> = std::collections::HashMap::new();
     let sessions = serde_json::to_value(state.registry.list().await).unwrap_or(Value::Null);
     let _ = out_tx.send(plain("hello", None, json!({"sessions": sessions})));
@@ -205,6 +226,7 @@ async fn connection(socket: WebSocket, state: AppState) {
     for (_, task) in attached {
         task.abort();
     }
+    forward.abort();
     writer.abort();
     // A closed page does not stop the sessions or answer what waits: permissions stay pending until a person answers.
 }
@@ -304,6 +326,7 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
             Some(handle) => handle.stop(),
             None => fail("no such session"),
         },
+        other if other.starts_with("memory_") => memory_ops::handle(state, other, op, out),
         _ => fail("unknown op"),
     }
 }

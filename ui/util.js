@@ -90,3 +90,10 @@ export function checkImage(file, already) {
   if (already >= MAX_IMAGES) return 'count'
   return ''
 }
+
+/** 1536 -> "1.5 KB" */
+export function fmtBytes(n) {
+  if (!Number.isFinite(n) || n < 0) return ''
+  if (n < 1024) return n + ' B'
+  return (n / 1024).toFixed(1) + ' KB'
+}

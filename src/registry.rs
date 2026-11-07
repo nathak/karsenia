@@ -4,8 +4,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::claude::process::{claude_bin, is_safe_cwd};
+use crate::extract::{ExtractConfig, TurnEnd, Worker};
 use crate::index::Index;
 use crate::mcp::McpGate;
+use crate::memory::MemoryStore;
+use crate::settings::SettingsStore;
 use crate::session::{self, Envelope, Info, Meta, SessionHandle, Setup};
 
 pub struct Registry {
@@ -13,7 +16,14 @@ pub struct Registry {
     bin: String,
     index: Option<Arc<Index>>,
     gate: Option<Arc<McpGate>>,
-    sessions: Mutex<HashMap<String, SessionHandle>>,
+    memory: Option<Arc<MemoryStore>>,
+    settings: Arc<SettingsStore>,
+    /// Messages every page should hear (a note changed, an auto-save happened): `{v, kind, data}`.
+    pub events: tokio::sync::broadcast::Sender<serde_json::Value>,
+    turns: Option<tokio::sync::mpsc::UnboundedSender<TurnEnd>>,
+    /// Set when the memory file could not be read and was set aside.
+    pub memory_notice: Option<String>,
+    sessions: Arc<Mutex<HashMap<String, SessionHandle>>>,
 }
 
 pub fn data_dir() -> PathBuf {
@@ -32,6 +42,11 @@ impl Registry {
 
     /// `mcp_exe` is the program `claude` runs as this app's MCP server (`<exe> mcp`); None leaves history search off.
     pub fn open_with(dir: PathBuf, bin: Option<String>, mcp_exe: Option<PathBuf>) -> anyhow::Result<Self> {
+        Self::open_full(dir, bin, mcp_exe, ExtractConfig::default())
+    }
+
+    /// As `open_with`, with the auto-save timing given (tests use short waits). Needs a running tokio runtime.
+    pub fn open_full(dir: PathBuf, bin: Option<String>, mcp_exe: Option<PathBuf>, extract: ExtractConfig) -> anyhow::Result<Self> {
         crate::private::create_dir(&dir)?;
         let index = match Index::open(&dir.join("index.sqlite")) {
             Ok(index) => Some(index),
@@ -50,7 +65,21 @@ impl Registry {
                 }
             }
         });
-        let registry = Self { dir: dir.clone(), bin: bin.unwrap_or_else(claude_bin), index, gate, sessions: Mutex::new(HashMap::new()) };
+        let (memory, memory_notice) = match MemoryStore::open(&dir.join("memory.sqlite")) {
+            Ok((store, notice)) => (Some(Arc::new(store)), notice),
+            Err(error) => {
+                tracing::warn!("memory is off: {error:#}");
+                (None, Some(format!("memory is off: {error:#}")))
+            }
+        };
+        let settings = Arc::new(SettingsStore::open(dir.join("settings.json")));
+        let (events, _) = tokio::sync::broadcast::channel(64);
+        let sessions: Arc<Mutex<HashMap<String, SessionHandle>>> = Arc::new(Mutex::new(HashMap::new()));
+        let bin = bin.unwrap_or_else(claude_bin);
+        let turns = memory.as_ref().map(|store| {
+            Worker { store: store.clone(), settings: settings.clone(), sessions: sessions.clone(), events: events.clone(), bin: bin.clone(), workdir: dir.join("extract"), config: extract }.spawn()
+        });
+        let registry = Self { dir: dir.clone(), bin, index, gate, memory, settings, events, turns, memory_notice, sessions };
         for entry in std::fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
@@ -65,7 +94,7 @@ impl Registry {
             if let Some(index) = &registry.index {
                 index.catch_up(sid, &meta.cwd.to_string_lossy(), meta.created, log.clone());
             }
-            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log, index: registry.index.clone(), mcp: registry.gate.clone() });
+            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log, index: registry.index.clone(), mcp: registry.gate.clone(), memory: registry.memory.clone(), turns: registry.turns.clone() });
             registry.sessions.lock().expect("registry lock").insert(sid.to_owned(), handle);
         }
         if let Some(index) = &registry.index {
@@ -89,7 +118,7 @@ impl Registry {
         let meta = session::new_meta(real, model);
         let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
         crate::private::write(&session::meta_path(&self.dir, &meta.sid), &text).map_err(|e| e.to_string())?;
-        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), index: self.index.clone(), mcp: self.gate.clone() });
+        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), index: self.index.clone(), mcp: self.gate.clone(), memory: self.memory.clone(), turns: self.turns.clone() });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok(handle)
     }
@@ -103,6 +132,14 @@ impl Registry {
 
     pub fn index(&self) -> Option<Arc<Index>> {
         self.index.clone()
+    }
+
+    pub fn memory(&self) -> Option<Arc<MemoryStore>> {
+        self.memory.clone()
+    }
+
+    pub fn settings(&self) -> Arc<SettingsStore> {
+        self.settings.clone()
     }
 
     pub fn gate(&self) -> Option<Arc<McpGate>> {

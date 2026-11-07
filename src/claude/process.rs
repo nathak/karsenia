@@ -26,6 +26,8 @@ pub struct SpawnOpts {
     pub resume: Option<String>,
     /// A file naming the MCP servers this chat gets (it holds a secret, so it is a file and not part of argv).
     pub mcp_config: Option<PathBuf>,
+    /// A file of notes appended to the system prompt (a file, so the notes are not in argv where any user can read them).
+    pub system_file: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -60,6 +62,9 @@ pub fn args(opts: &SpawnOpts) -> Vec<String> {
     }
     if let Some(config) = &opts.mcp_config {
         args.extend(["--mcp-config".to_owned(), config.display().to_string()]);
+    }
+    if let Some(file) = &opts.system_file {
+        args.extend(["--append-system-prompt-file".to_owned(), file.display().to_string()]);
     }
     args
 }
@@ -216,14 +221,15 @@ mod tests {
 
     #[test]
     fn the_arguments_include_the_permission_prompt_tool_and_resume() {
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()) };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()) };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
         assert!(a.windows(2).any(|w| w == ["--model", "haiku"]));
         assert!(a.windows(2).any(|w| w == ["--resume", "abc"]));
         assert!(a.windows(2).any(|w| w == ["--mcp-config", "/d/run/x.mcp.json"]));
-        let plain = args(&SpawnOpts { resume: None, model: None, mcp_config: None, ..opts });
-        assert!(!plain.iter().any(|x| x == "--resume" || x == "--model" || x == "--mcp-config"));
+        assert!(a.windows(2).any(|w| w == ["--append-system-prompt-file", "/d/run/x.mem.txt"]));
+        let plain = args(&SpawnOpts { resume: None, model: None, mcp_config: None, system_file: None, ..opts });
+        assert!(!plain.iter().any(|x| x == "--resume" || x == "--model" || x == "--mcp-config" || x == "--append-system-prompt-file"));
     }
 
     #[test]
