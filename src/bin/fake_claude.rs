@@ -18,6 +18,10 @@ fn log(path: &Option<String>, text: &str) {
     }
 }
 
+fn args_has(args: &[String], flag: &str) -> bool {
+    args.iter().any(|a| a == flag)
+}
+
 fn matches(line: &str, wanted: &str) -> bool {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { return false };
     let kind = v["type"].as_str().unwrap_or_default();
@@ -33,6 +37,23 @@ fn main() {
     let log_path = std::env::var("FAKE_LOG").ok();
     log(&log_path, &format!("ARGV {}", std::env::args().skip(1).collect::<Vec<_>>().join(" ")));
 
+    // A scheduled run (--max-turns with --output-format json): the prompt on stdin, one JSON result out.
+    //   FAKE_SCHED: a file holding the result line to print; FAKE_SCHED_SLEEP_MS: wait first; FAKE_SCHED_EXIT: exit with this code instead.
+    if args_has(&std::env::args().collect::<Vec<_>>(), "--max-turns") {
+        let mut prompt = String::new();
+        let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut prompt);
+        log(&log_path, &format!("SCHED_IN {}", prompt.replace('\n', "\\n")));
+        if let Some(ms) = std::env::var("FAKE_SCHED_SLEEP_MS").ok().and_then(|v| v.parse::<u64>().ok()) {
+            std::thread::sleep(Duration::from_millis(ms));
+        }
+        if let Some(code) = std::env::var("FAKE_SCHED_EXIT").ok().and_then(|v| v.parse::<i32>().ok()) {
+            std::process::exit(code);
+        }
+        let default = r#"{"type":"result","subtype":"success","is_error":false,"result":"fake report","total_cost_usd":0.01,"num_turns":2,"permission_denials":[]}"#;
+        let answer = std::env::var("FAKE_SCHED").ok().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_else(|| default.to_owned());
+        println!("{}", answer.trim());
+        return;
+    }
     // The auto-save extractor asks for one JSON answer (--output-format json) and writes its prompt on stdin, whole.
     let args: Vec<String> = std::env::args().collect();
     if args.windows(2).any(|w| w[0] == "--output-format" && w[1] == "json") {

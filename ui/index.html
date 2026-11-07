@@ -14,6 +14,7 @@
       <button id="tab-chats" class="on" role="tab" type="button" data-i="tabChats"></button>
       <button id="tab-memory" role="tab" type="button"><span data-i="tabMemory"></span> <span id="mem-badge" class="badge" hidden></span></button>
       <button id="tab-skills" role="tab" type="button"><span data-i="tabSkills"></span> <span id="sk-badge" class="badge" hidden></span></button>
+      <button id="tab-sched" role="tab" type="button"><span data-i="tabSched"></span> <span id="sc-badge" class="badge" hidden></span></button>
     </div>
     <div id="chats" class="pane">
     <button id="new-toggle" class="primary wide"></button>
@@ -56,6 +57,41 @@
       </form>
       <div id="sk-list" class="mem-list"></div>
     </div>
+    <div id="sched" class="pane" hidden>
+      <div id="sc-notice" class="note-card" hidden></div>
+      <label class="sk-auto"><input id="sc-on" type="checkbox"> <span data-i="scOn"></span></label>
+      <div class="muted" data-i="scOnNote"></div>
+      <button id="sc-new" type="button" class="primary wide" data-i="scNew"></button>
+      <form id="sc-form" class="note-card" hidden>
+        <label><span data-i="scName"></span><input id="sc-name" type="text" maxlength="80" autocomplete="off"></label>
+        <label><span data-i="scPrompt"></span><textarea id="sc-prompt" maxlength="4000" rows="4"></textarea></label>
+        <fieldset class="sc-profile">
+          <legend data-i="scProfile"></legend>
+          <label><input type="radio" name="sc-profile" value="folder" checked> <span data-i="scFiles"></span></label>
+          <label><input type="radio" name="sc-profile" value="web"> <span data-i="scWeb"></span></label>
+          <div class="muted" data-i="scProfileNote"></div>
+        </fieldset>
+        <label id="sc-cwd-row"><span data-i="scFolder"></span><input id="sc-cwd" type="text" spellcheck="false" autocomplete="off" placeholder="/home/you/project"></label>
+        <label><span data-i="scSchedule"></span>
+          <select id="sc-kind"><option value="daily" data-i="scDaily"></option><option value="every" data-i="scEvery"></option></select>
+        </label>
+        <div id="sc-daily">
+          <label><span data-i="scTime"></span><input id="sc-time" type="time" value="09:00"></label>
+          <div class="muted" data-i="scDays"></div>
+          <div id="sc-days" class="row"></div>
+        </div>
+        <label id="sc-every" hidden><span data-i="scMinutes"></span><input id="sc-min" type="number" min="15" max="44640" value="60"></label>
+        <details>
+          <summary data-i="scAdvanced"></summary>
+          <label><span data-i="scModel"></span><select id="sc-model"><option>sonnet</option><option>haiku</option><option>opus</option></select></label>
+          <label><span data-i="scTurns"></span><input id="sc-turns" type="number" min="1" max="50" value="20"></label>
+          <label><span data-i="scBudget"></span><input id="sc-budget" type="number" min="0.01" max="5" step="0.01" value="0.5"></label>
+          <label><span data-i="scTimeout"></span><input id="sc-timeout" type="number" min="30" max="1800" value="600"></label>
+        </details>
+        <div class="row"><button type="submit" class="primary" data-i="scSave"></button><button type="button" id="sc-cancel" data-i="scCancel"></button></div>
+      </form>
+      <div id="sc-list" class="mem-list"></div>
+    </div>
     <div id="conn" class="muted"></div>
   </aside>
   <main id="main">
@@ -76,6 +112,7 @@
 </div>
 <dialog id="perm"></dialog>
 <div id="toasts" aria-live="polite"></div>
+<dialog id="sc-run"><div id="sc-run-body"></div><div class="actions"><button id="sc-copy" type="button" data-i="scCopy"></button><button id="sc-run-close" type="button" class="primary" data-i="scClose"></button></div></dialog>
 <dialog id="zoom"><img id="zoom-img" alt=""></dialog>
 <script type="module" src="/app.js"></script>
 </body>

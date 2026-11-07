@@ -4,6 +4,7 @@ pub mod auth;
 pub mod files;
 pub mod mcp_host;
 pub mod memory_ops;
+pub mod sched_ops;
 pub mod skill_ops;
 
 use std::net::SocketAddr;
@@ -52,6 +53,7 @@ pub struct Config {
     pub extract: crate::extract::ExtractConfig,
     /// When automatic skill proposals happen.
     pub propose: crate::propose::ProposeConfig,
+    pub sched: crate::scheduler::SchedConfig,
 }
 
 pub struct Running {
@@ -72,7 +74,7 @@ pub async fn start(config: Config) -> anyhow::Result<Running> {
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], config.port))).await?;
     let addr = listener.local_addr()?;
     let token = random_hex(32);
-    let registry = Arc::new(Registry::open_full(config.data_dir, config.bin, config.mcp_bin, config.extract, config.propose)?);
+    let registry = Arc::new(Registry::open_full(config.data_dir, config.bin, config.mcp_bin, config.extract, config.propose, config.sched)?);
     if let Some(gate) = registry.gate() {
         match mcp_host::listen(&gate) {
             Ok(listener) => {
@@ -331,6 +333,7 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
         },
         other if other.starts_with("memory_") => memory_ops::handle(state, other, op, out),
         other if other.starts_with("skill_") => skill_ops::handle(state, other, op, out),
+        other if other.starts_with("sched_") => sched_ops::handle(state, other, op, out),
         _ => fail("unknown op"),
     }
 }

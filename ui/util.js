@@ -132,3 +132,22 @@ export function lineDiff(before, after) {
   while (j < b.length) out.push({ t: '+', text: b[j++] })
   return out
 }
+
+/** Minutes after midnight as "09:05". */
+export function fmtMinute(m) {
+  if (!Number.isInteger(m) || m < 0 || m >= 1440) return ''
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+}
+
+/** "09:05" (a time input's value) as minutes after midnight, or -1. */
+export function parseHHMM(text) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(text || '').trim())
+  if (!m) return -1
+  const h = Number(m[1])
+  const min = Number(m[2])
+  return h < 24 && min < 60 ? h * 60 + min : -1
+}
+
+/** A weekday mask (bit 0 Monday .. bit 6 Sunday) as seven booleans, and back. */
+export const maskToDays = mask => [0, 1, 2, 3, 4, 5, 6].map(i => (mask & (1 << i)) !== 0)
+export const daysToMask = days => days.reduce((mask, on, i) => (on ? mask | (1 << i) : mask), 0)

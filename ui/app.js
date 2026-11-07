@@ -1,6 +1,6 @@
 import { marked } from './vendor/marked.js'
 import DOMPurify from './vendor/purify.js'
-import { baseName, checkImage, fmtBytes, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, pathsInText, resultBlocks, skillMd, toolSummary } from './util.js'
+import { baseName, checkImage, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, pathsInText, resultBlocks, skillMd, toolSummary } from './util.js'
 
 // ---- text ----
 const TEXT = {
@@ -28,6 +28,16 @@ const TEXT = {
     skRollback: '이 버전으로', skBlocked: '고쳐야 할 문제', skWarn: '읽어야 할 경고', skAck: '경고를 모두 읽었고, 이 내용을 Claude가 따라도 괜찮습니다', skFull: 'SKILL.md 전문 (그대로 저장됩니다)', skDiff: '현재 버전과 비교',
     skLastUsed: '마지막 사용', skNever: '아직 쓰이지 않음', skProposed: '스킬 제안이 도착했습니다', skImproveTag: '개선', skDisabledTag: '꺼짐', skSaveApprove: '저장하고 승인', skName: '이름', skDescription: '설명 (한 줄)', skBody: '본문',
     skVersion: '버전', skGiven: 'Claude에게 스킬을 전달했습니다', skEditedReport: '수정한 최종 내용의 검사 결과',
+    tabSched: '예약', scOn: '예약 실행 켜기 (앱이 켜져 있는 동안만 실행됩니다)', scOnNote: '끄면 정해진 시각이 와도 실행하지 않습니다. 켤 때 그동안 지나간 시각은 실행하지 않습니다. 이미 실행 중인 것은 멈추지 않으니 \'중단\'을 누르세요. \'지금 실행\'은 이 스위치와 상관없이 실행됩니다.',
+    scNew: '＋ 새 예약', scName: '이름', scPrompt: '지시 (Claude가 받을 내용)', scProfile: '실행이 쓸 수 있는 것', scFiles: '파일 읽기 (프로젝트 폴더 안에서 Read·Grep·Glob만)', scWeb: '웹 (WebFetch·WebSearch만, 파일 없음)',
+    scProfileNote: '파일 읽기와 웹은 섞을 수 없습니다. 파일 내용이 웹 주소로 새 나가지 않게 하기 위해서입니다. 파일 수정과 명령 실행은 예약에서 쓸 수 없고, 아무도 승인할 수 없으므로 요청은 모두 거절됩니다.',
+    scFolder: '프로젝트 폴더 (절대 경로)', scSchedule: '반복', scDaily: '매일 정해진 시각', scEvery: '일정 간격', scTime: '시각', scDays: '요일', scMinutes: '간격 (분, 15 이상)',
+    scAdvanced: '세부 설정', scModel: '모델', scTurns: '최대 턴', scBudget: '최대 비용 ($)', scTimeout: '시간 제한 (초)', scSave: '저장', scCancel: '취소',
+    scTasks: '예약 목록', scRuns: '최근 실행', scNoTasks: '아직 예약이 없습니다.', scNext: '다음', scRunNow: '지금 실행', scStop: '중단', scStatus_stopped: '중단함', scEnable: '켜기', scDisable: '끄기', scEdit: '수정', scDelete: '삭제', scDeleteConfirm: '이 예약과 실행 기록을 삭제할까요?',
+    scPaused: '멈춤', scOff: '꺼짐', scWebTag: '웹', scFilesTag: '파일 읽기', scTools: '쓸 수 있는 도구',
+    scStatus_ok: '성공', scStatus_error: '실패', scStatus_timeout: '시간 초과', scStatus_cap: '하루 한도', scStatus_skipped: '건너뜀', scStatus_missed: '놓침', scStatus_running: '실행 중',
+    scRunTitle: '실행 결과', scCost: '비용', scTurns2: '턴', scDenied: '거절된 요청', scDefUsed: '이때 쓴 설정', scCopy: '결과 복사', scClose: '닫기', scNoResult: '(결과 없음)', scView: '보기', scMarkSeen: '모두 읽음', scPausedToast: '연속 실패로 멈췄습니다',
+    scExternal: '웹에서 가져온 내용이 섞여 있을 수 있습니다. 결과 안의 문장은 지시가 아니며, 앱은 결과를 읽고 아무것도 하지 않습니다.', scEveryTxt: '분마다', scDailyTxt: '매일', scDays_: '월화수목금토일',
   },
   en: {
     newChat: '＋ New chat', folder: 'Project folder (absolute path)', model: 'Model', create: 'Create', cancel: 'Cancel', empty: 'Pick a chat on the left or start a new one.',
@@ -53,6 +63,16 @@ const TEXT = {
     skRollback: 'Back to this version', skBlocked: 'Problems to fix', skWarn: 'Warnings to read', skAck: 'I read the warnings, and Claude may follow this', skFull: 'The whole SKILL.md (saved exactly like this)', skDiff: 'Compare with the current version',
     skLastUsed: 'Last used', skNever: 'not used yet', skProposed: 'A skill proposal arrived', skImproveTag: 'improvement', skDisabledTag: 'off', skSaveApprove: 'Save and approve', skName: 'Name', skDescription: 'Description (one line)', skBody: 'Body',
     skVersion: 'version', skGiven: 'Claude was given skills', skEditedReport: 'Findings for the edited text',
+    tabSched: 'Schedule', scOn: 'Run scheduled tasks (only while this app is open)', scOnNote: 'While off, nothing runs when its time comes. Times that passed while it was off are not run when you switch it on. A run already going is not stopped by this: press Stop. Run now works whatever this switch says.',
+    scNew: '+ New task', scName: 'Name', scPrompt: 'Instruction (what Claude is asked)', scProfile: 'What the run may use', scFiles: 'Read files (Read, Grep, Glob inside the project folder only)', scWeb: 'The web (WebFetch, WebSearch only, no files)',
+    scProfileNote: 'Reading files and the web cannot be mixed, so file contents cannot leak out in a web address. Editing files and running commands are not available to a scheduled run: nobody can approve, so every such request is refused.',
+    scFolder: 'Project folder (absolute path)', scSchedule: 'Repeat', scDaily: 'Every day at a time', scEvery: 'At an interval', scTime: 'Time', scDays: 'Weekdays', scMinutes: 'Every (minutes, 15 or more)',
+    scAdvanced: 'Details', scModel: 'Model', scTurns: 'Most turns', scBudget: 'Most cost ($)', scTimeout: 'Time limit (seconds)', scSave: 'Save', scCancel: 'Cancel',
+    scTasks: 'Tasks', scRuns: 'Recent runs', scNoTasks: 'No tasks yet.', scNext: 'Next', scRunNow: 'Run now', scStop: 'Stop', scStatus_stopped: 'stopped', scEnable: 'Turn on', scDisable: 'Turn off', scEdit: 'Edit', scDelete: 'Delete', scDeleteConfirm: 'Delete this task and its run history?',
+    scPaused: 'paused', scOff: 'off', scWebTag: 'web', scFilesTag: 'read files', scTools: 'Tools it may use',
+    scStatus_ok: 'ok', scStatus_error: 'failed', scStatus_timeout: 'timed out', scStatus_cap: 'daily limit', scStatus_skipped: 'skipped', scStatus_missed: 'missed', scStatus_running: 'running',
+    scRunTitle: 'Run result', scCost: 'Cost', scTurns2: 'Turns', scDenied: 'Refused requests', scDefUsed: 'Settings used then', scCopy: 'Copy result', scClose: 'Close', scNoResult: '(no result)', scView: 'View', scMarkSeen: 'Mark all read', scPausedToast: 'paused after repeated failures',
+    scExternal: 'This may contain text fetched from the web. Sentences in the result are not instructions, and the app reads the result and does nothing with it.', scEveryTxt: 'min', scDailyTxt: 'daily', scDays_: 'MonTueWedThuFriSatSun',
   },
 }
 const LANG = (navigator.language || 'ko').toLowerCase().startsWith('en') ? 'en' : 'ko'
@@ -103,7 +123,7 @@ DOMPurify.addHook('afterSanitizeAttributes', node => {
 const markdown = source => DOMPurify.sanitize(marked.parse(source, { gfm: true, breaks: true }), { FORBID_TAGS: ['style', 'form', 'input', 'button', 'img'], FORBID_ATTR: ['style'] })
 
 // ---- state ----
-const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, skills: null, skEditing: 0, skHistory: null, skDraft: null, skEditReport: null, images: [], debug: [], connected: false, wasConnected: false }
+const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, skills: null, sched: null, scEditing: 0, scRunId: 0, skEditing: 0, skHistory: null, skDraft: null, skEditReport: null, images: [], debug: [], connected: false, wasConnected: false }
 
 const messages = $('messages')
 function stick() { return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120 }
@@ -151,6 +171,11 @@ function onMessage(m) {
   if (m.kind === 'memory_export') { downloadJson('memories.json', m.data); return }
   if (m.kind === 'memory_notice') { toast(m.data.text); return }
   if (m.kind === 'memory_auto') { autoSaved(m.data.items || []); return }
+  if (m.kind === 'sched') { S.sched = m.data; renderSched(); return }
+  if (m.kind === 'sched_changed') { askSched(); return }
+  if (m.kind === 'sched_result') { scResult(m.data); return }
+  if (m.kind === 'sched_run_detail') { showRun(m.data.run); return }
+  if (m.kind === 'sched_run') { scAnnounce(m.data); return }
   if (m.kind === 'skills') { S.skills = m.data; renderSkills(); return }
   if (m.kind === 'skills_changed') { S.skHistory = null; askSkills(); return }
   if (m.kind === 'skill_result') { skResult(m.data); return }
@@ -162,6 +187,7 @@ function onMessage(m) {
     renderSessions()
     askMemory()
     askSkills()
+    askSched()
     if (S.cur && S.wasConnected) { S.replaying = true; wsSend({ op: 'attach', sid: S.cur, after_seq: S.lastSeq }) }
     S.wasConnected = true
     return
@@ -630,15 +656,19 @@ function showSide(name) {
   $('chats').hidden = name !== 'chats'
   $('memory').hidden = name !== 'memory'
   $('skills').hidden = name !== 'skills'
+  $('sched').hidden = name !== 'sched'
+  $('tab-sched').classList.toggle('on', name === 'sched')
   $('tab-chats').classList.toggle('on', name === 'chats')
   $('tab-memory').classList.toggle('on', name === 'memory')
   $('tab-skills').classList.toggle('on', name === 'skills')
   if (name === 'memory') askMemory()
   if (name === 'skills') askSkills()
+  if (name === 'sched') askSched()
 }
 $('tab-chats').addEventListener('click', () => showSide('chats'))
 $('tab-memory').addEventListener('click', () => showSide('memory'))
 $('tab-skills').addEventListener('click', () => showSide('skills'))
+$('tab-sched').addEventListener('click', () => showSide('sched'))
 
 function toast(text, action, ms = 10000) {
   const box = el('div', 'toast')
@@ -1004,6 +1034,183 @@ function renderSkills() {
     return row
   }, true)
 }
+
+// ---- schedule: tasks are made and changed here by a person only; a run is shown, never acted on ----
+function askSched() { wsSend({ op: 'sched_list' }) }
+function scSend(op) {
+  S.memRid += 1
+  S.memOps.set(S.memRid, op)
+  wsSend({ ...op, rid: S.memRid })
+}
+function scResult(d) {
+  const last = S.memOps.get(d.rid)
+  S.memOps.delete(d.rid)
+  if (!d.ok) { if (d.error) toast(d.error); return }
+  if (last && last.op === 'sched_save') { S.scEditing = 0; renderSched() }
+}
+function scStatus(status) { return t('scStatus_' + status) }
+function scAnnounce(d) {
+  if (d.status === 'cap') return
+  toast(`${d.name}: ${scStatus(d.status)}${d.paused ? ` (${t('scPausedToast')})` : ''}`, d.run_id ? { label: t('scView'), run: () => wsSend({ op: 'sched_run', id: d.run_id }) } : undefined)
+}
+function scSummary(task) {
+  if (task.kind === 'every') return `${task.every_min}${t('scEveryTxt')}`
+  const names = t('scDays_').match(LANG === 'ko' ? /./gu : /.{3}/g) || []
+  const days = maskToDays(task.weekdays)
+  const shown = days.every(Boolean) ? t('scDailyTxt') : days.map((on, i) => (on ? names[i] : '')).filter(Boolean).join('')
+  return `${shown} ${fmtMinute(task.minute_of_day)}`
+}
+function scWhen(ms) { return ms ? new Date(ms).toLocaleString() : '' }
+
+// The weekday boxes are drawn once.
+{
+  const names = t('scDays_').match(LANG === 'ko' ? /./gu : /.{3}/g) || []
+  for (let i = 0; i < 7; i++) {
+    const label = el('label')
+    const box = el('input')
+    box.type = 'checkbox'
+    box.dataset.day = String(i)
+    box.checked = i < 5
+    label.append(box, ' ', names[i])
+    $('sc-days').appendChild(label)
+  }
+}
+function scFormKind() {
+  const every = $('sc-kind').value === 'every'
+  $('sc-every').hidden = !every
+  $('sc-daily').hidden = every
+}
+function scFormProfile() {
+  const web = document.querySelector('input[name="sc-profile"]:checked').value === 'web'
+  $('sc-cwd-row').hidden = web
+}
+$('sc-kind').addEventListener('change', scFormKind)
+for (const radio of document.querySelectorAll('input[name="sc-profile"]')) radio.addEventListener('change', scFormProfile)
+function scFill(task) {
+  $('sc-name').value = task ? task.name : ''
+  $('sc-prompt').value = task ? task.prompt : ''
+  for (const radio of document.querySelectorAll('input[name="sc-profile"]')) radio.checked = radio.value === (task ? task.profile : 'folder')
+  $('sc-cwd').value = task ? task.cwd : ''
+  $('sc-kind').value = task ? task.kind : 'daily'
+  $('sc-time').value = task && task.kind === 'daily' ? fmtMinute(task.minute_of_day) : '09:00'
+  const days = task ? maskToDays(task.weekdays) : [true, true, true, true, true, false, false]
+  for (const box of $('sc-days').querySelectorAll('input')) box.checked = days[Number(box.dataset.day)]
+  $('sc-min').value = task && task.kind === 'every' ? task.every_min : 60
+  $('sc-model').value = task ? task.model : 'sonnet'
+  $('sc-turns').value = task ? task.max_turns : 20
+  $('sc-budget').value = task ? task.budget_usd : 0.5
+  $('sc-timeout').value = task ? task.timeout_s : 600
+  scFormKind()
+  scFormProfile()
+}
+$('sc-new').addEventListener('click', () => { S.scEditing = -1; scFill(null); renderSched() })
+$('sc-cancel').addEventListener('click', () => { S.scEditing = 0; renderSched() })
+$('sc-on').addEventListener('change', () => scSend({ op: 'sched_switch', on: $('sc-on').checked }))
+$('sc-form').addEventListener('submit', event => {
+  event.preventDefault()
+  const profile = document.querySelector('input[name="sc-profile"]:checked').value
+  const days = [...$('sc-days').querySelectorAll('input')].map(b => b.checked)
+  scSend({
+    op: 'sched_save', id: S.scEditing > 0 ? S.scEditing : 0, name: $('sc-name').value.trim(), prompt: $('sc-prompt').value.trim(), profile,
+    cwd: profile === 'web' ? '' : $('sc-cwd').value.trim(), kind: $('sc-kind').value, minute_of_day: parseHHMM($('sc-time').value), weekdays: daysToMask(days),
+    every_min: Number($('sc-min').value), model: $('sc-model').value, max_turns: Number($('sc-turns').value), budget_usd: Number($('sc-budget').value), timeout_s: Number($('sc-timeout').value),
+  })
+})
+
+function scTask(task) {
+  const card = el('div', 'sk')
+  const head = el('div', 'head')
+  head.append(el('span', '', task.name), el('span', 'tag', task.profile === 'web' ? t('scWebTag') : t('scFilesTag')), el('span', 'tag', scSummary(task)))
+  if (!task.enabled) head.appendChild(el('span', 'tag warn', task.paused_reason ? t('scPaused') : t('scOff')))
+  card.appendChild(head)
+  if (task.paused_reason) card.appendChild(el('div', 'muted', task.paused_reason))
+  if (task.profile === 'folder') card.appendChild(el('div', 'muted', task.cwd))
+  card.appendChild(el('div', 'muted', `${t('scTools')}: ${task.tools}`))
+  if (task.enabled && task.next_due) card.appendChild(el('div', 'muted', `${t('scNext')}: ${scWhen(task.next_due)}`))
+  const acts = el('div', 'acts')
+  const button = (label, run) => { const b = el('button', '', label); b.type = 'button'; b.addEventListener('click', run); acts.appendChild(b) }
+  button(t('scRunNow'), () => scSend({ op: 'sched_run_now', id: task.id }))
+  if ((S.sched.running || []).includes(task.id)) button(t('scStop'), () => scSend({ op: 'sched_stop', id: task.id }))
+  button(task.enabled ? t('scDisable') : t('scEnable'), () => scSend({ op: 'sched_enable', id: task.id, on: !task.enabled }))
+  button(t('scEdit'), () => { S.scEditing = task.id; scFill(task); renderSched() })
+  button(t('scDelete'), () => { if (confirm(t('scDeleteConfirm'))) scSend({ op: 'sched_delete', id: task.id }) })
+  card.appendChild(acts)
+  return card
+}
+
+function scRunRow(run) {
+  const row = el('div', 'sc-run-row' + (run.seen ? '' : ' unseen'))
+  const good = run.status === 'ok'
+  const bad = run.status === 'error' || run.status === 'timeout'
+  row.append(el('span', 'tag' + (good ? ' good' : bad ? ' bad' : ''), scStatus(run.status)), el('span', '', run.task_name), el('span', 'when', scWhen(run.started || run.due)))
+  row.tabIndex = 0
+  row.addEventListener('click', () => wsSend({ op: 'sched_run', id: run.id }))
+  row.addEventListener('keydown', event => { if (event.key === 'Enter') wsSend({ op: 'sched_run', id: run.id }) })
+  return row
+}
+
+function renderSched() {
+  const d = S.sched
+  const list = $('sc-list')
+  list.replaceChildren()
+  if (!d) return
+  $('sc-notice').hidden = !d.notice
+  $('sc-notice').textContent = d.notice || ''
+  if (!d.available) return
+  $('sc-on').checked = Boolean(d.on)
+  $('sc-badge').hidden = !d.unseen
+  $('sc-badge').textContent = String(d.unseen)
+  $('sc-form').hidden = S.scEditing === 0
+  $('sc-new').hidden = S.scEditing !== 0
+  list.appendChild(el('h4', '', `${t('scTasks')} (${d.tasks.length})`))
+  if (!d.tasks.length) list.appendChild(el('div', 'muted', t('scNoTasks')))
+  for (const task of d.tasks) list.appendChild(scTask(task))
+  if (d.runs.length) {
+    const head = el('h4', '', `${t('scRuns')} (${d.runs.length}) `)
+    if (d.unseen) {
+      const all = el('button', '', t('scMarkSeen'))
+      all.type = 'button'
+      all.addEventListener('click', () => scSend({ op: 'sched_seen' }))
+      head.appendChild(all)
+    }
+    list.appendChild(head)
+    for (const run of d.runs.slice(0, 30)) list.appendChild(scRunRow(run))
+  }
+}
+
+function showRun(run) {
+  S.scRunId = run.id
+  const body = $('sc-run-body')
+  body.replaceChildren()
+  body.appendChild(el('h3', '', `${run.task_name} · ${scStatus(run.status)}`))
+  body.appendChild(el('div', 'muted', `${scWhen(run.started || run.due)} · ${t('scCost')} $${Number(run.cost).toFixed(3)} · ${t('scTurns2')} ${run.turns}`))
+  if (run.note) body.appendChild(el('div', 'muted', run.note))
+  if (run.def && run.def.profile === 'web') body.appendChild(el('div', 'warnline', t('scExternal')))
+  if (run.denied && run.denied.length) {
+    const details = el('details')
+    details.appendChild(el('summary', '', `${t('scDenied')} (${run.denied.length})`))
+    details.appendChild(el('pre', '', run.denied.join('\n')))
+    body.appendChild(details)
+  }
+  const result = el('div', 'md')
+  if (run.result) result.innerHTML = markdown(run.result)
+  else result.textContent = t('scNoResult')
+  // A link in a result is shown as text with its whole address, never clickable: a result is outside text, and a click could carry something out in the address.
+  for (const a of result.querySelectorAll('a')) a.replaceWith(document.createTextNode(`${a.textContent} (${a.getAttribute('href') || ''})`))
+  body.appendChild(result)
+  if (run.def) {
+    const details = el('details')
+    details.appendChild(el('summary', '', t('scDefUsed')))
+    details.appendChild(el('pre', '', JSON.stringify(run.def, null, 2)))
+    body.appendChild(details)
+  }
+  $('sc-run').showModal()
+}
+$('sc-run-close').addEventListener('click', () => $('sc-run').close())
+$('sc-copy').addEventListener('click', () => {
+  const text = $('sc-run-body').querySelector('.md')?.innerText || ''
+  navigator.clipboard?.writeText(text).catch(() => {})
+})
 
 showConn()
 connect()

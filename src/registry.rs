@@ -9,6 +9,9 @@ use crate::index::Index;
 use crate::mcp::McpGate;
 use crate::memory::MemoryStore;
 use crate::propose::{spawn_worker, ProposeConfig, ProposeCtx};
+use crate::sched_store::SchedStore;
+use crate::schedule::SystemClock;
+use crate::scheduler::{SchedConfig, Scheduler};
 use crate::skills::SkillStore;
 use crate::settings::SettingsStore;
 use crate::session::{self, Envelope, Info, Meta, SessionHandle, Setup};
@@ -30,6 +33,9 @@ pub struct Registry {
     pub skills_notice: Option<String>,
     /// Set when the memory file could not be read and was set aside.
     pub memory_notice: Option<String>,
+    /// Set when the schedule file could not be read and was set aside.
+    pub sched_notice: Option<String>,
+    sched: Option<(Arc<SchedStore>, Arc<Scheduler>)>,
     sessions: Arc<Mutex<HashMap<String, SessionHandle>>>,
 }
 
@@ -49,11 +55,11 @@ impl Registry {
 
     /// `mcp_exe` is the program `claude` runs as this app's MCP server (`<exe> mcp`); None leaves history search off.
     pub fn open_with(dir: PathBuf, bin: Option<String>, mcp_exe: Option<PathBuf>) -> anyhow::Result<Self> {
-        Self::open_full(dir, bin, mcp_exe, ExtractConfig::default(), ProposeConfig::default())
+        Self::open_full(dir, bin, mcp_exe, ExtractConfig::default(), ProposeConfig::default(), SchedConfig::default())
     }
 
     /// As `open_with`, with the auto-save timing given (tests use short waits). Needs a running tokio runtime.
-    pub fn open_full(dir: PathBuf, bin: Option<String>, mcp_exe: Option<PathBuf>, extract: ExtractConfig, propose: ProposeConfig) -> anyhow::Result<Self> {
+    pub fn open_full(dir: PathBuf, bin: Option<String>, mcp_exe: Option<PathBuf>, extract: ExtractConfig, propose: ProposeConfig, sched: SchedConfig) -> anyhow::Result<Self> {
         crate::private::create_dir(&dir)?;
         let index = match Index::open(&dir.join("index.sqlite")) {
             Ok(index) => Some(index),
@@ -106,7 +112,19 @@ impl Registry {
         };
         let propose_ctx = skills.as_ref().map(|store| Arc::new(ProposeCtx { store: store.clone(), settings: settings.clone(), sessions: sessions.clone(), events: events.clone(), bin: bin.clone(), workdir: dir.join("propose"), config: propose }));
         let skill_turns = propose_ctx.as_ref().map(|ctx| spawn_worker(ctx.clone()));
-        let registry = Self { dir: dir.clone(), bin, index, gate, memory, settings, events, turns, skills, propose_ctx, skill_turns, skills_notice, memory_notice, sessions };
+        let (sched, sched_notice) = match SchedStore::open(&dir.join("schedule.sqlite")) {
+            Ok((store, notice)) => {
+                let store = Arc::new(store);
+                let scheduler = Scheduler::new(store.clone(), settings.clone(), events.clone(), bin.clone(), dir.clone(), Arc::new(SystemClock), sched);
+                scheduler.spawn_loop();
+                (Some((store, scheduler)), notice)
+            }
+            Err(error) => {
+                tracing::warn!("scheduled tasks are off: {error:#}");
+                (None, Some(format!("scheduled tasks are off: {error:#}")))
+            }
+        };
+        let registry = Self { dir: dir.clone(), bin, index, gate, memory, settings, events, turns, skills, propose_ctx, skill_turns, skills_notice, memory_notice, sched_notice, sched, sessions };
         for entry in std::fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
@@ -155,6 +173,17 @@ impl Registry {
         for handle in self.sessions.lock().expect("registry lock").values() {
             handle.kill();
         }
+        if let Some((_, scheduler)) = &self.sched {
+            scheduler.kill_all();
+        }
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    pub fn sched(&self) -> Option<(Arc<SchedStore>, Arc<Scheduler>)> {
+        self.sched.clone()
     }
 
     pub fn index(&self) -> Option<Arc<Index>> {

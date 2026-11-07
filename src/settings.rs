@@ -43,6 +43,9 @@ pub struct Settings {
     pub skills_auto: bool,
     #[serde(default)]
     pub skills_auto_since: u64,
+    /// Scheduled tasks run only while this is on (off by default; the person switches it on in the Schedule tab).
+    #[serde(default)]
+    pub sched_on: bool,
 }
 
 pub struct SettingsStore {

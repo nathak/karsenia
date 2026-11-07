@@ -38,7 +38,7 @@ async fn fixture() -> Fx {
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
     let project = root.join("project");
     std::fs::create_dir_all(&project).unwrap();
-    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: None, extract: Default::default(), propose: Default::default() }).await.unwrap();
+    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: None, extract: Default::default(), propose: Default::default(), sched: Default::default() }).await.unwrap();
 
     Fx { _dir: dir, server, project, log }
 }

@@ -136,3 +136,19 @@ dialog .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top
 dialog .sugg { font-size: 13px; color: var(--muted); }
 #zoom { padding: 8px; max-width: 94vw; } #zoom img { max-width: 100%; max-height: 86vh; display: block; }
 @media (max-width: 760px) { #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } #side { max-height: 38vh; border-right: none; border-bottom: 1px solid var(--line); } }
+
+/* schedule tab */
+.sc-profile { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.sc-profile label { display: flex; gap: 6px; align-items: flex-start; }
+.sc-profile input { width: auto; margin-top: 3px; }
+#sc-days label { display: flex; gap: 2px; align-items: center; font-size: 12px; }
+#sc-days input { width: auto; }
+#sc-form label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+#sc-form label.inline { flex-direction: row; }
+.sc-run-row { cursor: pointer; font-size: 12px; display: flex; gap: 6px; align-items: baseline; border-bottom: 1px solid var(--line); padding: 3px 0; }
+.sc-run-row.unseen { font-weight: 700; }
+.sc-run-row .when { color: var(--muted); font-weight: 400; }
+.tag.bad { color: var(--danger); border-color: var(--danger); }
+.tag.good { color: var(--accent); border-color: var(--accent); }
+#sc-run-body .md { max-height: 50vh; overflow: auto; }
+#sc-run-body .warnline { border: 1px solid var(--danger); border-radius: 8px; padding: 6px 8px; font-size: 13px; margin: 6px 0; }

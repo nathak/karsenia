@@ -131,6 +131,48 @@ with broad Bash permission can write the data folder, and a skill planted there 
   process ends, so a skill turned off or deleted is simply not in the next chat, and a running chat is never changed. The chat shows which
   skills it was given, and the tab shows when each was last used.
 
+## Scheduled tasks (step 4 of the Hermes-like features)
+
+The Schedule tab holds tasks you write: an instruction, a folder or the web, and a time. While the app is open and the switch is on,
+the host looks at the wall clock every 30 seconds and runs what is due with one `claude -p`, **one run at a time**, with nobody to
+click a permission prompt. So a run is given nothing to be asked about:
+
+- **Two profiles that never mix.** *Files*: `Read`, `Grep`, `Glob` inside one project folder. *Web*: `WebFetch` and `WebSearch`
+  only, in an empty folder of the app's own. A run that could read files and also fetch could carry a file out in an address.
+  Writing, editing and running commands do not exist in a scheduled run (`--tools` names exactly the profile's tools; a
+  `--disallowedTools` list backs it up).
+- **No allow rule for the file tools.** `--allowedTools Read` would cover every path; without it Claude Code reads inside the
+  project folder and refuses a path outside it and a link that leads outside it (checked with the real `claude`, see the live
+  test). The refused requests are kept with the run. The web profile does have an allow rule, since nobody can answer for each address.
+- **Nothing of the project's own is loaded:** `--setting-sources ""` (so a hook in a project you do not trust cannot run
+  unattended, and your own user settings do not widen the run), `--strict-mcp-config` with no config, no plugins, no skills or
+  slash commands, no session saved, no `--resume`. This is a deliberate exception to "Claude Code's own settings decide first".
+- **Limits per run:** the model you chose, at most 50 turns, `--max-budget-usd` (default $0.50, at most $5), a time limit
+  (default 10 minutes, at most 30; the whole process group is killed). Per day: 20 runs including "run now" (counted on disk, so a
+  restart does not reset it). An interval is at least 15 minutes. Three failures in a row pause a task, and a change or a
+  switch-on starts it fresh. A folder inside the app's data folder, or one that holds it, is refused when the task is made and again when it runs.
+- **Time:** daily at a time of day on chosen weekdays, or every N minutes, in the machine's time zone (`localtime_r`/`mktime`; one run
+  on the day clocks go forward, one at the first of a repeated wall-clock time when they go back). Times that pass while the app is
+  off or the machine asleep are not run: one "missed" note is made (more than 10 minutes late) and the next time is counted from
+  now. A task still running when its next time comes is skipped; a run that waited 15 minutes behind another is skipped.
+- **Only you make tasks.** The only way to create or change one is the Schedule tab (`sched_*` on the WebSocket, which needs the
+  token); there is no MCP tool for it, so a chat, or anything Claude read, cannot schedule a run of its own. Switching the whole
+  thing on is yours too, and starts with every task's time counted from that moment.
+- **A result is only shown.** It is stored in `schedule.sqlite` (0600, 64 KB each, the last 50 runs of a task), shown with the
+  same Markdown sanitising as a chat (with a reminder that a web result may carry outside text), and carries the definition it ran
+  with. Nothing reads it and acts: it does not reach memory, skill proposals or the search index. A toast and an unread count tell you it finished.
+- **Web runs and the machine's own addresses.** A fetch goes out from your computer, so `localhost`, `127.0.0.1`, `[::1]`, `0.0.0.0` and the cloud
+  metadata addresses are refused by name (checked with the real `claude`). Other addresses of your network are **not** blocked, since the rule
+  matches names, not address ranges: give a web task only to pages you would open yourself. Links in a result are shown as text with their
+  whole address and cannot be clicked.
+- **What stays outside the app's control:** a managed (organisation) policy of Claude Code applies to a scheduled run whatever the flags
+  say. A project's own settings, hooks, allow rules and `CLAUDE.md` do not (live test with a hostile project folder), and the CLI's
+  auto-memory is switched off for the run.
+- **Stop:** each running task has a Stop button, which ends the run and everything it started and takes a waiting run out of the line; a stop is
+  not counted as a failure. "Run now" works whatever the switch says, because you pressed it.
+- **Switching off:** a run waiting in line that the clock queued is looked at again when its turn comes, and is skipped if the task or the whole scheduler was switched off meanwhile ("run now" is yours and still runs). A run already going is not stopped by switching off (press Stop); it ends by its own time limit. Task numbers are never reused, so a queued or running run cannot reach a task made later.
+- **Not a daemon:** nothing runs while the app is closed. A run that was going when the app ended is marked failed at the next start.
+
 ## Security
 
 Local only: binds `127.0.0.1`; every request needs the right `Host` (DNS rebinding gets 421); a WebSocket needs the exact
@@ -140,8 +182,8 @@ The app can run commands through Claude Code, so treat its address like a termin
 tool results) is `0700` and its files `0600`. The MCP socket and its per-chat config files are `0600` too. Streaming text pieces are shown but never stored; a session read back after a
 crash has its open requests cancelled. On Ctrl-C or SIGTERM the host kills every `claude` process group.
 
-Known limits: a skill's text is read by you, and the risk report is a pattern list, not a judge (a roundabout instruction passes it, so your reading is the last line of defence); a chat with Bash permission can write to the data folder, snapshots included; auto-save and a note you approved are trusted as your words: a message you paste from elsewhere can still say something you did not mean, so read the Memory tab now and then; the order-like check and the secret filter are pattern lists, not judges (a key split by spaces or lines is not caught); the project scope is a guarantee of this tool only (a tool that can read files, such as Read or Bash through Claude Code's own permission flow, can read the data folder, and a secret read that way ends with its process); a local program that forges the `Origin` header can open a socket and make the host buffer up to 40 MB before the
-token is checked; a link swapped into the project folder between the path check and the read is not defended against
+Known limits: a skill's text is read by you, and the risk report is a pattern list, not a judge (a roundabout instruction passes it, so your reading is the last line of defence); a chat with Bash permission can write to the data folder, snapshots included, and so could plant a scheduled task in `schedule.sqlite` (each run shows the definition it used; a task is limited to read-only tools or the web, whoever wrote it); auto-save and a note you approved are trusted as your words: a message you paste from elsewhere can still say something you did not mean, so read the Memory tab now and then; the order-like check and the secret filter are pattern lists, not judges (a key split by spaces or lines is not caught); the project scope is a guarantee of this tool only (a tool that can read files, such as Read or Bash through Claude Code's own permission flow, can read the data folder, and a secret read that way ends with its process); a local program that forges the `Origin` header can open a socket and make the host buffer up to 40 MB before the
+token is checked; a scheduled folder run reads whatever the project folder holds (a `.env` there can end up in a result, as in a chat), and a web result is outside text that only your reading screens; a link swapped into the project folder between the path check and the read is not defended against
 (an attacker who can write there can already do more); the event log and its base64 images are held in memory per session.
 
 ## Tests
@@ -151,7 +193,7 @@ cargo test                       # protocol, process, session, server (a fake cl
 cargo clippy --all-targets -- -D warnings
 node --test tests/ui.test.mjs    # the UI's pure helpers
 PLAYWRIGHT=/path/to/playwright/index.mjs tests/smoke/run.sh   # headless-Chromium run of the UI against the fake
-SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude, five tests (costs a few cents)
+SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude, seven tests (costs a few cents)
 ```
 
 `fake-claude` replays a scenario file: lines are printed as they are, or are directives (`{"$wait":"user"|"control_response"|"interrupt"}`,
@@ -160,7 +202,7 @@ SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude,
 ## Layout
 
 `src/claude/` everything specific to the CLI (protocol, process) · `src/session.rs` one chat's task (state, pending permissions, log) ·
-`src/index.rs` the FTS5 index · `src/memory.rs` the notes, their checks and the recall block · `src/extract.rs` auto-save · `src/settings.rs` · `src/skills.rs` skills, their risk report and the one-off folder · `src/propose.rs` proposals · `src/mcp.rs` the stdio MCP server and the per-chat secrets · `src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files + the MCP socket · `ui/` plain ES modules, `ui/vendor/` marked and DOMPurify (pinned, licenses included).
+`src/index.rs` the FTS5 index · `src/memory.rs` the notes, their checks and the recall block · `src/extract.rs` auto-save · `src/settings.rs` · `src/schedule.rs` times · `src/sched_store.rs` tasks and runs · `src/scheduler.rs` the clock loop and one run · `src/skills.rs` skills, their risk report and the one-off folder · `src/propose.rs` proposals · `src/mcp.rs` the stdio MCP server and the per-chat secrets · `src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files + the MCP socket · `ui/` plain ES modules, `ui/vendor/` marked and DOMPurify (pinned, licenses included).
 
 ## Verified against Claude Code 2.1.316
 
@@ -171,4 +213,4 @@ host, the IDE connection protocol, and Windows/macOS.
 
 ## Next
 
-A scheduler with a fixed tool list for unattended runs · per-chat model provider (`ANTHROPIC_BASE_URL`) and a container launcher · a Telegram gateway · Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages) · file tree and editor · PTY terminal.
+Per-chat model provider (`ANTHROPIC_BASE_URL`) and a container launcher · a Telegram gateway · Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages) · file tree and editor · PTY terminal.

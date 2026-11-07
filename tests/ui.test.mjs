@@ -92,3 +92,18 @@ test('a diff keeps what stays and marks what goes and what comes', () => {
   assert.deepEqual(lineDiff('', 'new').map(d => d.t), ['-', '+'])
   assert.equal(lineDiff('a\nb', 'a\nb\nc').filter(d => d.t === '+').length, 1)
 })
+
+import { daysToMask, fmtMinute, maskToDays, parseHHMM } from '../ui/util.js'
+
+test('a time of day and the weekdays go to the form and back unchanged', () => {
+  assert.equal(fmtMinute(545), '09:05')
+  assert.equal(fmtMinute(1440), '')
+  assert.equal(parseHHMM('9:05'), 545)
+  assert.equal(parseHHMM('23:59'), 1439)
+  assert.equal(parseHHMM('24:00'), -1)
+  assert.equal(parseHHMM(''), -1)
+  assert.equal(parseHHMM('09:5'), -1)
+  assert.equal(daysToMask(maskToDays(0b1010101)), 0b1010101)
+  assert.deepEqual(maskToDays(0b0000011), [true, true, false, false, false, false, false])
+  assert.equal(daysToMask([true, true, true, true, true, false, false]), 31)
+})

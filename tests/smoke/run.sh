@@ -16,7 +16,8 @@ open(work + '/project/shot.png', 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR
 PY
 cp "$here/scenario.jsonl" "$work/scenario.jsonl"
 cp "$here/propose-clean.json" "$work/propose.json"
-printf '#!/bin/sh\nFAKE_SCENARIO=%s/scenario.jsonl FAKE_PROPOSE=%s/propose.json exec %s/target/debug/fake-claude "$@"\n' "$work" "$work" "$root" > "$work/claude"
+cp "$here/sched-result.json" "$work/sched.json"
+printf '#!/bin/sh\nFAKE_SCENARIO=%s/scenario.jsonl FAKE_PROPOSE=%s/propose.json FAKE_SCHED=%s/sched.json exec %s/target/debug/fake-claude "$@"\n' "$work" "$work" "$work" "$root" > "$work/claude"
 chmod +x "$work/claude"
 cargo build --manifest-path "$root/Cargo.toml" >/dev/null
 SWB_UI_DIR="$root/ui" "$root/target/debug/smart-workbench-app" --port 4311 --data "$work/data" --claude "$work/claude" > "$work/server.out" &
