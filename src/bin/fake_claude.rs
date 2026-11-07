@@ -38,8 +38,15 @@ fn main() {
     if args.windows(2).any(|w| w[0] == "--output-format" && w[1] == "json") {
         let mut prompt = String::new();
         let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut prompt);
-        log(&log_path, &format!("EXTRACT_IN {}", prompt.replace('\n', "\\n")));
-        let answer = std::env::var("FAKE_EXTRACT").ok().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_else(|| r#"{"type":"result","subtype":"success","is_error":false,"result":"{}","structured_output":{"memories":[]}}"#.to_owned());
+        // A skill proposal asks for a schema with a "body"; auto-save asks for memories.
+        let propose = args.windows(2).any(|w| w[0] == "--json-schema" && w[1].contains("\"body\""));
+        let (tag, var, default) = if propose {
+            ("PROPOSE_IN", "FAKE_PROPOSE", r#"{"type":"result","subtype":"success","is_error":false,"result":"{}","structured_output":{"skip":true,"reason":"nothing"}}"#)
+        } else {
+            ("EXTRACT_IN", "FAKE_EXTRACT", r#"{"type":"result","subtype":"success","is_error":false,"result":"{}","structured_output":{"memories":[]}}"#)
+        };
+        log(&log_path, &format!("{tag} {}", prompt.replace('\n', "\\n")));
+        let answer = std::env::var(var).ok().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_else(|| default.to_owned());
         println!("{}", answer.trim());
         return;
     }

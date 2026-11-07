@@ -97,3 +97,38 @@ export function fmtBytes(n) {
   if (n < 1024) return n + ' B'
   return (n / 1024).toFixed(1) + ' KB'
 }
+
+/** The SKILL.md the host writes (the same text, so what a person reads is what is written). */
+export function skillMd(name, description, body) {
+  return `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n${String(body).replace(/\s+$/, '')}\n`
+}
+
+/** Lines of a text with their numbers and the worst risk level on each: [{ n, text, level }]. */
+export function numberedLines(text, risks, offset = 0) {
+  const level = new Map()
+  for (const r of risks || []) {
+    if (!r.line) continue
+    const at = r.line + offset
+    if (r.level === 'block' || !level.has(at)) level.set(at, r.level)
+  }
+  return String(text).split('\n').map((t, i) => ({ n: i + 1, text: t, level: level.get(i + 1) || '' }))
+}
+
+/** A line diff of two texts: [{ t: ' ' | '+' | '-', text }]. Texts are small (a skill is at most 200 lines). */
+export function lineDiff(before, after) {
+  const a = String(before).split('\n')
+  const b = String(after).split('\n')
+  const table = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0))
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1])
+  const out = []
+  let i = 0
+  let j = 0
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { out.push({ t: ' ', text: a[i] }); i++; j++ }
+    else if (table[i + 1][j] >= table[i][j + 1]) out.push({ t: '-', text: a[i++] })
+    else out.push({ t: '+', text: b[j++] })
+  }
+  while (i < a.length) out.push({ t: '-', text: a[i++] })
+  while (j < b.length) out.push({ t: '+', text: b[j++] })
+  return out
+}

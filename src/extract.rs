@@ -152,12 +152,25 @@ pub fn to_notes(candidates: Vec<Candidate>, auto: Auto, sid: &str, cwd: &str, se
         .collect()
 }
 
+/// What a one-off run is asked: the model, the JSON schema of its answer, its system prompt and its time limit.
+pub struct RunSpec<'a> {
+    pub model: &'a str,
+    pub schema: &'a str,
+    pub system: &'a str,
+    pub timeout: Duration,
+}
+
 /// One extraction run: a separate `claude` with nothing to act with, in an empty folder, with a time limit.
 pub async fn run_claude(bin: &str, workdir: &Path, prompt: &str) -> Result<Value> {
+    run_claude_with(bin, workdir, prompt, &RunSpec { model: "haiku", schema: SCHEMA, system: SYSTEM, timeout: RUN_TIMEOUT }).await
+}
+
+/// The same kind of run for other jobs (skill proposals): no tools, no MCP, no slash commands, no settings, no session.
+pub async fn run_claude_with(bin: &str, workdir: &Path, prompt: &str, spec: &RunSpec<'_>) -> Result<Value> {
     std::fs::create_dir_all(workdir)?;
     let mut command = Command::new(bin);
     command
-        .args(["-p", "--model", "haiku", "--output-format", "json", "--json-schema", SCHEMA, "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "", "--no-session-persistence", "--system-prompt", SYSTEM])
+        .args(["-p", "--model", spec.model, "--output-format", "json", "--json-schema", spec.schema, "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "", "--no-session-persistence", "--system-prompt", spec.system])
         .current_dir(workdir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -178,7 +191,7 @@ pub async fn run_claude(bin: &str, workdir: &Path, prompt: &str) -> Result<Value
         anyhow::ensure!(status.success(), "the extractor exited with {status}");
         Ok::<_, anyhow::Error>(bytes)
     };
-    match tokio::time::timeout(RUN_TIMEOUT, work).await {
+    match tokio::time::timeout(spec.timeout, work).await {
         Ok(bytes) => serde_json::from_slice(&bytes?).context("the extractor did not print JSON"),
         Err(_) => {
             if let Some(pid) = pid {

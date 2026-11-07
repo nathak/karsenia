@@ -35,7 +35,7 @@ async fn fixture(mcp: bool) -> Fx {
     std::fs::write(&wrapper, format!("#!/bin/sh\nFAKE_SCENARIO='{}' FAKE_LOG='{}' exec '{}' \"$@\"\n", root.join("scenario.jsonl").display(), log.display(), FAKE)).unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: mcp.then(|| PathBuf::from(APP)), extract: Default::default() }).await.unwrap();
+    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: mcp.then(|| PathBuf::from(APP)), extract: Default::default(), propose: Default::default() }).await.unwrap();
 
     Fx { _dir: dir, root, server, log }
 }

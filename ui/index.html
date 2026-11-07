@@ -13,6 +13,7 @@
     <div class="side-tabs" role="tablist">
       <button id="tab-chats" class="on" role="tab" type="button" data-i="tabChats"></button>
       <button id="tab-memory" role="tab" type="button"><span data-i="tabMemory"></span> <span id="mem-badge" class="badge" hidden></span></button>
+      <button id="tab-skills" role="tab" type="button"><span data-i="tabSkills"></span> <span id="sk-badge" class="badge" hidden></span></button>
     </div>
     <div id="chats" class="pane">
     <button id="new-toggle" class="primary wide"></button>
@@ -40,6 +41,20 @@
       </form>
       <div id="mem-list" class="mem-list"></div>
       <button id="mem-export" type="button" class="wide" data-i="memExport"></button>
+    </div>
+    <div id="skills" class="pane" hidden>
+      <div id="sk-notice" class="note-card" hidden></div>
+      <label class="sk-auto"><input id="sk-auto" type="checkbox"> <span data-i="skAuto"></span></label>
+      <form id="sk-propose" class="note-card">
+        <div class="row">
+          <select id="sk-scope"><option value="project" data-i="skScopeProject"></option><option value="user" data-i="skScopeUser"></option></select>
+          <select id="sk-target"></select>
+        </div>
+        <input id="sk-hint" type="text" maxlength="300" autocomplete="off" data-i-ph="skHint">
+        <button type="submit" class="primary" data-i="skPropose"></button>
+        <div class="muted" data-i="skNext"></div>
+      </form>
+      <div id="sk-list" class="mem-list"></div>
     </div>
     <div id="conn" class="muted"></div>
   </aside>

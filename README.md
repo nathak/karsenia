@@ -102,6 +102,34 @@ rebuilt: a file that cannot be read is renamed `.broken` and you are told). A no
   and the count is kept on disk), about $0.0005 each. A saved note appears at once with an Undo toast; progress is
   kept per chat, so a restart never reads old messages again.
 
+## Skills (step 3 of the Hermes-like features)
+
+A skill is a procedure Claude follows when it applies (`SKILL.md`). It is **instructions for Claude**, so the app never enables one by itself:
+a proposal always waits, you read the whole file, and only then it is approved.
+
+- **Proposals**: the **Skills** tab has "Propose a skill from this chat" (with an optional hint, a scope, and "improve skill X"), and an
+  optional **automatic** mode (off by default): after a turn that used 8 or more tools and ended well, 90 seconds of quiet, at most one per
+  chat and five a day (counted on disk), and **never** in a chat that used a web tool or an outside MCP tool (third-party text may have
+  shaped it). An automatic proposal only creates new skills, never changes one.
+- **What the proposer reads**: a separate `claude -p --model sonnet` run (no tools, no MCP, no slash commands, no settings, no session, an
+  empty folder, 120 s) reads **your own messages** and **one-line summaries of the tool calls that succeeded** (never tool results, never
+  Claude's own text, nothing with a secret), plus your hint, plus the names of existing skills (or, when improving, the current text). It
+  answers in strict JSON; anything else discards the run. About $0.03-0.06 a run.
+- **Checks the host does itself**, on the text as it will be written and again at every approval (the report is shown next to the full text):
+  *blocks* (Approve is not offered until fixed): a bad or reserved name, a description that is not one line without `---`/`<`/`>`, a body
+  that starts with `---`, a `` !`command` `` that would run when the skill loads, a secret, control, invisible or direction-changing
+  characters, a line over 1000 characters, a body over 7 KB or 200 lines. *Warnings* (you must tick "I read the warnings"): `curl | sh`,
+  `sudo`, `rm -rf`, `eval`, `$(...)`, `base64 -d`, ssh/scp/nc, URLs, "ignore the rules / without asking / silently", permission words
+  (`settings.json`, `allowed-tools`), credential paths, HTML or comments, long lines. Editing then approving goes through the same checks.
+- **What is written**: the host builds `SKILL.md` itself: the frontmatter holds `name` and `description` and **nothing else** (no
+  `allowed-tools`, hooks, model, context), whatever was proposed. Up to 30 skills, 20 waiting, the newest 5 versions kept.
+- **Improvements** are proposals against a skill (a diff against the active version is shown); approving makes a new version, a stale one is
+  refused, and rollback copies an old version forward, so the history only grows.
+- **How Claude gets them**: each chat is started with `--plugin-dir` naming a one-off folder (`0700`/`0600`, plugin name `swb`, so the
+  skills are `swb:<name>`) with the enabled skills of the user and of that project. It is rebuilt at every start and removed when the
+  process ends, so a skill turned off or deleted is simply not in the next chat, and a running chat is never changed. The chat shows which
+  skills it was given, and the tab shows when each was last used.
+
 ## Security
 
 Local only: binds `127.0.0.1`; every request needs the right `Host` (DNS rebinding gets 421); a WebSocket needs the exact
@@ -111,7 +139,7 @@ The app can run commands through Claude Code, so treat its address like a termin
 tool results) is `0700` and its files `0600`. The MCP socket and its per-chat config files are `0600` too. Streaming text pieces are shown but never stored; a session read back after a
 crash has its open requests cancelled. On Ctrl-C or SIGTERM the host kills every `claude` process group.
 
-Known limits: auto-save and a note you approved are trusted as your words: a message you paste from elsewhere can still say something you did not mean, so read the Memory tab now and then; the order-like check and the secret filter are pattern lists, not judges (a key split by spaces or lines is not caught); the project scope is a guarantee of this tool only (a tool that can read files, such as Read or Bash through Claude Code's own permission flow, can read the data folder, and a secret read that way ends with its process); a local program that forges the `Origin` header can open a socket and make the host buffer up to 40 MB before the
+Known limits: a skill's text is read by you, and the risk report is a pattern list, not a judge (a roundabout instruction passes it, so your reading is the last line of defence); a chat with Bash permission can write to the data folder, snapshots included; auto-save and a note you approved are trusted as your words: a message you paste from elsewhere can still say something you did not mean, so read the Memory tab now and then; the order-like check and the secret filter are pattern lists, not judges (a key split by spaces or lines is not caught); the project scope is a guarantee of this tool only (a tool that can read files, such as Read or Bash through Claude Code's own permission flow, can read the data folder, and a secret read that way ends with its process); a local program that forges the `Origin` header can open a socket and make the host buffer up to 40 MB before the
 token is checked; a link swapped into the project folder between the path check and the read is not defended against
 (an attacker who can write there can already do more); the event log and its base64 images are held in memory per session.
 
@@ -122,7 +150,7 @@ cargo test                       # protocol, process, session, server (a fake cl
 cargo clippy --all-targets -- -D warnings
 node --test tests/ui.test.mjs    # the UI's pure helpers
 PLAYWRIGHT=/path/to/playwright/index.mjs tests/smoke/run.sh   # headless-Chromium run of the UI against the fake
-SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude, three tests (costs a few cents)
+SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude, five tests (costs a few cents)
 ```
 
 `fake-claude` replays a scenario file: lines are printed as they are, or are directives (`{"$wait":"user"|"control_response"|"interrupt"}`,
@@ -131,7 +159,7 @@ SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude,
 ## Layout
 
 `src/claude/` everything specific to the CLI (protocol, process) · `src/session.rs` one chat's task (state, pending permissions, log) ·
-`src/index.rs` the FTS5 index · `src/memory.rs` the notes, their checks and the recall block · `src/extract.rs` auto-save · `src/settings.rs` · `src/mcp.rs` the stdio MCP server and the per-chat secrets · `src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files + the MCP socket · `ui/` plain ES modules, `ui/vendor/` marked and DOMPurify (pinned, licenses included).
+`src/index.rs` the FTS5 index · `src/memory.rs` the notes, their checks and the recall block · `src/extract.rs` auto-save · `src/settings.rs` · `src/skills.rs` skills, their risk report and the one-off folder · `src/propose.rs` proposals · `src/mcp.rs` the stdio MCP server and the per-chat secrets · `src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files + the MCP socket · `ui/` plain ES modules, `ui/vendor/` marked and DOMPurify (pinned, licenses included).
 
 ## Verified against Claude Code 2.1.316
 
@@ -142,4 +170,4 @@ host, the IDE connection protocol, and Windows/macOS.
 
 ## Next
 
-Skill proposals with an approval screen · a scheduler with a fixed tool list for unattended runs · per-chat model provider (`ANTHROPIC_BASE_URL`) and a container launcher · a Telegram gateway · Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages) · file tree and editor · PTY terminal.
+A scheduler with a fixed tool list for unattended runs · per-chat model provider (`ANTHROPIC_BASE_URL`) and a container launcher · a Telegram gateway · Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages) · file tree and editor · PTY terminal.

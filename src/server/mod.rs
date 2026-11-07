@@ -4,6 +4,7 @@ pub mod auth;
 pub mod files;
 pub mod mcp_host;
 pub mod memory_ops;
+pub mod skill_ops;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -49,6 +50,8 @@ pub struct Config {
     pub mcp_bin: Option<PathBuf>,
     /// When auto-save reads (tests make the waits short).
     pub extract: crate::extract::ExtractConfig,
+    /// When automatic skill proposals happen.
+    pub propose: crate::propose::ProposeConfig,
 }
 
 pub struct Running {
@@ -69,7 +72,7 @@ pub async fn start(config: Config) -> anyhow::Result<Running> {
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], config.port))).await?;
     let addr = listener.local_addr()?;
     let token = random_hex(32);
-    let registry = Arc::new(Registry::open_full(config.data_dir, config.bin, config.mcp_bin, config.extract)?);
+    let registry = Arc::new(Registry::open_full(config.data_dir, config.bin, config.mcp_bin, config.extract, config.propose)?);
     if let Some(gate) = registry.gate() {
         match mcp_host::listen(&gate) {
             Ok(listener) => {
@@ -327,6 +330,7 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
             None => fail("no such session"),
         },
         other if other.starts_with("memory_") => memory_ops::handle(state, other, op, out),
+        other if other.starts_with("skill_") => skill_ops::handle(state, other, op, out),
         _ => fail("unknown op"),
     }
 }

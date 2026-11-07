@@ -52,7 +52,7 @@ async fn fixture(scenario: &str, extract: &str, config: ExtractConfig) -> Fx {
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: Some(PathBuf::from(APP)), extract: config }).await.unwrap();
+    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: Some(PathBuf::from(APP)), extract: config, propose: Default::default() }).await.unwrap();
 
     Fx { _dir: dir, root, server, log }
 }

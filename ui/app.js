@@ -1,6 +1,6 @@
 import { marked } from './vendor/marked.js'
 import DOMPurify from './vendor/purify.js'
-import { baseName, checkImage, fmtBytes, fmtTurn, imagePaths, markParts, nearestSeq, pathsInText, resultBlocks, toolSummary } from './util.js'
+import { baseName, checkImage, fmtBytes, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, pathsInText, resultBlocks, skillMd, toolSummary } from './util.js'
 
 // ---- text ----
 const TEXT = {
@@ -22,6 +22,12 @@ const TEXT = {
     memSecretConfirm: '키나 비밀번호처럼 보입니다. 그래도 저장할까요?', memInstrConfirm: 'AI에게 내리는 명령처럼 보이는 메모입니다. 승인하면 이후 대화에서 사용됩니다. 승인할까요?',
     memCardText: '자동 저장을 켜면 앱이 내가 쓴 메시지에서 오래 기억할 사실과 선호를 골라 저장합니다. Claude의 답이나 도구 결과는 읽지 않고, 키·비밀번호처럼 보이는 것은 저장하지 않으며, 명령처럼 보이는 것은 승인을 기다립니다. 언제든 끄거나 삭제할 수 있습니다.',
     memCardOn: '이 프로젝트만 켜기', memCardLater: '나중에', memAutoSaved: '자동 저장', memNoChat: '프로젝트 메모는 대화를 연 뒤에 추가할 수 있습니다.', memEmpty: '아직 메모가 없습니다.', memUsed: 'Claude에게 메모를 전달했습니다',
+    tabSkills: '스킬', skAuto: '자동 제안 켜기: 도구를 8번 이상 쓴 긴 작업이 끝난 뒤, 하루 5번까지. 제안은 언제나 내 승인을 기다립니다.', skScopeProject: '이 프로젝트', skScopeUser: '모든 프로젝트', skNewSkill: '새 스킬', skImprove: '개선: ',
+    skHint: '무엇에 대한 스킬인가요? (선택)', skPropose: '이 대화로 스킬 제안', skNext: '새 스킬은 새 대화나 다시 시작한 대화부터 적용됩니다.', skStarted: '스킬 제안을 만드는 중입니다. 잠시 걸립니다.',
+    skPending: '승인 대기 제안', skActive: '사용 중인 스킬', skDeleted: '삭제됨 (7일 안에 되돌리기)', skApprove: '승인', skEditApprove: '수정 후 승인', skReject: '거절', skEnable: '켜기', skDisable: '끄기', skDelete: '삭제', skHistory: '이력',
+    skRollback: '이 버전으로', skBlocked: '고쳐야 할 문제', skWarn: '읽어야 할 경고', skAck: '경고를 모두 읽었고, 이 내용을 Claude가 따라도 괜찮습니다', skFull: 'SKILL.md 전문 (그대로 저장됩니다)', skDiff: '현재 버전과 비교',
+    skLastUsed: '마지막 사용', skNever: '아직 쓰이지 않음', skProposed: '스킬 제안이 도착했습니다', skImproveTag: '개선', skDisabledTag: '꺼짐', skSaveApprove: '저장하고 승인', skName: '이름', skDescription: '설명 (한 줄)', skBody: '본문',
+    skVersion: '버전', skGiven: 'Claude에게 스킬을 전달했습니다',
   },
   en: {
     newChat: '＋ New chat', folder: 'Project folder (absolute path)', model: 'Model', create: 'Create', cancel: 'Cancel', empty: 'Pick a chat on the left or start a new one.',
@@ -41,6 +47,12 @@ const TEXT = {
     memSecretConfirm: 'This looks like a key or a password. Save it anyway?', memInstrConfirm: 'This note reads like an order to the AI. If you approve it, later chats will use it. Approve?',
     memCardText: 'With auto-save on, the app picks lasting facts and preferences out of the messages you write. It does not read Claude\'s answers or tool results, never saves what looks like a key or a password, and holds anything that reads like an order for your approval. You can turn it off or delete notes any time.',
     memCardOn: 'Turn on for this project', memCardLater: 'Later', memAutoSaved: 'Auto-saved', memNoChat: 'Open a chat first: a project note belongs to its folder.', memEmpty: 'No notes yet.', memUsed: 'Claude was given notes',
+    tabSkills: 'Skills', skAuto: 'Automatic proposals: after a long task that used 8 or more tools, up to 5 a day. A proposal always waits for your approval.', skScopeProject: 'This project', skScopeUser: 'All projects', skNewSkill: 'New skill', skImprove: 'Improve: ',
+    skHint: 'What is the skill about? (optional)', skPropose: 'Propose a skill from this chat', skNext: 'A new skill applies from a new or restarted chat.', skStarted: 'Making a skill proposal. It takes a moment.',
+    skPending: 'Proposals waiting', skActive: 'Skills in use', skDeleted: 'Deleted (undo within 7 days)', skApprove: 'Approve', skEditApprove: 'Edit, then approve', skReject: 'Reject', skEnable: 'Turn on', skDisable: 'Turn off', skDelete: 'Delete', skHistory: 'History',
+    skRollback: 'Back to this version', skBlocked: 'Problems to fix', skWarn: 'Warnings to read', skAck: 'I read the warnings, and Claude may follow this', skFull: 'The whole SKILL.md (saved exactly like this)', skDiff: 'Compare with the current version',
+    skLastUsed: 'Last used', skNever: 'not used yet', skProposed: 'A skill proposal arrived', skImproveTag: 'improvement', skDisabledTag: 'off', skSaveApprove: 'Save and approve', skName: 'Name', skDescription: 'Description (one line)', skBody: 'Body',
+    skVersion: 'version', skGiven: 'Claude was given skills',
   },
 }
 const LANG = (navigator.language || 'ko').toLowerCase().startsWith('en') ? 'en' : 'ko'
@@ -91,7 +103,7 @@ DOMPurify.addHook('afterSanitizeAttributes', node => {
 const markdown = source => DOMPurify.sanitize(marked.parse(source, { gfm: true, breaks: true }), { FORBID_TAGS: ['style', 'form', 'input', 'button', 'img'], FORBID_ATTR: ['style'] })
 
 // ---- state ----
-const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, images: [], debug: [], connected: false, wasConnected: false }
+const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, skills: null, skEditing: 0, skHistory: null, images: [], debug: [], connected: false, wasConnected: false }
 
 const messages = $('messages')
 function stick() { return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120 }
@@ -139,10 +151,17 @@ function onMessage(m) {
   if (m.kind === 'memory_export') { downloadJson('memories.json', m.data); return }
   if (m.kind === 'memory_notice') { toast(m.data.text); return }
   if (m.kind === 'memory_auto') { autoSaved(m.data.items || []); return }
+  if (m.kind === 'skills') { S.skills = m.data; renderSkills(); return }
+  if (m.kind === 'skills_changed') { askSkills(); return }
+  if (m.kind === 'skill_result') { skResult(m.data); return }
+  if (m.kind === 'skill_versions') { S.skHistory = m.data; renderSkills(); return }
+  if (m.kind === 'skill_notice') { toast(m.data.text); return }
+  if (m.kind === 'skill_proposed') { toast(`${t('skProposed')}: ${m.data.name}`, { label: t('tabSkills'), run: () => showSide('skills') }); askSkills(); return }
   if (m.kind === 'hello') {
     S.sessions = m.data.sessions || []
     renderSessions()
     askMemory()
+    askSkills()
     if (S.cur && S.wasConnected) { S.replaying = true; wsSend({ op: 'attach', sid: S.cur, after_seq: S.lastSeq }) }
     S.wasConnected = true
     return
@@ -233,6 +252,7 @@ function handle(m) {
     case 'permission_resolved': S.pending.delete(d.request_id); showPerm(); if (!S.replaying) addNote(t(d.outcome)); return
     case 'state': return setState(d.state)
     case 'memory_used': return addNote(`${t('memUsed')}: ${d.ids.length} (${fmtBytes(d.bytes)})`)
+    case 'skills_given': return addNote(`${t('skGiven')}: ${d.names.join(', ')}`)
     case 'stderr': debugLog(d.text); return addNote(String(d.text).trim().slice(-300), true)
     case 'error': return addNote(d.message, true)
     default: debugLog(JSON.stringify(m).slice(0, 300))
@@ -609,12 +629,16 @@ function showSide(name) {
   S.side = name
   $('chats').hidden = name !== 'chats'
   $('memory').hidden = name !== 'memory'
+  $('skills').hidden = name !== 'skills'
   $('tab-chats').classList.toggle('on', name === 'chats')
   $('tab-memory').classList.toggle('on', name === 'memory')
+  $('tab-skills').classList.toggle('on', name === 'skills')
   if (name === 'memory') askMemory()
+  if (name === 'skills') askSkills()
 }
 $('tab-chats').addEventListener('click', () => showSide('chats'))
 $('tab-memory').addEventListener('click', () => showSide('memory'))
+$('tab-skills').addEventListener('click', () => showSide('skills'))
 
 function toast(text, action, ms = 10000) {
   const box = el('div', 'toast')
@@ -773,6 +797,192 @@ function renderMemory() {
   memSection(list, t('memOthers'), o.others, 'others', true)
   memSection(list, t('memDeleted'), o.deleted, 'deleted', true)
   if (!list.childNodes.length) list.appendChild(el('div', 'muted', t('memEmpty')))
+}
+
+// ---- skills: a proposal is read in full and approved by a person; nothing is enabled by itself ----
+function askSkills() { wsSend({ op: 'skill_list' }) }
+function skSend(op, tag) {
+  S.memRid += 1
+  S.memOps.set(S.memRid, tag ? { op: tag } : op)
+  wsSend({ ...op, rid: S.memRid })
+}
+
+function skResult(d) {
+  const last = S.memOps.get(d.rid)
+  S.memOps.delete(d.rid)
+  if (!d.ok) { if (d.error) toast(d.error); return }
+  if (last && last.op === 'skill_propose') toast(t('skStarted'))
+  if (last && last.op === 'skill_delete' && d.undo) toast(t('skDeleted').split(' (')[0], { label: t('memUndo'), run: () => skSend({ op: 'skill_undo', id: d.undo }) })
+  S.skEditing = 0
+}
+
+$('sk-auto').addEventListener('change', () => skSend({ op: 'skill_setting', auto: $('sk-auto').checked }))
+$('sk-propose').addEventListener('submit', event => {
+  event.preventDefault()
+  if (!S.cur) return toast(t('noSession'))
+  skSend({ op: 'skill_propose', sid: S.cur, hint: $('sk-hint').value.trim(), target: $('sk-target').value, scope: $('sk-scope').value })
+})
+
+function skLines(parent, lines) {
+  for (const line of lines) {
+    const row = el('div', 'line')
+    if (line.level) row.dataset.level = line.level
+    row.append(el('span', 'n', String(line.n)), el('span', '', line.text))
+    parent.appendChild(row)
+  }
+}
+
+function skRisks(p) {
+  const wrap = el('div')
+  const blocks = p.risks.filter(r => r.level === 'block')
+  const warns = p.risks.filter(r => r.level === 'warn')
+  for (const [title, list] of [[t('skBlocked'), blocks], [t('skWarn'), warns]]) {
+    if (!list.length) continue
+    wrap.appendChild(el('div', 'muted', `${title} (${list.length})`))
+    const ul = el('ul', 'risks')
+    for (const r of list) ul.appendChild(el('li', r.level, `${r.line ? r.line + ': ' : ''}${r.code} - ${r.excerpt}`))
+    wrap.appendChild(ul)
+  }
+  return { node: wrap, blocked: blocks.length > 0, warned: warns.length > 0 }
+}
+
+function skProposal(p) {
+  const card = el('div', 'sk')
+  const head = el('div', 'head')
+  head.append(el('span', '', p.name), el('span', 'tag', p.scope === 'user' ? t('skScopeUser') : t('skScopeProject')))
+  if (p.target) head.appendChild(el('span', 'tag', t('skImproveTag')))
+  if (p.sid && S.sessions.some(x => x.sid === p.sid)) {
+    const go = el('button', '', '↗')
+    go.type = 'button'
+    go.addEventListener('click', () => openFromNote({ sid: p.sid, seq: p.seq }))
+    head.appendChild(go)
+  }
+  card.appendChild(head)
+  const { node, blocked, warned } = skRisks(p)
+  card.appendChild(node)
+  // The whole file as it will be written, as plain text with line numbers (never rendered, so nothing can hide).
+  card.appendChild(el('div', 'muted', t('skFull')))
+  const pre = el('div', 'skmd')
+  skLines(pre, numberedLines(skillMd(p.name, p.description, p.body), p.risks, 5))
+  card.appendChild(pre)
+  if (p.current) {
+    const diff = el('details')
+    diff.appendChild(el('summary', '', `${t('skDiff')} (v${p.current.version})`))
+    const box = el('div', 'skdiff')
+    for (const d of lineDiff(p.current.body, p.body)) {
+      const row = el('div', 'line ' + (d.t === '+' ? 'add' : d.t === '-' ? 'del' : ''))
+      row.append(el('span', 'n', d.t === ' ' ? '' : d.t), el('span', '', d.text))
+      box.appendChild(row)
+    }
+    diff.appendChild(box)
+    card.appendChild(diff)
+  }
+  const acts = el('div', 'acts')
+  const ack = el('input')
+  ack.type = 'checkbox'
+  const approve = el('button', 'primary', t('skApprove'))
+  approve.type = 'button'
+  const refresh = () => { approve.disabled = blocked || (warned && !ack.checked) }
+  if (warned) {
+    const label = el('label', 'muted')
+    label.append(ack, document.createTextNode(' ' + t('skAck')))
+    card.appendChild(label)
+    ack.addEventListener('change', refresh)
+  }
+  refresh()
+  approve.addEventListener('click', () => skSend({ op: 'skill_approve', id: p.id, ack_risk: ack.checked }))
+  const edit = el('button', '', t('skEditApprove'))
+  const reject = el('button', '', t('skReject'))
+  edit.type = reject.type = 'button'
+  edit.addEventListener('click', () => { S.skEditing = p.id; renderSkills() })
+  reject.addEventListener('click', () => skSend({ op: 'skill_reject', id: p.id }))
+  acts.append(approve, edit, reject)
+  card.appendChild(acts)
+
+  if (S.skEditing === p.id) {
+    const form = el('div', 'sk')
+    const name = el('input')
+    name.type = 'text'
+    name.value = p.name
+    name.disabled = Boolean(p.target)
+    const description = el('textarea')
+    description.value = p.description
+    const body = el('textarea')
+    body.value = p.body
+    body.style.minHeight = '160px'
+    const save = el('button', 'primary', t('skSaveApprove'))
+    save.type = 'button'
+    save.addEventListener('click', () => skSend({ op: 'skill_approve', id: p.id, ack_risk: ack.checked, edit: { name: name.value, description: description.value.replace(/\s+/g, ' ').trim(), body: body.value } }))
+    form.append(el('div', 'muted', t('skName')), name, el('div', 'muted', t('skDescription')), description, el('div', 'muted', t('skBody')), body, save)
+    card.appendChild(form)
+  }
+  return card
+}
+
+function skActive(skill) {
+  const card = el('div', 'sk')
+  const head = el('div', 'head')
+  head.append(el('span', '', skill.name), el('span', 'tag', skill.scope === 'user' ? t('skScopeUser') : t('skScopeProject')), el('span', 'tag', `${t('skVersion')} ${skill.version}`))
+  if (skill.status === 'disabled') head.appendChild(el('span', 'tag warn', t('skDisabledTag')))
+  card.appendChild(head)
+  card.appendChild(el('div', 'muted', skill.description))
+  card.appendChild(el('div', 'muted', `${t('skLastUsed')}: ${skill.last_used ? new Date(skill.last_used).toLocaleString() : t('skNever')}`))
+  const acts = el('div', 'acts')
+  const button = (label, run) => { const b = el('button', '', label); b.type = 'button'; b.addEventListener('click', run); acts.appendChild(b) }
+  button(skill.status === 'disabled' ? t('skEnable') : t('skDisable'), () => skSend({ op: 'skill_enable', id: skill.id, on: skill.status === 'disabled' }))
+  button(t('skHistory'), () => wsSend({ op: 'skill_versions', id: skill.id }))
+  button(t('skDelete'), () => skSend({ op: 'skill_delete', id: skill.id }))
+  card.appendChild(acts)
+  if (S.skHistory && S.skHistory.id === skill.id) {
+    for (const v of S.skHistory.versions) {
+      const row = el('div', 'muted', `${t('skVersion')} ${v.n} · ${v.source} · ${new Date(v.created).toLocaleString()}`)
+      if (v.n !== skill.version) {
+        const back = el('button', '', t('skRollback'))
+        back.type = 'button'
+        back.addEventListener('click', () => skSend({ op: 'skill_rollback', id: skill.id, n: v.n }))
+        row.append(' ', back)
+      }
+      card.appendChild(row)
+    }
+  }
+  return card
+}
+
+function renderSkills() {
+  const d = S.skills
+  const list = $('sk-list')
+  list.replaceChildren()
+  const notice = $('sk-notice')
+  if (!d) return
+  notice.hidden = !d.notice
+  notice.textContent = d.notice || ''
+  if (!d.available) return
+  const o = d.overview
+  $('sk-badge').hidden = !o.proposals.length
+  $('sk-badge').textContent = String(o.proposals.length)
+  $('sk-auto').checked = Boolean(d.auto)
+  const target = $('sk-target')
+  const chosen = target.value
+  target.replaceChildren(new Option(t('skNewSkill'), ''), ...o.active.map(s => new Option(t('skImprove') + s.name, s.name)))
+  target.value = o.active.some(s => s.name === chosen) ? chosen : ''
+  const section = (title, items, build, folded) => {
+    if (!items.length) return
+    const wrap = folded ? el('details') : el('div')
+    wrap.appendChild(folded ? el('summary', '', `${title} (${items.length})`) : el('h4', '', `${title} (${items.length})`))
+    for (const item of items) wrap.appendChild(build(item))
+    list.appendChild(wrap)
+  }
+  section(t('skPending'), o.proposals, skProposal)
+  section(t('skActive'), o.active, skActive)
+  section(t('skDeleted'), o.deleted, skill => {
+    const row = el('div', 'sk')
+    row.appendChild(el('div', 'head', skill.name))
+    const undo = el('button', '', t('memUndo'))
+    undo.type = 'button'
+    undo.addEventListener('click', () => skSend({ op: 'skill_undo', id: skill.id }))
+    row.appendChild(undo)
+    return row
+  }, true)
 }
 
 showConn()

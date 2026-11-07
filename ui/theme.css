@@ -40,6 +40,23 @@ input[type=text], select, textarea { background: var(--card); border: 1px solid 
 .side-tabs button.on { background: var(--card); border-color: var(--accent); }
 .badge { background: var(--accent); color: var(--accent-text); border-radius: 99px; font-size: 11px; padding: 0 6px; }
 .note-card { border: 1px solid var(--accent); background: var(--card); border-radius: 8px; padding: 8px 10px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+.sk-auto { font-size: 13px; display: flex; gap: 6px; align-items: flex-start; }
+.sk-auto input { width: auto; margin-top: 3px; }
+.sk { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 8px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+.sk .head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-weight: 600; }
+.sk .tag { border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; font-size: 11px; font-weight: 400; color: var(--muted); }
+.sk .tag.warn { color: var(--danger); border-color: var(--danger); }
+.sk .acts { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.sk .acts button { padding: 1px 8px; font-size: 12px; }
+.sk textarea { width: 100%; min-height: 90px; font: 12px ui-monospace, monospace; }
+.risks { margin: 0; padding-left: 16px; font-size: 12px; }
+.risks .block { color: var(--danger); font-weight: 600; } .risks .warn { color: var(--danger); }
+.skmd, .skdiff { background: var(--code); border-radius: 6px; padding: 6px 0; overflow: auto; max-height: 260px; font: 12px/1.45 ui-monospace, monospace; }
+.skmd .line, .skdiff .line { display: grid; grid-template-columns: 34px 1fr; white-space: pre-wrap; overflow-wrap: anywhere; }
+.skmd .n { color: var(--muted); text-align: right; padding-right: 6px; user-select: none; }
+.skmd .line[data-level="warn"] { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.skmd .line[data-level="block"] { background: color-mix(in srgb, var(--danger) 30%, transparent); }
+.skdiff .line.add { background: color-mix(in srgb, var(--ok) 20%, transparent); } .skdiff .line.del { background: color-mix(in srgb, var(--danger) 20%, transparent); }
 .mem-auto span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 #mem-add { flex-wrap: wrap; } #mem-add input { flex: 1; min-width: 0; } #mem-add select { width: auto; }
 .mem-list { overflow: auto; display: flex; flex-direction: column; gap: 8px; flex: 1; }

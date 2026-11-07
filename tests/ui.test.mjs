@@ -72,3 +72,23 @@ test('sizes are shown in plain units', () => {
   assert.equal(fmtBytes(-1), '')
   assert.equal(fmtBytes(NaN), '')
 })
+
+import { lineDiff, numberedLines, skillMd } from '../ui/util.js'
+
+test('the file a person reads is the file the host writes', () => {
+  assert.equal(skillMd('release-check', 'Use when "x"', 'Body\n\n'), '---\nname: release-check\ndescription: "Use when \\"x\\""\n---\n\nBody\n')
+})
+
+test('lines are numbered and carry their worst risk level', () => {
+  const lines = numberedLines('a\nb\nc', [{ line: 2, level: 'warn' }, { line: 2, level: 'block' }, { line: 3, level: 'warn' }, { line: 0, level: 'block' }])
+  assert.deepEqual(lines.map(l => [l.n, l.level]), [[1, ''], [2, 'block'], [3, 'warn']])
+  assert.equal(numberedLines('x', [{ line: 1, level: 'warn' }], 5)[0].level, '', 'an offset moves the lines the risks point at')
+  assert.equal(numberedLines('a\nb\nc\nd\ne\nf', [{ line: 1, level: 'warn' }], 5)[5].level, 'warn')
+})
+
+test('a diff keeps what stays and marks what goes and what comes', () => {
+  assert.deepEqual(lineDiff('1\n2\n3', '1\nX\n3'), [{ t: ' ', text: '1' }, { t: '-', text: '2' }, { t: '+', text: 'X' }, { t: ' ', text: '3' }])
+  assert.deepEqual(lineDiff('a', 'a'), [{ t: ' ', text: 'a' }])
+  assert.deepEqual(lineDiff('', 'new').map(d => d.t), ['-', '+'])
+  assert.equal(lineDiff('a\nb', 'a\nb\nc').filter(d => d.t === '+').length, 1)
+})

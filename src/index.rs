@@ -44,7 +44,7 @@ fn cut(text: &str, max: usize) -> String {
     text[..end].to_owned()
 }
 
-fn summary(input: &Value) -> String {
+pub(crate) fn summary(input: &Value) -> String {
     for key in ["command", "file_path", "path", "pattern", "url", "query", "description"] {
         if let Some(text) = input.get(key).and_then(Value::as_str) {
             return cut(text.lines().next().unwrap_or(""), MAX_SUMMARY);

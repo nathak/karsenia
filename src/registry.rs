@@ -8,6 +8,8 @@ use crate::extract::{ExtractConfig, TurnEnd, Worker};
 use crate::index::Index;
 use crate::mcp::McpGate;
 use crate::memory::MemoryStore;
+use crate::propose::{spawn_worker, ProposeConfig, ProposeCtx};
+use crate::skills::SkillStore;
 use crate::settings::SettingsStore;
 use crate::session::{self, Envelope, Info, Meta, SessionHandle, Setup};
 
@@ -21,6 +23,11 @@ pub struct Registry {
     /// Messages every page should hear (a note changed, an auto-save happened): `{v, kind, data}`.
     pub events: tokio::sync::broadcast::Sender<serde_json::Value>,
     turns: Option<tokio::sync::mpsc::UnboundedSender<TurnEnd>>,
+    skills: Option<Arc<SkillStore>>,
+    propose_ctx: Option<Arc<ProposeCtx>>,
+    skill_turns: Option<tokio::sync::mpsc::UnboundedSender<TurnEnd>>,
+    /// Set when the skills file could not be read and was set aside.
+    pub skills_notice: Option<String>,
     /// Set when the memory file could not be read and was set aside.
     pub memory_notice: Option<String>,
     sessions: Arc<Mutex<HashMap<String, SessionHandle>>>,
@@ -42,11 +49,11 @@ impl Registry {
 
     /// `mcp_exe` is the program `claude` runs as this app's MCP server (`<exe> mcp`); None leaves history search off.
     pub fn open_with(dir: PathBuf, bin: Option<String>, mcp_exe: Option<PathBuf>) -> anyhow::Result<Self> {
-        Self::open_full(dir, bin, mcp_exe, ExtractConfig::default())
+        Self::open_full(dir, bin, mcp_exe, ExtractConfig::default(), ProposeConfig::default())
     }
 
     /// As `open_with`, with the auto-save timing given (tests use short waits). Needs a running tokio runtime.
-    pub fn open_full(dir: PathBuf, bin: Option<String>, mcp_exe: Option<PathBuf>, extract: ExtractConfig) -> anyhow::Result<Self> {
+    pub fn open_full(dir: PathBuf, bin: Option<String>, mcp_exe: Option<PathBuf>, extract: ExtractConfig, propose: ProposeConfig) -> anyhow::Result<Self> {
         crate::private::create_dir(&dir)?;
         let index = match Index::open(&dir.join("index.sqlite")) {
             Ok(index) => Some(index),
@@ -65,11 +72,14 @@ impl Registry {
                 }
             }
         });
-        // Notes handed to a chat live in files only while its process does: any left by a crash are removed.
+        // Notes and skills handed to a chat live in files only while its process does: any left by a crash are removed.
         if let Ok(entries) = std::fs::read_dir(dir.join("run")) {
             for entry in entries.flatten() {
-                if entry.file_name().to_string_lossy().ends_with(".mem.txt") {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.ends_with(".mem.txt") {
                     let _ = std::fs::remove_file(entry.path());
+                } else if name.ends_with(".skills") {
+                    let _ = std::fs::remove_dir_all(entry.path());
                 }
             }
         }
@@ -87,7 +97,16 @@ impl Registry {
         let turns = memory.as_ref().map(|store| {
             Worker { store: store.clone(), settings: settings.clone(), sessions: sessions.clone(), events: events.clone(), bin: bin.clone(), workdir: dir.join("extract"), config: extract }.spawn()
         });
-        let registry = Self { dir: dir.clone(), bin, index, gate, memory, settings, events, turns, memory_notice, sessions };
+        let (skills, skills_notice) = match SkillStore::open(&dir.join("skills.sqlite")) {
+            Ok((store, notice)) => (Some(Arc::new(store)), notice),
+            Err(error) => {
+                tracing::warn!("skills are off: {error:#}");
+                (None, Some(format!("skills are off: {error:#}")))
+            }
+        };
+        let propose_ctx = skills.as_ref().map(|store| Arc::new(ProposeCtx { store: store.clone(), settings: settings.clone(), sessions: sessions.clone(), events: events.clone(), bin: bin.clone(), workdir: dir.join("propose"), config: propose }));
+        let skill_turns = propose_ctx.as_ref().map(|ctx| spawn_worker(ctx.clone()));
+        let registry = Self { dir: dir.clone(), bin, index, gate, memory, settings, events, turns, skills, propose_ctx, skill_turns, skills_notice, memory_notice, sessions };
         for entry in std::fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
@@ -102,7 +121,7 @@ impl Registry {
             if let Some(index) = &registry.index {
                 index.catch_up(sid, &meta.cwd.to_string_lossy(), meta.created, log.clone());
             }
-            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log, index: registry.index.clone(), mcp: registry.gate.clone(), memory: registry.memory.clone(), turns: registry.turns.clone() });
+            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log, index: registry.index.clone(), mcp: registry.gate.clone(), memory: registry.memory.clone(), turns: registry.turns.clone(), skills: registry.skills.clone(), skill_turns: registry.skill_turns.clone() });
             registry.sessions.lock().expect("registry lock").insert(sid.to_owned(), handle);
         }
         if let Some(index) = &registry.index {
@@ -126,7 +145,7 @@ impl Registry {
         let meta = session::new_meta(real, model);
         let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
         crate::private::write(&session::meta_path(&self.dir, &meta.sid), &text).map_err(|e| e.to_string())?;
-        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), index: self.index.clone(), mcp: self.gate.clone(), memory: self.memory.clone(), turns: self.turns.clone() });
+        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), index: self.index.clone(), mcp: self.gate.clone(), memory: self.memory.clone(), turns: self.turns.clone(), skills: self.skills.clone(), skill_turns: self.skill_turns.clone() });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok(handle)
     }
@@ -140,6 +159,14 @@ impl Registry {
 
     pub fn index(&self) -> Option<Arc<Index>> {
         self.index.clone()
+    }
+
+    pub fn skills(&self) -> Option<Arc<SkillStore>> {
+        self.skills.clone()
+    }
+
+    pub fn propose_ctx(&self) -> Option<Arc<ProposeCtx>> {
+        self.propose_ctx.clone()
     }
 
     pub fn memory(&self) -> Option<Arc<MemoryStore>> {

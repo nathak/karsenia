@@ -38,6 +38,11 @@ pub struct Settings {
     /// When auto-save was last switched on (ms): messages written before it are never read, so what was said while it was off stays unread.
     #[serde(default)]
     pub memory_auto_since: u64,
+    /// Automatic skill proposals (off by default): after a long successful turn, a proposal waits for a person's approval.
+    #[serde(default)]
+    pub skills_auto: bool,
+    #[serde(default)]
+    pub skills_auto_since: u64,
 }
 
 pub struct SettingsStore {
@@ -58,7 +63,11 @@ impl SettingsStore {
     pub fn update(&self, change: impl FnOnce(&mut Settings)) -> Settings {
         let mut guard = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         let before = guard.memory_auto;
+        let skills_before = guard.skills_auto;
         change(&mut guard);
+        if !skills_before && guard.skills_auto {
+            guard.skills_auto_since = crate::now_ms();
+        }
         if before == Auto::Off && guard.memory_auto != Auto::Off {
             guard.memory_auto_since = crate::now_ms();
         }
@@ -92,6 +101,9 @@ mod tests {
         assert!(on.memory_auto_since > 0, "switching on from off records the time");
         let again = fresh.update(|s| s.memory_auto = Auto::ProjectUser);
         assert_eq!(again.memory_auto_since, on.memory_auto_since, "changing between two on states does not move it");
+        assert!(!fresh.get().skills_auto, "automatic skill proposals start off");
+        let on_skills = fresh.update(|s| s.skills_auto = true);
+        assert!(on_skills.skills_auto_since > 0, "switching skill proposals on records the time");
         let off = fresh.update(|s| s.memory_auto = Auto::Off);
         std::thread::sleep(std::time::Duration::from_millis(3));
         assert!(fresh.update(|s| s.memory_auto = Auto::Project).memory_auto_since >= off.memory_auto_since);

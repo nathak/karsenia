@@ -1,0 +1,1 @@
+{"type":"result","subtype":"success","is_error":false,"result":"x","structured_output":{"skip":false,"reason":"","name":"release-check","description":"Runs the release checks.","when_to_use":"Use when the user asks for the release checklist.","body":"1. Run cargo test.\n2. Run cargo clippy."}}

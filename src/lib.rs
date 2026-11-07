@@ -3,12 +3,14 @@ pub mod claude;
 pub mod extract;
 pub mod index;
 pub mod mcp;
+pub mod propose;
 pub mod memory;
 pub mod private;
 pub mod registry;
 pub mod server;
 pub mod session;
 pub mod settings;
+pub mod skills;
 
 /// `n` random bytes as lower-case hex.
 pub fn random_hex(n: usize) -> String {

@@ -28,6 +28,8 @@ pub struct SpawnOpts {
     pub mcp_config: Option<PathBuf>,
     /// A file of notes appended to the system prompt (a file, so the notes are not in argv where any user can read them).
     pub system_file: Option<PathBuf>,
+    /// A one-off plugin folder holding this chat's approved skills.
+    pub plugin_dir: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -65,6 +67,9 @@ pub fn args(opts: &SpawnOpts) -> Vec<String> {
     }
     if let Some(file) = &opts.system_file {
         args.extend(["--append-system-prompt-file".to_owned(), file.display().to_string()]);
+    }
+    if let Some(dir) = &opts.plugin_dir {
+        args.extend(["--plugin-dir".to_owned(), dir.display().to_string()]);
     }
     args
 }
@@ -221,15 +226,16 @@ mod tests {
 
     #[test]
     fn the_arguments_include_the_permission_prompt_tool_and_resume() {
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()) };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()) };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
         assert!(a.windows(2).any(|w| w == ["--model", "haiku"]));
         assert!(a.windows(2).any(|w| w == ["--resume", "abc"]));
         assert!(a.windows(2).any(|w| w == ["--mcp-config", "/d/run/x.mcp.json"]));
         assert!(a.windows(2).any(|w| w == ["--append-system-prompt-file", "/d/run/x.mem.txt"]));
-        let plain = args(&SpawnOpts { resume: None, model: None, mcp_config: None, system_file: None, ..opts });
-        assert!(!plain.iter().any(|x| x == "--resume" || x == "--model" || x == "--mcp-config" || x == "--append-system-prompt-file"));
+        assert!(a.windows(2).any(|w| w == ["--plugin-dir", "/d/run/x.skills"]));
+        let plain = args(&SpawnOpts { resume: None, model: None, mcp_config: None, system_file: None, plugin_dir: None, ..opts });
+        assert!(!plain.iter().any(|x| x == "--resume" || x == "--model" || x == "--mcp-config" || x == "--append-system-prompt-file" || x == "--plugin-dir"));
     }
 
     #[test]

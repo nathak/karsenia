@@ -13,10 +13,23 @@ use crate::claude::process::{ClaudeProcess, ProcEvent, SpawnOpts};
 use crate::claude::protocol::{self, CanUseTool, Event, Image, IMAGE_TYPES, MAX_IMAGE_BYTES};
 use crate::extract::TurnEnd;
 use crate::index::Index;
-use crate::memory::{recall_block, MemoryStore};
+use crate::memory::{recall_block, secret_hit, MemoryStore};
+use crate::skills::SkillStore;
 use crate::mcp::McpGate;
 use crate::random_hex;
 use std::sync::Arc;
+
+/// What the skill proposer may read of a chat: the person's messages, one-line summaries of tool calls that succeeded (never their
+/// results), how many tools the last turn used, and whether third-party text could have entered (a web tool, an outside MCP tool).
+#[derive(Debug, Clone, Default)]
+pub struct ProposalInput {
+    pub cwd: String,
+    pub user_texts: Vec<(u64, String)>,
+    pub tool_lines: Vec<String>,
+    pub last_turn_tools: usize,
+    pub external_used: bool,
+    pub last_seq: u64,
+}
 
 /// What the browser reads: a numbered event of one session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +78,7 @@ enum Cmd {
     Stop,
     Kill,
     UserTexts { after: u64, since: u64, reply: oneshot::Sender<Vec<(u64, String)>> },
+    ProposalInput { since: u64, reply: oneshot::Sender<ProposalInput> },
     Subscribe { after: u64, reply: oneshot::Sender<(Vec<Envelope>, broadcast::Receiver<Envelope>)> },
     Info { reply: oneshot::Sender<Info> },
 }
@@ -99,6 +113,11 @@ impl SessionHandle {
         let _ = self.tx.send(Cmd::Stop);
     }
 
+    /// What the skill proposer may read of this chat, from events at or after time `since` (ms).
+    pub async fn proposal_input(&self, since: u64) -> Option<ProposalInput> {
+        ask(&self.tx, |reply| Cmd::ProposalInput { since, reply }).await
+    }
+
     /// What the person wrote after sequence number `after` and at or after time `since` (ms), for auto-save.
     pub async fn user_texts(&self, after: u64, since: u64) -> Option<Vec<(u64, String)>> {
         ask(&self.tx, |reply| Cmd::UserTexts { after, since, reply }).await
@@ -129,6 +148,9 @@ pub struct Setup {
     pub memory: Option<Arc<MemoryStore>>,
     /// Told when a turn ends well, so auto-save can read what the person wrote.
     pub turns: Option<mpsc::UnboundedSender<TurnEnd>>,
+    pub skills: Option<Arc<SkillStore>>,
+    /// Told the same, so an automatic skill proposal can be considered.
+    pub skill_turns: Option<mpsc::UnboundedSender<TurnEnd>>,
 }
 
 fn now_ms() -> u64 {
@@ -152,7 +174,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, index: setup.index, mcp: setup.mcp, memory: setup.memory, turns: setup.turns, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, index: setup.index, mcp: setup.mcp, memory: setup.memory, turns: setup.turns, skills: setup.skills, skill_turns: setup.skill_turns, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -167,6 +189,8 @@ struct Actor {
     mcp: Option<Arc<McpGate>>,
     memory: Option<Arc<MemoryStore>>,
     turns: Option<mpsc::UnboundedSender<TurnEnd>>,
+    skills: Option<Arc<SkillStore>>,
+    skill_turns: Option<mpsc::UnboundedSender<TurnEnd>>,
     seq: u64,
     bcast: broadcast::Sender<Envelope>,
     state: State,
@@ -320,6 +344,9 @@ impl Actor {
                     process.kill_now();
                 }
             }
+            Cmd::ProposalInput { since, reply } => {
+                let _ = reply.send(self.proposal_input(since));
+            }
             Cmd::UserTexts { after, since, reply } => {
                 let texts = self.log.iter().filter(|e| e.kind == "user" && e.seq > after && e.ts >= since).filter_map(|e| e.data["text"].as_str().map(|t| (e.seq, t.to_owned()))).collect();
                 let _ = reply.send(texts);
@@ -367,7 +394,8 @@ impl Actor {
                 None => None,
             };
             let system_file = self.write_recall();
-            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model: self.meta.model.clone(), resume: self.meta.claude_session_id.clone(), mcp_config, system_file };
+            let plugin_dir = self.write_skills();
+            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model: self.meta.model.clone(), resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir };
             match ClaudeProcess::spawn(&opts) {
                 Ok((process, rx)) => {
                     self.process = Some(process);
@@ -378,6 +406,7 @@ impl Actor {
                         gate.revoke(&self.meta.sid);
                     }
                     let _ = std::fs::remove_file(self.recall_path());
+                    let _ = std::fs::remove_dir_all(self.skills_path());
                     self.emit("error", json!({"message": format!("{error:#}")}));
                     return (Err(format!("{error:#}")), None);
                 }
@@ -442,39 +471,132 @@ impl Actor {
                 self.emit("claude", raw);
                 self.set_state(State::Idle);
                 if subtype == "success" {
+                    let turn = TurnEnd { sid: self.meta.sid.clone(), cwd: self.meta.cwd.to_string_lossy().into_owned() };
                     if let Some(turns) = &self.turns {
-                        let _ = turns.send(TurnEnd { sid: self.meta.sid.clone(), cwd: self.meta.cwd.to_string_lossy().into_owned() });
+                        let _ = turns.send(turn.clone());
+                    }
+                    if let Some(turns) = &self.skill_turns {
+                        let _ = turns.send(turn);
                     }
                 }
             }
             ProcEvent::Line(Event::ControlResponse { raw, .. }) => self.emit("claude", raw),
-            ProcEvent::Line(Event::Raw(raw)) => match raw["type"].as_str() {
-                Some("stream_event") => self.emit_transient("claude", raw),
-                Some("control_cancel_request") => {
-                    if let Some(request_id) = raw["request_id"].as_str().map(str::to_owned) {
-                        if self.pending.remove(&request_id).is_some() {
-                            self.emit("permission_resolved", json!({"request_id": request_id, "outcome": "cancelled"}));
-                        }
-                    }
-                    self.emit("claude", raw);
-                }
-                _ => self.emit("claude", raw),
-            },
+            ProcEvent::Line(Event::Raw(raw)) => {
+                self.note_skill_use(&raw);
+                self.raw_event(raw)
+            }
             ProcEvent::Line(Event::Unparsed(text)) => self.emit("claude", json!({"type": "unparsed", "text": text})),
             ProcEvent::Stderr(text) => {
                 if !text.trim().is_empty() {
                     self.emit("stderr", json!({"text": text}));
                 }
             }
-            ProcEvent::Exited(code) => {
-                self.cancel_pending();
-                if let Some(gate) = &self.mcp {
-                    gate.revoke(&self.meta.sid);
+            ProcEvent::Exited(code) => self.exited(code),
+        }
+    }
+
+    /// A chat that calls one of this app's skills (the `Skill` tool with a `swb:` name) marks it as used.
+    fn note_skill_use(&self, raw: &Value) {
+        let Some(store) = &self.skills else { return };
+        if raw["type"] != "assistant" || !raw["parent_tool_use_id"].is_null() {
+            return;
+        }
+        for block in raw["message"]["content"].as_array().into_iter().flatten() {
+            if block["type"] == "tool_use" && block["name"] == "Skill" {
+                if let Some(name) = block["input"]["skill"].as_str().and_then(|s| s.strip_prefix("swb:")) {
+                    store.touch(name);
                 }
-                let _ = std::fs::remove_file(self.recall_path());
-                self.process = None;
-                self.set_state(State::Exited { code });
             }
         }
+    }
+
+    fn skills_path(&self) -> PathBuf {
+        self.dir.join("run").join(format!("{}.skills", self.meta.sid))
+    }
+
+    /// This chat's approved skills as a one-off plugin folder (files 0600, folders 0700), rebuilt at every start and removed when the
+    /// process ends: a skill disabled or deleted since is simply not in it, and a running chat is never changed under its feet.
+    fn write_skills(&mut self) -> Option<PathBuf> {
+        let store = self.skills.clone()?;
+        let path = self.skills_path();
+        let names = store.materialize(&self.meta.cwd.to_string_lossy(), &path).ok()?;
+        if names.is_empty() {
+            return None;
+        }
+        self.emit("skills_given", json!({"names": names}));
+        Some(path)
+    }
+
+    fn proposal_input(&self, since: u64) -> ProposalInput {
+        let mut texts = Vec::new();
+        let mut calls: Vec<(String, String)> = Vec::new();
+        let mut failed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut turn_tools = 0usize;
+        let mut external = false;
+        for e in self.log.iter().filter(|e| e.ts >= since) {
+            match e.kind.as_str() {
+                "user" => {
+                    if let Some(text) = e.data["text"].as_str() {
+                        texts.push((e.seq, text.to_owned()));
+                    }
+                    turn_tools = 0;
+                }
+                "claude" if e.data["parent_tool_use_id"].is_null() => {
+                    let blocks = e.data["message"]["content"].as_array();
+                    match e.data["type"].as_str() {
+                        Some("assistant") => {
+                            for block in blocks.into_iter().flatten().filter(|b| b["type"] == "tool_use") {
+                                let name = block["name"].as_str().unwrap_or_default();
+                                turn_tools += 1;
+                                external |= name == "WebFetch" || name == "WebSearch" || (name.starts_with("mcp__") && !name.starts_with("mcp__swb_app__"));
+                                if !name.starts_with("mcp__swb_app__") {
+                                    calls.push((block["id"].as_str().unwrap_or_default().to_owned(), format!("{name}: {}", crate::index::summary(&block["input"]))));
+                                }
+                            }
+                        }
+                        Some("user") => {
+                            for block in blocks.into_iter().flatten().filter(|b| b["type"] == "tool_result" && b["is_error"] == true) {
+                                if let Some(id) = block["tool_use_id"].as_str() {
+                                    failed.insert(id.to_owned());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut lines: Vec<String> = calls.into_iter().filter(|(id, _)| !failed.contains(id)).map(|(_, line)| line.chars().take(160).collect::<String>()).filter(|line| !secret_hit(line)).collect();
+        if lines.len() > 40 {
+            lines.drain(..lines.len() - 40);
+        }
+        ProposalInput { cwd: self.meta.cwd.to_string_lossy().into_owned(), user_texts: texts, tool_lines: lines, last_turn_tools: turn_tools, external_used: external, last_seq: self.seq }
+    }
+
+    fn raw_event(&mut self, raw: Value) {
+        match raw["type"].as_str() {
+            Some("stream_event") => self.emit_transient("claude", raw),
+            Some("control_cancel_request") => {
+                if let Some(request_id) = raw["request_id"].as_str().map(str::to_owned) {
+                    if self.pending.remove(&request_id).is_some() {
+                        self.emit("permission_resolved", json!({"request_id": request_id, "outcome": "cancelled"}));
+                    }
+                }
+                self.emit("claude", raw);
+            }
+            _ => self.emit("claude", raw),
+        }
+    }
+
+    fn exited(&mut self, code: Option<i32>) {
+        self.cancel_pending();
+        if let Some(gate) = &self.mcp {
+            gate.revoke(&self.meta.sid);
+        }
+        let _ = std::fs::remove_file(self.recall_path());
+        let _ = std::fs::remove_dir_all(self.skills_path());
+        self.process = None;
+        self.set_state(State::Exited { code });
     }
 }
