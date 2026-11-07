@@ -398,26 +398,14 @@ fn writer_loop(mut conn: Connection, rx: mpsc::Receiver<Job>) {
             }
         }
         let mut flushes = Vec::new();
-        let result = (|| -> rusqlite::Result<()> {
-            let tx = conn.transaction()?;
+        // The whole batch in one transaction; if it fails, each job gets its own, so one bad job costs only itself.
+        if let Err(error) = run_jobs(&mut conn, &batch, &mut own_calls) {
+            tracing::warn!("index batch failed ({error}); retrying job by job");
             for job in &batch {
-                match job {
-                    Job::Add { cwd, fallback_ts, envelope } => insert(&tx, cwd, *fallback_ts, envelope, &mut own_calls)?,
-                    Job::CatchUp { sid, cwd, fallback_ts, log } => catch_up(&tx, sid, cwd, *fallback_ts, log, &mut own_calls)?,
-                    Job::Keep(keep) => {
-                        let known: Vec<String> = tx.prepare("SELECT sid FROM indexed")?.query_map([], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
-                        for sid in known.into_iter().filter(|sid| !keep.contains(sid)) {
-                            tx.execute("DELETE FROM msg WHERE sid = ?1", [&sid])?;
-                            tx.execute("DELETE FROM indexed WHERE sid = ?1", [&sid])?;
-                        }
-                    }
-                    Job::Flush(_) => {}
+                if let Err(error) = run_jobs(&mut conn, std::slice::from_ref(job), &mut own_calls) {
+                    tracing::warn!("index write failed: {error}");
                 }
             }
-            tx.commit()
-        })();
-        if let Err(error) = result {
-            tracing::warn!("index write failed: {error}");
         }
         for job in batch {
             if let Job::Flush(done) = job {
@@ -428,6 +416,25 @@ fn writer_loop(mut conn: Connection, rx: mpsc::Receiver<Job>) {
             let _ = done.send(());
         }
     }
+}
+
+fn run_jobs(conn: &mut Connection, jobs: &[Job], own_calls: &mut HashSet<String>) -> rusqlite::Result<()> {
+    let tx = conn.transaction()?;
+    for job in jobs {
+        match job {
+            Job::Add { cwd, fallback_ts, envelope } => insert(&tx, cwd, *fallback_ts, envelope, own_calls)?,
+            Job::CatchUp { sid, cwd, fallback_ts, log } => catch_up(&tx, sid, cwd, *fallback_ts, log, own_calls)?,
+            Job::Keep(keep) => {
+                let known: Vec<String> = tx.prepare("SELECT sid FROM indexed")?.query_map([], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
+                for sid in known.into_iter().filter(|sid| !keep.contains(sid)) {
+                    tx.execute("DELETE FROM msg WHERE sid = ?1", [&sid])?;
+                    tx.execute("DELETE FROM indexed WHERE sid = ?1", [&sid])?;
+                }
+            }
+            Job::Flush(_) => {}
+        }
+    }
+    tx.commit()
 }
 
 fn insert(tx: &rusqlite::Transaction, cwd: &str, fallback_ts: u64, envelope: &Envelope, own_calls: &mut HashSet<String>) -> rusqlite::Result<()> {

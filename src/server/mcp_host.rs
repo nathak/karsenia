@@ -26,11 +26,20 @@ pub fn listen(gate: &McpGate) -> Result<UnixListener> {
 }
 
 pub async fn serve(listener: UnixListener, gate: Arc<McpGate>, registry: Arc<Registry>) {
-    while let Ok((stream, _)) = listener.accept().await {
-        let (gate, registry) = (gate.clone(), registry.clone());
-        tokio::spawn(async move {
-            let _ = tokio::time::timeout(Duration::from_secs(20), one(stream, gate, registry)).await;
-        });
+    loop {
+        match listener.accept().await {
+            Ok((stream, _)) => {
+                let (gate, registry) = (gate.clone(), registry.clone());
+                tokio::spawn(async move {
+                    let _ = tokio::time::timeout(Duration::from_secs(20), one(stream, gate, registry)).await;
+                });
+            }
+            // A failed accept (too many open files, say) is not the end of the socket.
+            Err(error) => {
+                tracing::warn!("the MCP socket could not accept: {error}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
     }
 }
 
@@ -68,10 +77,10 @@ async fn answer(request: &Value, gate: &McpGate, registry: &Registry) -> Value {
     if words.is_empty() {
         return fail("query is required");
     }
-    let project_only = params["scope"].as_str().unwrap_or("project") != "all";
     let since = params["since_days"].as_u64().filter(|d| *d > 0).map(|d| now_ms().saturating_sub(d.saturating_mul(86_400_000)));
-    let limit = params["limit"].as_u64().unwrap_or(5).clamp(1, 10) as usize;
-    let query = SearchQuery { q: words, cwd: project_only.then(|| info.meta.cwd.to_string_lossy().into_owned()), sid: None, since, limit };
+    let limit = params["limit"].as_u64().unwrap_or(5).clamp(1, 6) as usize;
+    // Always this chat's project: a rule that allows the tool once must not also allow a wider search, so there is no wider one here.
+    let query = SearchQuery { q: words, cwd: Some(info.meta.cwd.to_string_lossy().into_owned()), sid: None, since, limit };
 
     let hits = match tokio::task::spawn_blocking(move || index.search(&query)).await {
         Ok(Ok(hits)) => hits,

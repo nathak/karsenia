@@ -152,7 +152,7 @@ function renderSessions() {
     const title = el('div', 't')
     title.append(el('span', 'dot ' + s.state), el('span', '', s.title || t('untitled')))
     b.append(title, el('div', 'd', baseName(s.cwd) + (s.model ? ' · ' + s.model : '')))
-    b.addEventListener('click', () => openView(s.sid, true))
+    b.addEventListener('click', () => { S.jumpTo = null; openView(s.sid, true) })
     list.appendChild(b)
   }
 }
@@ -548,14 +548,17 @@ function showResults(data) {
 
 // Opens the chat of a result and scrolls to the message (or the nearest one that is drawn).
 function open(hit) {
-  S.jumpTo = hit.seq
+  S.jumpTo = { sid: hit.sid, seq: hit.seq }
   if (hit.sid === S.cur && !S.replaying) return doJump()
   openView(hit.sid, true)
 }
 function doJump() {
   if (S.jumpTo === null) return
-  const target = S.jumpTo
+  // A jump meant for another chat (the person clicked elsewhere before this one attached) is dropped.
+  const wanted = S.jumpTo
   S.jumpTo = null
+  if (wanted.sid !== S.cur) return
+  const target = wanted.seq
   const nodes = [...messages.querySelectorAll('[data-seq],[data-result-seq]')]
   const seqs = nodes.flatMap(n => [n.dataset.seq, n.dataset.resultSeq]).filter(Boolean).map(Number)
   const near = nearestSeq(seqs, target)

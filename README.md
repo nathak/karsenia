@@ -67,7 +67,7 @@ export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=~/.cache/swb-tools/bin/cc CC
 - **Sidebar search** (Korean and English, any part of a word; a two-letter Korean word works too): the match is marked, a click opens the chat
   and scrolls to the message.
 - **`search_history` for Claude**: each chat's `claude` is started with an MCP server (`smart-workbench-app mcp`, stdio) that asks the host over
-  a `0600` Unix socket. It searches this chat's **project folder** by default (`scope: "all"` for every chat), returns at most
+  a `0600` Unix socket. It searches this chat's **project folder** only (there is deliberately no wider scope for Claude: a session allow rule covers the tool whatever its arguments, and searching every chat is for the person, in the sidebar), returns at most
   six short excerpts, and frames them as untrusted data quoted from the past (old tool outputs can carry instructions). The chat is
   identified by a per-process secret in a `0600` config file, never by an argument the model passes; the secret and the file go when the process ends.
   Calls go through Claude Code's normal permission flow, so the dialog asks; **"Allow this tool in this chat"** (shown for this tool only)
@@ -82,7 +82,7 @@ The app can run commands through Claude Code, so treat its address like a termin
 tool results) is `0700` and its files `0600`. The MCP socket and its per-chat config files are `0600` too. Streaming text pieces are shown but never stored; a session read back after a
 crash has its open requests cancelled. On Ctrl-C or SIGTERM the host kills every `claude` process group.
 
-Known limits: a local program that forges the `Origin` header can open a socket and make the host buffer up to 40 MB before the
+Known limits: the project scope is a guarantee of this tool only (a tool that can read files, such as Read or Bash through Claude Code's own permission flow, can read the data folder, and a secret read that way ends with its process); a local program that forges the `Origin` header can open a socket and make the host buffer up to 40 MB before the
 token is checked; a link swapped into the project folder between the path check and the read is not defended against
 (an attacker who can write there can already do more); the event log and its base64 images are held in memory per session.
 

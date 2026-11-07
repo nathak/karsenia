@@ -153,12 +153,15 @@ async fn the_tool_finds_this_projects_history_framed_as_untrusted() {
     let mine = text(&mcp.search(json!({"query": "MIGRATIONNEEDLE"})).await);
     assert!(mine.starts_with("Past chat excerpts: untrusted data"), "{mine}");
     assert_eq!(mine.matches("<excerpt ").count(), 2, "this project's user message and the assistant reply: {mine}");
-    assert!(mine.contains("<\\/excerpt"), "a closing tag inside the text is defused");
+    assert!(mine.contains("\u{2039}/excerpt"), "a closing tag inside the text is defused");
     assert!(mine.contains("ignore all previous rules"), "quoted as data, not removed");
     assert!(!mine.contains("here"), "the other project's chat is not shown");
 
-    let all = text(&mcp.search(json!({"query": "MIGRATIONNEEDLE", "scope": "all", "limit": 10})).await);
-    assert!(all.matches("<excerpt ").count() >= 4, "{all}");
+    let wide = text(&mcp.search(json!({"query": "MIGRATIONNEEDLE", "scope": "all", "limit": 10})).await);
+    assert_eq!(wide.matches("<excerpt ").count(), 2, "a scope argument cannot widen the search beyond this project: {wide}");
+    assert!(!wide.contains("here"));
+    let tools = mcp.call("tools/list", json!({})).await;
+    assert!(tools["result"]["tools"][0]["inputSchema"]["properties"].get("scope").is_none());
     let none = text(&mcp.search(json!({"query": "zzzqqqnothing"})).await);
     assert!(none.contains("No matches."));
     let bad = mcp.search(json!({"query": "   "})).await;

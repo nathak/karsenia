@@ -134,7 +134,9 @@ fn socket_path(dir: &Path) -> Option<PathBuf> {
         return Some(here);
     }
     let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?);
-    let there = runtime.join(format!("swb-app-{}.sock", crate::random_hex(4)));
+    // The same data folder always gets the same name, so runs do not leave a socket each.
+    let hash = dir.to_string_lossy().bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+    let there = runtime.join(format!("swb-app-{hash:016x}.sock"));
     (there.as_os_str().len() <= 100).then_some(there)
 }
 

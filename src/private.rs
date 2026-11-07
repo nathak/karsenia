@@ -21,12 +21,21 @@ fn options() -> OpenOptions {
     options
 }
 
+/// A link in the place of one of our files is removed, not followed: nothing else gets written through it.
+fn unlink_if_link(path: &Path) {
+    if std::fs::symlink_metadata(path).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 pub fn write(path: &Path, text: &str) -> std::io::Result<()> {
+    unlink_if_link(path);
     let mut file = options().write(true).truncate(true).open(path)?;
     file.write_all(text.as_bytes())
 }
 
 pub fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
+    unlink_if_link(path);
     let mut file = options().append(true).open(path)?;
     writeln!(file, "{line}")
 }
@@ -48,5 +57,13 @@ mod tests {
         assert_eq!(mode(&data.join("a.meta.json")), 0o600);
         assert_eq!(mode(&data.join("a.jsonl")), 0o600);
         assert_eq!(std::fs::read_to_string(data.join("a.jsonl")).unwrap(), "x\ny\n");
+
+        let target = dir.path().join("victim.txt");
+        std::fs::write(&target, "keep").unwrap();
+        let config = data.join("s.mcp.json");
+        std::os::unix::fs::symlink(&target, &config).unwrap();
+        write(&config, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep", "a link is replaced, not written through");
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), "new");
     }
 }
