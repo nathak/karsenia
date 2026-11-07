@@ -65,6 +65,14 @@ impl Registry {
                 }
             }
         });
+        // Notes handed to a chat live in files only while its process does: any left by a crash are removed.
+        if let Ok(entries) = std::fs::read_dir(dir.join("run")) {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().ends_with(".mem.txt") {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
         let (memory, memory_notice) = match MemoryStore::open(&dir.join("memory.sqlite")) {
             Ok((store, notice)) => (Some(Arc::new(store)), notice),
             Err(error) => {

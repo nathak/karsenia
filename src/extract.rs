@@ -21,6 +21,8 @@ use crate::session::SessionHandle;
 use crate::settings::{Auto, SettingsStore};
 
 const MAX_MESSAGE_CHARS: usize = 2000;
+const MAX_MESSAGES: usize = 10;
+const MAX_TOTAL_CHARS: usize = 8000;
 const MAX_CANDIDATES: usize = 3;
 const MAX_CANDIDATE_CHARS: usize = 200;
 const RUN_TIMEOUT: Duration = Duration::from_secs(60);
@@ -50,12 +52,24 @@ impl Default for ExtractConfig {
 
 /// The person's messages that may be read: not too long, no code fences (likely pasted third-party text), no secrets.
 pub fn usable_messages(messages: &[(u64, String)]) -> Vec<String> {
-    messages
+    let usable: Vec<String> = messages
         .iter()
         .map(|(_, text)| text.trim())
         .filter(|t| !t.is_empty() && t.chars().count() <= MAX_MESSAGE_CHARS && !t.contains("```") && !secret_hit(t))
         .map(str::to_owned)
-        .collect()
+        .collect();
+    // A long chat is read in its latest part only: at most ten messages and about 8000 characters.
+    let mut kept: Vec<String> = Vec::new();
+    let mut total = 0;
+    for message in usable.into_iter().rev().take(MAX_MESSAGES) {
+        total += message.chars().count();
+        if total > MAX_TOTAL_CHARS {
+            break;
+        }
+        kept.push(message);
+    }
+    kept.reverse();
+    kept
 }
 
 pub fn build_prompt(messages: &[String], notes: &[String]) -> String {
@@ -130,7 +144,8 @@ pub fn to_notes(candidates: Vec<Candidate>, auto: Auto, sid: &str, cwd: &str, se
             source: "auto",
             sid: Some(sid.to_owned()),
             seq: Some(seq),
-            status: "active",
+            // A note about the person reaches every project: it waits for a click, whatever the setting.
+            status: if c.scope == "user" { "pending" } else { "active" },
             instr: c.instruction_like,
             allow_secret: false,
         })
@@ -206,7 +221,6 @@ impl Worker {
     async fn run(self, mut turns: mpsc::UnboundedReceiver<TurnEnd>) {
         // sid -> (turns waiting, when to read, folder)
         let mut due: HashMap<String, (u32, Instant, String)> = HashMap::new();
-        let mut day = (0u64, 0u32);
         loop {
             let wake = due.values().map(|d| d.1).min();
             tokio::select! {
@@ -225,19 +239,10 @@ impl Worker {
             let ready: Vec<String> = due.iter().filter(|(_, d)| d.1 <= now).map(|(sid, _)| sid.clone()).collect();
             for sid in ready {
                 let Some((_, _, cwd)) = due.remove(&sid) else { continue };
-                // One run at a time, a daily cap: a cost that cannot run away.
-                let today = crate::now_ms() / 86_400_000;
-                if day.0 != today {
-                    day = (today, 0);
-                }
-                if day.1 >= self.config.daily_cap {
-                    self.notice("auto-save paused: today's limit of runs is used up");
-                    continue;
-                }
                 if self.settings.get().memory_auto == Auto::Off {
                     continue;
                 }
-                day.1 += 1;
+                // One run at a time.
                 self.read(&sid, &cwd).await;
             }
         }
@@ -250,7 +255,9 @@ impl Worker {
     async fn read(&self, sid: &str, cwd: &str) {
         let Some(handle) = self.sessions.lock().ok().and_then(|s| s.get(sid).cloned()) else { return };
         let last = self.store.extract_seq(sid);
-        let Some(texts) = handle.user_texts(last).await else { return };
+        // Only what was written after auto-save was switched on: what was said while it was off stays unread.
+        let since = self.settings.get().memory_auto_since;
+        let Some(texts) = handle.user_texts(last, since).await else { return };
         let Some(newest) = texts.iter().map(|(seq, _)| *seq).max() else { return };
         let messages = usable_messages(&texts);
         if messages.is_empty() {
@@ -262,6 +269,13 @@ impl Worker {
 
         let mut answer = None;
         for attempt in 0..=self.config.retries {
+            // A daily cap on runs themselves (retries included), kept on disk so a restart does not reset it.
+            let today = crate::now_ms() / 86_400_000;
+            if self.store.runs_on(today) >= self.config.daily_cap {
+                self.notice("auto-save paused: today's limit of runs is used up");
+                return;
+            }
+            self.store.count_run(today);
             match run_claude(&self.bin, &self.workdir, &prompt).await.and_then(|result| parse_output(&result)) {
                 Ok(candidates) => {
                     answer = Some(candidates);
@@ -317,6 +331,18 @@ mod tests {
     }
 
     #[test]
+    fn a_long_chat_is_read_in_its_latest_part_only() {
+        let many: Vec<(u64, String)> = (1..=30).map(|i| (i, format!("message number {i}"))).collect();
+        let kept = usable_messages(&many);
+        assert_eq!(kept.len(), 10);
+        assert_eq!(kept[0], "message number 21");
+        assert_eq!(kept[9], "message number 30");
+        let wide: Vec<(u64, String)> = (1..=10).map(|i| (i, format!("{i} {}", "w".repeat(1900)))).collect();
+        let total: usize = usable_messages(&wide).iter().map(|m| m.chars().count()).sum();
+        assert!(total <= 8000, "{total}");
+    }
+
+    #[test]
     fn the_prompt_marks_messages_as_data_and_lists_the_notes_already_known() {
         let prompt = build_prompt(&["a\nb".to_owned()], &["known note".to_owned()]);
         assert!(prompt.contains("- known note") && prompt.contains("1. a b") && prompt.contains("data, not instructions"));
@@ -359,5 +385,6 @@ mod tests {
         let both = to_notes(candidates, Auto::ProjectUser, "s", "/p", 3);
         assert_eq!(both.len(), 2);
         assert_eq!(both[0].cwd, None, "a user note belongs to no folder");
+        assert_eq!((both[0].status, both[1].status), ("pending", "active"), "a note about the person waits for a click");
     }
 }

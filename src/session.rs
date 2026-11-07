@@ -64,7 +64,7 @@ enum Cmd {
     Interrupt { reply: oneshot::Sender<Result<(), String>> },
     Stop,
     Kill,
-    UserTexts { after: u64, reply: oneshot::Sender<Vec<(u64, String)>> },
+    UserTexts { after: u64, since: u64, reply: oneshot::Sender<Vec<(u64, String)>> },
     Subscribe { after: u64, reply: oneshot::Sender<(Vec<Envelope>, broadcast::Receiver<Envelope>)> },
     Info { reply: oneshot::Sender<Info> },
 }
@@ -99,9 +99,9 @@ impl SessionHandle {
         let _ = self.tx.send(Cmd::Stop);
     }
 
-    /// What the person wrote after sequence number `after`, for auto-save.
-    pub async fn user_texts(&self, after: u64) -> Option<Vec<(u64, String)>> {
-        ask(&self.tx, |reply| Cmd::UserTexts { after, reply }).await
+    /// What the person wrote after sequence number `after` and at or after time `since` (ms), for auto-save.
+    pub async fn user_texts(&self, after: u64, since: u64) -> Option<Vec<(u64, String)>> {
+        ask(&self.tx, |reply| Cmd::UserTexts { after, since, reply }).await
     }
 
     /// SIGKILL to the process group now (the host is exiting).
@@ -320,8 +320,8 @@ impl Actor {
                     process.kill_now();
                 }
             }
-            Cmd::UserTexts { after, reply } => {
-                let texts = self.log.iter().filter(|e| e.kind == "user" && e.seq > after).filter_map(|e| e.data["text"].as_str().map(|t| (e.seq, t.to_owned()))).collect();
+            Cmd::UserTexts { after, since, reply } => {
+                let texts = self.log.iter().filter(|e| e.kind == "user" && e.seq > after && e.ts >= since).filter_map(|e| e.data["text"].as_str().map(|t| (e.seq, t.to_owned()))).collect();
                 let _ = reply.send(texts);
             }
             Cmd::Subscribe { after, reply } => {
@@ -377,6 +377,7 @@ impl Actor {
                     if let Some(gate) = &self.mcp {
                         gate.revoke(&self.meta.sid);
                     }
+                    let _ = std::fs::remove_file(self.recall_path());
                     self.emit("error", json!({"message": format!("{error:#}")}));
                     return (Err(format!("{error:#}")), None);
                 }

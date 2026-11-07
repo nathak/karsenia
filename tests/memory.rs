@@ -361,6 +361,8 @@ async fn with_auto_save_off_nothing_is_read_and_a_bad_answer_discards_the_run() 
     let mut heard = fx.server.registry.events.subscribe();
     turn(&session, "Remember that I prefer tabs over spaces").await;
     wait_for("the run", || log_text(&fx).contains("EXTRACT_IN")).await;
+    let read = log_text(&fx).lines().find(|l| l.starts_with("EXTRACT_IN")).unwrap().to_owned();
+    assert!(read.contains("prefer tabs") && !read.contains("I use pnpm in this project"), "what was said while auto-save was off stays unread: {read}");
     wait_for("the notice", || matches!(heard.try_recv(), Ok(e) if e["kind"] == "memory_notice")).await;
     let store = fx.server.registry.memory().unwrap();
     assert_eq!(store.counts(), (0, 0), "nothing was saved from an answer that could not be trusted");
@@ -374,4 +376,19 @@ async fn messages_with_secrets_or_pasted_code_are_never_sent_to_the_extractor() 
     turn(&session, "my key is sk-ant-api03-SECRETVALUE and I use pnpm").await;
     tokio::time::sleep(Duration::from_millis(700)).await;
     assert!(!log_text(&fx).contains("EXTRACT_IN"), "a message with a secret is not read, and with nothing else to read there is no run");
+}
+
+#[tokio::test]
+async fn a_note_about_the_person_that_auto_save_found_waits_for_a_click() {
+    let fx = fixture(CHAT, EXTRACTED, quick()).await;
+    fx.server.registry.settings().update(|s| s.memory_auto = Auto::ProjectUser);
+    let folder = project(&fx, "a");
+    let session = fx.server.registry.create(folder.to_str().unwrap(), None).unwrap();
+    turn(&session, "I use pnpm and I prefer Korean replies").await;
+    let store = fx.server.registry.memory().unwrap();
+    wait_for("the notes", || store.counts().0 + store.counts().1 >= 3).await;
+    let overview = store.overview(Some(&folder.to_string_lossy()));
+    assert!(overview.user.is_empty(), "a note that would reach every project is not used before a click");
+    assert!(overview.pending.iter().any(|m| m.scope == "user" && m.text.contains("Korean")));
+    assert!(overview.project.iter().any(|m| m.text.contains("pnpm")), "a project note is active at once");
 }

@@ -145,3 +145,36 @@ async fn live_memory_a_stated_preference_is_auto_saved_and_a_new_chat_knows_it()
     assert!(said.to_lowercase().contains("pnpm"), "the new chat should know: {said}");
     assert!(!used_tool, "it should answer from the notes it was given, without a tool");
 }
+
+#[tokio::test]
+#[ignore = "uses the real claude; run with SWB_LIVE=1 and --ignored"]
+async fn live_memory_save_is_active_after_the_person_approves_that_exact_note() {
+    if std::env::var_os("SWB_LIVE").is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let server = swb_app::server::start(swb_app::server::Config {
+        port: 0,
+        data_dir: dir.path().join("data"),
+        bin: None,
+        mcp_bin: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_smart-workbench-app"))),
+        extract: Default::default(),
+    })
+    .await
+    .unwrap();
+    let session = server.registry.create(project.to_str().unwrap(), Some("haiku".into())).unwrap();
+    let (_, mut rx) = session.subscribe(0).await.unwrap();
+    session.send("Use the memory_save tool to save exactly this note for the project: The release branch is main".into(), vec![]).await.unwrap();
+    let ask = until(&mut rx, |e| e.kind == "permission").await;
+    assert_eq!(ask.data["tool_name"], "mcp__swb_app__memory_save");
+    session.permission(ask.data["request_id"].as_str().unwrap().to_owned(), true, None, false).await.unwrap();
+    until(&mut rx, |e| e.kind == "state" && e.data["state"] == "idle").await;
+
+    let store = server.registry.memory().unwrap();
+    let cwd = session.info().await.unwrap().meta.cwd.to_string_lossy().into_owned();
+    let overview = store.overview(Some(&cwd));
+    let note = overview.project.iter().find(|m| m.text.to_lowercase().contains("release branch")).unwrap_or_else(|| panic!("the approved note should be active: {overview:?}"));
+    assert_eq!((note.source.as_str(), note.status.as_str()), ("claude", "active"), "the real claude sends the approved input byte for byte, so the ticket matches");
+}

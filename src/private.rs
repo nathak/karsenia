@@ -31,6 +31,8 @@ fn unlink_if_link(path: &Path) {
 pub fn write(path: &Path, text: &str) -> std::io::Result<()> {
     unlink_if_link(path);
     let mut file = options().write(true).truncate(true).open(path)?;
+    #[cfg(unix)]
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     file.write_all(text.as_bytes())
 }
 

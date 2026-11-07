@@ -35,6 +35,9 @@ pub struct Settings {
     /// The person has seen the one-time card that explains auto-save.
     #[serde(default)]
     pub memory_card_seen: bool,
+    /// When auto-save was last switched on (ms): messages written before it are never read, so what was said while it was off stays unread.
+    #[serde(default)]
+    pub memory_auto_since: u64,
 }
 
 pub struct SettingsStore {
@@ -54,7 +57,11 @@ impl SettingsStore {
 
     pub fn update(&self, change: impl FnOnce(&mut Settings)) -> Settings {
         let mut guard = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let before = guard.memory_auto;
         change(&mut guard);
+        if before == Auto::Off && guard.memory_auto != Auto::Off {
+            guard.memory_auto_since = crate::now_ms();
+        }
         if let Ok(text) = serde_json::to_string_pretty(&*guard) {
             let _ = crate::private::write(&self.path, &text);
         }
@@ -79,6 +86,15 @@ mod tests {
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(SettingsStore::open(path).get().memory_auto, Auto::Off, "an unreadable file means the default, which is off");
         assert_eq!(Auto::parse("project_user"), Some(Auto::ProjectUser));
+        let fresh = SettingsStore::open(dir.path().join("other.json"));
+        assert_eq!(fresh.get().memory_auto_since, 0);
+        let on = fresh.update(|s| s.memory_auto = Auto::Project);
+        assert!(on.memory_auto_since > 0, "switching on from off records the time");
+        let again = fresh.update(|s| s.memory_auto = Auto::ProjectUser);
+        assert_eq!(again.memory_auto_since, on.memory_auto_since, "changing between two on states does not move it");
+        let off = fresh.update(|s| s.memory_auto = Auto::Off);
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        assert!(fresh.update(|s| s.memory_auto = Auto::Project).memory_auto_since >= off.memory_auto_since);
         assert_eq!(Auto::parse("all"), None);
     }
 }

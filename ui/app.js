@@ -91,7 +91,7 @@ DOMPurify.addHook('afterSanitizeAttributes', node => {
 const markdown = source => DOMPurify.sanitize(marked.parse(source, { gfm: true, breaks: true }), { FORBID_TAGS: ['style', 'form', 'input', 'button', 'img'], FORBID_ATTR: ['style'] })
 
 // ---- state ----
-const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, lastMem: null, editing: 0, images: [], debug: [], connected: false, wasConnected: false }
+const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, images: [], debug: [], connected: false, wasConnected: false }
 
 const messages = $('messages')
 function stick() { return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120 }
@@ -598,7 +598,12 @@ function doJump() {
 // ---- memory ----
 const curCwd = () => (S.sessions.find(s => s.sid === S.cur) || {}).cwd
 function askMemory() { wsSend({ op: 'memory_list', cwd: curCwd() }) }
-function memSend(op) { S.lastMem = op; wsSend(op) }
+// Every request carries an id the answer brings back, so two requests in flight are never mixed up.
+function memSend(op, tag) {
+  S.memRid += 1
+  S.memOps.set(S.memRid, tag ? { op: tag } : op)
+  wsSend({ ...op, rid: S.memRid })
+}
 
 function showSide(name) {
   S.side = name
@@ -639,13 +644,13 @@ function autoSaved(items) {
   const text = items.length === 1 ? items[0].text : `${items.length}`
   toast(`${t('memAutoSaved')}: ${text}`, {
     label: t('memUndo'),
-    run: () => { S.lastMem = { op: 'memory_delete_quiet' }; for (const m of items) wsSend({ op: 'memory_delete', id: m.id }) },
+    run: () => { for (const m of items) memSend({ op: 'memory_delete', id: m.id }, 'memory_delete_quiet') },
   })
 }
 
 function memResult(d) {
-  const last = S.lastMem
-  S.lastMem = null
+  const last = S.memOps.get(d.rid)
+  S.memOps.delete(d.rid)
   if (!d.ok) {
     if (d.needs_confirm && last && confirm(t('memSecretConfirm'))) return memSend({ ...last, confirm: true })
     if (d.error) toast(d.error)
