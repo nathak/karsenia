@@ -43,7 +43,7 @@ async fn fixture(mcp: bool) -> Fx {
 async fn chat(fx: &Fx, project: &str, text: &str) -> swb_app::session::SessionHandle {
     let path = fx.root.join(project);
     std::fs::create_dir_all(&path).unwrap();
-    let session = fx.server.registry.create(path.to_str().unwrap(), None).unwrap();
+    let session = fx.server.registry.create(path.to_str().unwrap(), None, None).unwrap();
     let (_, mut rx) = session.subscribe(0).await.unwrap();
     session.send(text.into(), vec![]).await.unwrap();
     loop {

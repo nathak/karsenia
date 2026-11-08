@@ -173,6 +173,46 @@ click a permission prompt. So a run is given nothing to be asked about:
 - **Switching off:** a run waiting in line that the clock queued is looked at again when its turn comes, and is skipped if the task or the whole scheduler was switched off meanwhile ("run now" is yours and still runs). A run already going is not stopped by switching off (press Stop); it ends by its own time limit. Task numbers are never reused, so a queued or running run cannot reach a task made later.
 - **Not a daemon:** nothing runs while the app is closed. A run that was going when the app ended is marked failed at the next start.
 
+## Model providers (step 5 of the Hermes-like features)
+
+A chat can be made against another Anthropic-compatible address (a gateway, a company proxy, a local server) instead of your Claude
+account. You add it in the **Model providers** box of the Chats tab (name, address, how the key is sent, the key, optional model names)
+and pick it in the new-chat form. The app still never calls any API itself: the chat's `claude` process is simply started with that
+address, and a chat keeps its provider for its whole life (it cannot be changed; make a new chat).
+
+**What was measured, and why the setup is what it is.** With only `ANTHROPIC_BASE_URL` changed, a `claude` that is logged in to
+an account sends the account's own OAuth token to that address (tested against a local capture server). So a provider chat:
+
+- always has a token of its own set (your key; a placeholder for an address that needs none), so the account's token is never used;
+- runs in a settings folder of its own (`<data>/chatcfg/<chat id>`, `0700`), so the account's credentials file is out of the CLI's reach;
+- loses every inherited variable that could carry or redirect a credential (`ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `CLAUDE_CODE_OAUTH*`, `AWS_BEARER_TOKEN_BEDROCK`, `CLAUDE_CONFIG_DIR`, …; prefixes, so a variable a later version adds is covered);
+- does not read the project's `.claude/settings.json` (`--setting-sources user`) and has its address pinned on the command line. Measured: a project's `env.ANTHROPIC_BASE_URL` replaces the one the host sets, and the key would follow it; a project hook ran next to the key. A normal chat has that same exposure (see Known limits).
+
+Each of these is held by a test; the live test (`SWB_LIVE=1`) starts the real `claude` in a hostile project folder (its settings redirect
+the address, bring a token and a key helper, and run a hook) and checks that the provider's address gets exactly its own key, a second
+server gets nothing, and the hook does not run.
+
+**The provider sees the whole chat**, including files Claude read and command output. The chat shows a banner and the list shows
+`→ host` so it is never a surprise. Because it is a third party, the account's side of the app is cut off in **both** directions:
+a provider chat gets no notes, no skills and no history-search tool, is not read by auto-save or by skill proposals (their runs go to your
+account), and is not put into the history index (so it is not found by search, and the account's chats cannot pull its text across).
+Scheduled tasks always use your account.
+
+**The key.** Stored in `<data>/providers.json` (`0600`). The page is never sent it again (`has_token` and the host only), it is passed to
+the process in the environment (never in the arguments, which any user can read), and anything of the chat that would be shown or stored
+is scrubbed of it (`[provider key]`; it catches the key as one piece of text, not an encoded or split one). Providers are made and
+changed only by you in the page: there is no MCP tool for it. An `https://` address is required, except for this computer (`localhost`,
+`127.0.0.1`, `[::1]`), no user name, query or fragment. If a chat's provider is deleted, or its address (host) is changed, the chat does
+not start again (it was made for another party): make a new chat. A changed key or path on the same host is used at the next start.
+
+Limits worth knowing: tools that run on this computer (a command, a file read) run as you, so one you approve can read
+`providers.json` or the account's credentials file, and a provider chat's permission prompts are the only guard (read them; this is the reason
+the container option exists). The chat's `claude` and the commands it runs inherit the key in their environment. Your own plugins, hooks and
+permission rules in `~/.claude` do not apply in a provider chat (its settings folder is empty), nor do the project's settings. Claude Code's
+background model (haiku) goes to the same address: if the address names models differently, fill in the model names. Managed
+organisation policy applies whatever the flags say. The transcripts Claude Code keeps for a provider chat are in its own settings
+folder under `chatcfg/` and are not removed when the provider is.
+
 ## Security
 
 Local only: binds `127.0.0.1`; every request needs the right `Host` (DNS rebinding gets 421); a WebSocket needs the exact
@@ -183,7 +223,7 @@ tool results) is `0700` and its files `0600`. The MCP socket and its per-chat co
 crash has its open requests cancelled. On Ctrl-C or SIGTERM the host kills every `claude` process group.
 
 Known limits: a skill's text is read by you, and the risk report is a pattern list, not a judge (a roundabout instruction passes it, so your reading is the last line of defence); a chat with Bash permission can write to the data folder, snapshots included, and so could plant a scheduled task in `schedule.sqlite` (each run shows the definition it used; a task is limited to read-only tools or the web, whoever wrote it); auto-save and a note you approved are trusted as your words: a message you paste from elsewhere can still say something you did not mean, so read the Memory tab now and then; the order-like check and the secret filter are pattern lists, not judges (a key split by spaces or lines is not caught); the project scope is a guarantee of this tool only (a tool that can read files, such as Read or Bash through Claude Code's own permission flow, can read the data folder, and a secret read that way ends with its process); a local program that forges the `Origin` header can open a socket and make the host buffer up to 40 MB before the
-token is checked; a scheduled folder run reads whatever the project folder holds (a `.env` there can end up in a result, as in a chat), and a web result is outside text that only your reading screens; a link swapped into the project folder between the path check and the read is not defended against
+token is checked; a scheduled folder run reads whatever the project folder holds (a `.env` there can end up in a result, as in a chat), and a web result is outside text that only your reading screens; a normal chat is not protected from its project's own `.claude/settings.json` either: its `env` can send the account's token to another address and its hooks run, so open only projects you trust (a provider chat skips project settings for this reason); a link swapped into the project folder between the path check and the read is not defended against
 (an attacker who can write there can already do more); the event log and its base64 images are held in memory per session.
 
 ## Tests
@@ -193,7 +233,7 @@ cargo test                       # protocol, process, session, server (a fake cl
 cargo clippy --all-targets -- -D warnings
 node --test tests/ui.test.mjs    # the UI's pure helpers
 PLAYWRIGHT=/path/to/playwright/index.mjs tests/smoke/run.sh   # headless-Chromium run of the UI against the fake
-SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude, seven tests (costs a few cents)
+SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude, eight tests (costs a few cents)
 ```
 
 `fake-claude` replays a scenario file: lines are printed as they are, or are directives (`{"$wait":"user"|"control_response"|"interrupt"}`,
@@ -202,7 +242,7 @@ SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude,
 ## Layout
 
 `src/claude/` everything specific to the CLI (protocol, process) · `src/session.rs` one chat's task (state, pending permissions, log) ·
-`src/index.rs` the FTS5 index · `src/memory.rs` the notes, their checks and the recall block · `src/extract.rs` auto-save · `src/settings.rs` · `src/schedule.rs` times · `src/sched_store.rs` tasks and runs · `src/scheduler.rs` the clock loop and one run · `src/skills.rs` skills, their risk report and the one-off folder · `src/propose.rs` proposals · `src/mcp.rs` the stdio MCP server and the per-chat secrets · `src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files + the MCP socket · `ui/` plain ES modules, `ui/vendor/` marked and DOMPurify (pinned, licenses included).
+`src/index.rs` the FTS5 index · `src/memory.rs` the notes, their checks and the recall block · `src/extract.rs` auto-save · `src/settings.rs` · `src/providers.rs` providers and their checks · `src/claude/env.rs` the environment of a provider chat · `src/schedule.rs` times · `src/sched_store.rs` tasks and runs · `src/scheduler.rs` the clock loop and one run · `src/skills.rs` skills, their risk report and the one-off folder · `src/propose.rs` proposals · `src/mcp.rs` the stdio MCP server and the per-chat secrets · `src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files + the MCP socket · `ui/` plain ES modules, `ui/vendor/` marked and DOMPurify (pinned, licenses included).
 
 ## Verified against Claude Code 2.1.316
 
@@ -213,4 +253,4 @@ host, the IDE connection protocol, and Windows/macOS.
 
 ## Next
 
-Per-chat model provider (`ANTHROPIC_BASE_URL`) and a container launcher · a Telegram gateway · Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages) · file tree and editor · PTY terminal.
+a container launcher for provider chats · a Telegram gateway · Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages) · file tree and editor · PTY terminal.

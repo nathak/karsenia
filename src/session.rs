@@ -16,6 +16,7 @@ use crate::index::Index;
 use crate::memory::{recall_block, secret_hit, MemoryStore};
 use crate::skills::SkillStore;
 use crate::mcp::McpGate;
+use crate::providers::{ProviderRef, ProviderStore};
 use crate::random_hex;
 use std::sync::Arc;
 
@@ -29,6 +30,8 @@ pub struct ProposalInput {
     pub last_turn_tools: usize,
     pub external_used: bool,
     pub last_seq: u64,
+    /// The chat runs against a provider the person chose: nothing of it is read by a proposal (that would send it to the account).
+    pub provider: bool,
 }
 
 /// A tool call through which text from outside the person's own files and words can enter the chat: the web, a tool of another MCP
@@ -73,6 +76,9 @@ pub struct Meta {
     pub claude_session_id: Option<String>,
     pub title: String,
     pub created: u64,
+    /// The provider this chat was made against; fixed for the chat's life. Chats made before providers existed read as None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderRef>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,14 +170,15 @@ pub struct Setup {
     pub skills: Option<Arc<SkillStore>>,
     /// Told the same, so an automatic skill proposal can be considered.
     pub skill_turns: Option<mpsc::UnboundedSender<TurnEnd>>,
+    pub providers: Option<Arc<ProviderStore>>,
 }
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-pub fn new_meta(cwd: PathBuf, model: Option<String>) -> Meta {
-    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms() }
+pub fn new_meta(cwd: PathBuf, model: Option<String>, provider: Option<ProviderRef>) -> Meta {
+    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider }
 }
 
 pub fn log_path(dir: &std::path::Path, sid: &str) -> PathBuf {
@@ -187,7 +194,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, index: setup.index, mcp: setup.mcp, memory: setup.memory, turns: setup.turns, skills: setup.skills, skill_turns: setup.skill_turns, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, index: setup.index, mcp: setup.mcp, memory: setup.memory, turns: setup.turns, skills: setup.skills, skill_turns: setup.skill_turns, providers: setup.providers, secret: None, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -204,6 +211,9 @@ struct Actor {
     turns: Option<mpsc::UnboundedSender<TurnEnd>>,
     skills: Option<Arc<SkillStore>>,
     skill_turns: Option<mpsc::UnboundedSender<TurnEnd>>,
+    providers: Option<Arc<ProviderStore>>,
+    /// The key of this chat's provider while its process runs: whatever the chat shows or stores has it replaced.
+    secret: Option<String>,
     seq: u64,
     bcast: broadcast::Sender<Envelope>,
     state: State,
@@ -239,6 +249,7 @@ impl Actor {
     }
 
     fn emit(&mut self, kind: &str, data: Value) {
+        let data = self.scrub(data);
         self.seq += 1;
         let envelope = Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, ts: now_ms(), kind: kind.to_owned(), data };
         if let Ok(line) = serde_json::to_string(&envelope) {
@@ -253,7 +264,29 @@ impl Actor {
 
     /// For what only matters while it happens (streaming text pieces): sent to whoever is attached, never kept, never numbered.
     fn emit_transient(&self, kind: &str, data: Value) {
+        let data = self.scrub(data);
         let _ = self.bcast.send(Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, ts: now_ms(), kind: kind.to_owned(), data });
+    }
+
+    /// A provider chat's key, wherever it turns up in what the chat shows or stores (an error, a command's output, a tool result), is
+    /// replaced. It catches the key as one piece of text; a key printed in an encoded or split form is not recognised.
+    fn scrub(&self, data: Value) -> Value {
+        match &self.secret {
+            Some(secret) => redact(data, secret),
+            None => data,
+        }
+    }
+
+    /// The provider this chat is bound to, as it is now: Err when it was deleted or its address changed (the chat was made for
+    /// another party, so it does not start; a new chat can be made).
+    fn current_provider(&self) -> Result<Option<crate::providers::Provider>, String> {
+        let Some(bound) = &self.meta.provider else { return Ok(None) };
+        let store = self.providers.as_ref().ok_or("providers are not available")?;
+        let provider = store.get(&bound.id).ok_or("the provider of this chat was deleted; make a new chat")?;
+        if crate::providers::host_of(&provider.base_url) != bound.host {
+            return Err("the address of this chat's provider was changed; make a new chat".into());
+        }
+        Ok(Some(provider))
     }
 
     fn recall_path(&self) -> PathBuf {
@@ -361,7 +394,7 @@ impl Actor {
                 let _ = reply.send(self.proposal_input(since));
             }
             Cmd::UserTexts { after, since, reply } => {
-                let texts = self.log.iter().filter(|e| e.kind == "user" && e.seq > after && e.ts >= since).filter_map(|e| e.data["text"].as_str().map(|t| (e.seq, t.to_owned()))).collect();
+                let texts = self.log.iter().filter(|_| self.meta.provider.is_none()).filter(|e| e.kind == "user" && e.seq > after && e.ts >= since).filter_map(|e| e.data["text"].as_str().map(|t| (e.seq, t.to_owned()))).collect();
                 let _ = reply.send(texts);
             }
             Cmd::Subscribe { after, reply } => {
@@ -396,19 +429,44 @@ impl Actor {
 
         let mut events = None;
         if self.process.is_none() {
-            let mcp_config = match &self.mcp {
-                Some(gate) => match gate.grant(&self.meta.sid) {
-                    Ok(path) => Some(path),
-                    Err(error) => {
-                        self.emit("error", json!({"message": format!("history search is off for this chat: {error:#}")}));
-                        None
-                    }
-                },
-                None => None,
+            let provider = match self.current_provider() {
+                Ok(provider) => provider,
+                Err(message) => {
+                    self.emit("error", json!({"message": message}));
+                    return (Err(message), None);
+                }
             };
-            let system_file = self.write_recall();
-            let plugin_dir = self.write_skills();
-            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model: self.meta.model.clone(), resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir };
+            // A provider chat gets nothing of the account's side of the app: no notes, no skills, no history search. What the
+            // account's chats know must not reach a third party, and what the third party writes must not reach them.
+            let (mcp_config, system_file, plugin_dir, env, pinned_url, model) = match &provider {
+                Some(provider) => {
+                    let config_dir = self.dir.join("chatcfg").join(&self.meta.sid);
+                    if let Err(error) = crate::private::create_dir(&self.dir.join("chatcfg")).and_then(|()| crate::private::create_dir(&config_dir)) {
+                        let message = format!("could not make this chat's own settings folder: {error}");
+                        self.emit("error", json!({"message": message}));
+                        return (Err(message), None);
+                    }
+                    let inherited: Vec<String> = std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()).collect();
+                    self.secret = provider.token.clone().filter(|token| token.len() >= 8);
+                    (None, None, None, crate::claude::env::plan(&inherited, Some(provider), &config_dir), Some(provider.base_url.clone()), self.meta.model.clone().or_else(|| provider.model.clone()))
+                }
+                None => {
+                    let mcp_config = match &self.mcp {
+                        Some(gate) => match gate.grant(&self.meta.sid) {
+                            Ok(path) => Some(path),
+                            Err(error) => {
+                                self.emit("error", json!({"message": format!("history search is off for this chat: {error:#}")}));
+                                None
+                            }
+                        },
+                        None => None,
+                    };
+                    let system_file = self.write_recall();
+                    let plugin_dir = self.write_skills();
+                    (mcp_config, system_file, plugin_dir, Default::default(), None, self.meta.model.clone())
+                }
+            };
+            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url };
             match ClaudeProcess::spawn(&opts) {
                 Ok((process, rx)) => {
                     self.process = Some(process);
@@ -483,7 +541,8 @@ impl Actor {
                 self.cancel_pending();
                 self.emit("claude", raw);
                 self.set_state(State::Idle);
-                if subtype == "success" {
+                // A provider chat is never read by auto-save or skill proposals: their runs go to the account.
+                if subtype == "success" && self.meta.provider.is_none() {
                     let turn = TurnEnd { sid: self.meta.sid.clone(), cwd: self.meta.cwd.to_string_lossy().into_owned() };
                     if let Some(turns) = &self.turns {
                         let _ = turns.send(turn.clone());
@@ -586,7 +645,7 @@ impl Actor {
         if lines.len() > 40 {
             lines.drain(..lines.len() - 40);
         }
-        ProposalInput { cwd: self.meta.cwd.to_string_lossy().into_owned(), user_texts: texts, tool_lines: lines, last_turn_tools: turn_tools, external_used: external, last_seq: self.seq }
+        ProposalInput { cwd: self.meta.cwd.to_string_lossy().into_owned(), user_texts: texts, tool_lines: lines, last_turn_tools: turn_tools, external_used: external, last_seq: self.seq, provider: self.meta.provider.is_some() }
     }
 
     fn raw_event(&mut self, raw: Value) {
@@ -613,5 +672,36 @@ impl Actor {
         let _ = std::fs::remove_dir_all(self.skills_path());
         self.process = None;
         self.set_state(State::Exited { code });
+    }
+}
+
+/// `secret` replaced by a marker in every string of `value`.
+fn redact(value: Value, secret: &str) -> Value {
+    match value {
+        Value::String(text) if text.contains(secret) => Value::String(text.replace(secret, "[provider key]")),
+        Value::Array(items) => Value::Array(items.into_iter().map(|v| redact(v, secret)).collect()),
+        Value::Object(map) => Value::Object(map.into_iter().map(|(k, v)| (k, redact(v, secret))).collect()),
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_key_is_replaced_in_every_string_however_deep_and_other_values_are_left_alone() {
+        let data = json!({"a": "x sk-secret-1234 y", "n": 5, "list": ["sk-secret-1234", {"deep": "no key here", "more": "sk-secret-1234sk-secret-1234"}], "ok": true});
+        let out = redact(data, "sk-secret-1234").to_string();
+        assert!(!out.contains("sk-secret-1234"), "{out}");
+        assert!(out.contains("[provider key]") && out.contains("no key here") && out.contains("\"n\":5"));
+    }
+
+    #[test]
+    fn a_chat_made_before_providers_existed_reads_as_a_normal_chat_and_a_normal_chat_writes_no_provider_field() {
+        let old = r#"{"sid":"a1","cwd":"/tmp","model":null,"claude_session_id":null,"title":"t","created":1}"#;
+        let meta: Meta = serde_json::from_str(old).unwrap();
+        assert!(meta.provider.is_none());
+        assert!(!serde_json::to_string(&meta).unwrap().contains("provider"));
     }
 }

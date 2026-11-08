@@ -107,3 +107,12 @@ test('a time of day and the weekdays go to the form and back unchanged', () => {
   assert.deepEqual(maskToDays(0b0000011), [true, true, false, false, false, false, false])
   assert.equal(daysToMask([true, true, true, true, true, false, false]), 31)
 })
+
+import { chatHost } from '../ui/util.js'
+
+test('a chat on another provider names the host its content goes to, and a chat on the account names none', () => {
+  assert.equal(chatHost({ sid: 'a', provider: { id: 'p', name: 'GW', host: 'gw.example.com:8443' } }), 'gw.example.com:8443')
+  assert.equal(chatHost({ sid: 'a' }), '')
+  assert.equal(chatHost({ sid: 'a', provider: { host: 5 } }), '')
+  assert.equal(chatHost(undefined), '')
+})

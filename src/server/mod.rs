@@ -4,6 +4,7 @@ pub mod auth;
 pub mod files;
 pub mod mcp_host;
 pub mod memory_ops;
+pub mod provider_ops;
 pub mod sched_ops;
 pub mod skill_ops;
 
@@ -250,7 +251,8 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
         "new" => {
             let cwd = op["cwd"].as_str().unwrap_or_default();
             let model = op["model"].as_str().map(str::to_owned);
-            match state.registry.create(cwd, model) {
+            let provider = op["provider"].as_str().filter(|id| !id.is_empty());
+            match state.registry.create(cwd, model, provider) {
                 Ok(handle) => {
                     let info = handle.info().await;
                     let _ = out.send(plain("created", Some(&handle.sid), serde_json::to_value(info).unwrap_or(Value::Null)));
@@ -334,6 +336,7 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
         other if other.starts_with("memory_") => memory_ops::handle(state, other, op, out),
         other if other.starts_with("skill_") => skill_ops::handle(state, other, op, out),
         other if other.starts_with("sched_") => sched_ops::handle(state, other, op, out),
+        other if other.starts_with("provider_") => provider_ops::handle(state, other, op, out),
         _ => fail("unknown op"),
     }
 }

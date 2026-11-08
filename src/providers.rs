@@ -1,0 +1,406 @@
+//! Model providers: other Anthropic-compatible endpoints a chat can be made against, kept in `<data>/providers.json` (0600).
+//!
+//! Only the person makes or changes them (WebSocket `provider_*` operations; no MCP tool). A token is never handed out again:
+//! the page gets `ProviderView` (`has_token`, the host), the chat's meta gets `ProviderRef` (id, name, host), and nothing here
+//! prints a token in an error message or in `Debug`.
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use serde::{Deserialize, Serialize};
+
+pub const MAX_PROVIDERS: usize = 20;
+const MAX_TOKEN: usize = 4096;
+const MAX_URL: usize = 300;
+
+/// How the token is presented to the endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Auth {
+    /// `Authorization: Bearer <token>` (ANTHROPIC_AUTH_TOKEN): gateways and proxies.
+    #[default]
+    Bearer,
+    /// `x-api-key: <token>` (ANTHROPIC_API_KEY): an Anthropic-style API key.
+    XApiKey,
+}
+
+impl Auth {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "bearer" => Some(Self::Bearer),
+            "x_api_key" => Some(Self::XApiKey),
+            _ => None,
+        }
+    }
+}
+
+/// Names the endpoint's own models are given under (the three tiers Claude Code asks for by family).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Aliases {
+    #[serde(default)]
+    pub opus: Option<String>,
+    #[serde(default)]
+    pub sonnet: Option<String>,
+    #[serde(default)]
+    pub haiku: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Provider {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub auth: Auth,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub models: Aliases,
+    #[serde(default)]
+    pub created: u64,
+    #[serde(default)]
+    pub updated: u64,
+}
+
+impl std::fmt::Debug for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Provider").field("id", &self.id).field("name", &self.name).field("host", &host_of(&self.base_url)).field("token", &self.token.as_ref().map(|_| "[hidden]")).finish()
+    }
+}
+
+/// What the page reads: never the token.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderView {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub host: String,
+    pub auth: Auth,
+    pub has_token: bool,
+    pub model: Option<String>,
+    pub models: Aliases,
+}
+
+/// What a chat remembers of its provider (no token, no full address).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderRef {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+}
+
+impl Provider {
+    pub fn view(&self) -> ProviderView {
+        ProviderView { id: self.id.clone(), name: self.name.clone(), base_url: self.base_url.clone(), host: host_of(&self.base_url), auth: self.auth, has_token: self.token.is_some(), model: self.model.clone(), models: self.models.clone() }
+    }
+
+    pub fn reference(&self) -> ProviderRef {
+        ProviderRef { id: self.id.clone(), name: self.name.clone(), host: host_of(&self.base_url) }
+    }
+}
+
+/// `host[:port]` of an address that passed `validate_base_url`.
+pub fn host_of(base_url: &str) -> String {
+    let rest = base_url.split_once("://").map(|(_, r)| r).unwrap_or(base_url);
+    rest.split('/').next().unwrap_or_default().to_owned()
+}
+
+/// Checks and normalises an address; returns it without a trailing slash. The error never repeats the input.
+///
+/// `https` anywhere; plain `http` only to this machine (a local gateway). No user name, query or fragment: the address is put
+/// into a settings flag and an environment variable, and the person is shown its host.
+pub fn validate_base_url(text: &str) -> Result<String, &'static str> {
+    let text = text.trim();
+    if text.is_empty() || text.len() > MAX_URL {
+        return Err("the address is empty or too long");
+    }
+    if text.chars().any(|c| c.is_control() || c.is_whitespace() || "@?#\\\"'`<>{}|^".contains(c)) {
+        return Err("the address holds a character that is not allowed");
+    }
+    let (scheme, rest) = text.split_once("://").ok_or("the address must start with https://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    let (host, port) = if let Some(inner) = authority.strip_prefix('[') {
+        let (h, after) = inner.split_once(']').ok_or("the host is not valid")?;
+        (format!("[{h}]"), after.strip_prefix(':'))
+    } else {
+        match authority.split_once(':') {
+            Some((h, p)) => (h.to_owned(), Some(p)),
+            None => (authority.to_owned(), None),
+        }
+    };
+    let host = host.to_ascii_lowercase();
+    let host_ok = host == "[::1]" || (!host.is_empty() && host.len() <= 253 && host.split('.').all(|label| !label.is_empty() && label.len() <= 63 && !label.starts_with('-') && !label.ends_with('-') && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')));
+    if !host_ok {
+        return Err("the host is not valid");
+    }
+    if let Some(port) = port {
+        if port.is_empty() || port.len() > 5 || !port.chars().all(|c| c.is_ascii_digit()) || port.parse::<u32>().map_or(true, |p| p == 0 || p > 65535) {
+            return Err("the port is not valid");
+        }
+    }
+    let local = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]");
+    match scheme.as_str() {
+        "https" => {}
+        "http" if local => {}
+        "http" => return Err("an address outside this machine must use https://"),
+        _ => return Err("the address must start with https://"),
+    }
+    if !path.chars().all(|c| c.is_ascii_alphanumeric() || "-._~/".contains(c)) || path.contains("//") || path.split('/').any(|s| s == "..") {
+        return Err("the path of the address is not valid");
+    }
+    let authority = match port {
+        Some(p) => format!("{host}:{p}"),
+        None => host,
+    };
+    Ok(format!("{scheme}://{authority}{}", path.trim_end_matches('/')))
+}
+
+pub fn validate_name(text: &str) -> Result<String, &'static str> {
+    let name = text.trim();
+    if name.is_empty() || name.chars().count() > 40 || name.chars().any(|c| c.is_control()) {
+        return Err("the name must be 1 to 40 characters");
+    }
+    Ok(name.to_owned())
+}
+
+pub fn validate_token(text: &str) -> Result<String, &'static str> {
+    let token = text.trim();
+    if token.is_empty() || token.len() > MAX_TOKEN || !token.chars().all(|c| c.is_ascii_graphic()) {
+        return Err("the key is empty, too long, or holds a space or a character that is not plain text");
+    }
+    Ok(token.to_owned())
+}
+
+/// A model name as Claude Code takes it (the same characters a chat's own model may use).
+pub fn validate_model(text: &str) -> Result<Option<String>, &'static str> {
+    let model = text.trim();
+    if model.is_empty() {
+        return Ok(None);
+    }
+    if model.len() > 100 || model.starts_with('-') || !model.chars().all(|c| c.is_ascii_alphanumeric() || "-_.:/[]".contains(c)) {
+        return Err("a model name holds a character that is not allowed");
+    }
+    Ok(Some(model.to_owned()))
+}
+
+/// What the person typed in the form.
+#[derive(Debug, Default)]
+pub struct Form {
+    pub id: Option<String>,
+    pub name: String,
+    pub base_url: String,
+    pub auth: Auth,
+    /// None keeps the key already saved.
+    pub token: Option<String>,
+    pub clear_token: bool,
+    pub model: String,
+    pub models: [String; 3],
+}
+
+pub struct ProviderStore {
+    path: PathBuf,
+    inner: Mutex<Vec<Provider>>,
+}
+
+impl ProviderStore {
+    /// An unreadable file opens as an empty list and is left where it is (never overwritten by opening); the notice says so.
+    pub fn open(path: PathBuf) -> (Self, Option<String>) {
+        let (list, notice) = match std::fs::read_to_string(&path) {
+            Ok(text) => match serde_json::from_str::<File>(&text) {
+                Ok(file) => (file.providers, None),
+                Err(_) => (Vec::new(), Some("providers.json could not be read; no provider is available until it is fixed or removed".to_owned())),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (Vec::new(), None),
+            Err(_) => (Vec::new(), Some("providers.json could not be read".to_owned())),
+        };
+        (Self { path, inner: Mutex::new(list) }, notice)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Provider>> {
+        self.inner.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub fn list_views(&self) -> Vec<ProviderView> {
+        self.lock().iter().map(Provider::view).collect()
+    }
+
+    pub fn get(&self, id: &str) -> Option<Provider> {
+        self.lock().iter().find(|p| p.id == id).cloned()
+    }
+
+    fn write(&self, list: &[Provider]) -> Result<(), String> {
+        let text = serde_json::to_string_pretty(&File { v: 1, providers: list.to_vec() }).map_err(|e| e.to_string())?;
+        crate::private::write(&self.path, &text).map_err(|e| format!("could not save: {e}"))
+    }
+
+    /// Makes a provider, or changes the one named by `form.id`. Returns its id.
+    pub fn save(&self, form: Form, now: u64) -> Result<String, String> {
+        let name = validate_name(&form.name)?;
+        let base_url = validate_base_url(&form.base_url)?;
+        let model = validate_model(&form.model)?;
+        let models = Aliases { opus: validate_model(&form.models[0])?, sonnet: validate_model(&form.models[1])?, haiku: validate_model(&form.models[2])? };
+        let mut list = self.lock();
+        let existing = match &form.id {
+            Some(id) => Some(list.iter().position(|p| &p.id == id).ok_or("that provider is gone")?),
+            None => None,
+        };
+        let token = match (&form.token, form.clear_token) {
+            (Some(text), _) => Some(validate_token(text)?),
+            (None, true) => None,
+            (None, false) => existing.and_then(|i| list[i].token.clone()),
+        };
+        if form.auth == Auth::XApiKey && token.is_none() {
+            return Err("an API key address needs the key".into());
+        }
+        if list.iter().enumerate().any(|(i, p)| p.name == name && Some(i) != existing) {
+            return Err("another provider has this name".into());
+        }
+        let id = match existing {
+            Some(i) => {
+                let p = &mut list[i];
+                (p.name, p.base_url, p.auth, p.token, p.model, p.models, p.updated) = (name, base_url, form.auth, token, model, models, now);
+                p.id.clone()
+            }
+            None => {
+                if list.len() >= MAX_PROVIDERS {
+                    return Err("there are too many providers".into());
+                }
+                let id = crate::random_hex(6);
+                list.push(Provider { id: id.clone(), name, base_url, auth: form.auth, token, model, models, created: now, updated: now });
+                id
+            }
+        };
+        self.write(&list)?;
+        Ok(id)
+    }
+
+    pub fn delete(&self, id: &str) -> bool {
+        let mut list = self.lock();
+        let before = list.len();
+        list.retain(|p| p.id != id);
+        let removed = list.len() != before;
+        if removed {
+            let _ = self.write(&list);
+        }
+        removed
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct File {
+    #[serde(default)]
+    v: u8,
+    #[serde(default)]
+    providers: Vec<Provider>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn form(name: &str) -> Form {
+        Form { name: name.into(), base_url: "https://gateway.example.com/anthropic/".into(), token: Some("sk-secret-1234".into()), ..Default::default() }
+    }
+
+    #[test]
+    fn addresses_are_checked_and_normalised() {
+        for (given, wanted) in [
+            ("https://gateway.example.com", "https://gateway.example.com"),
+            ("HTTPS://Gateway.Example.com/anthropic/", "https://gateway.example.com/anthropic"),
+            ("https://example.com:8443/a/b", "https://example.com:8443/a/b"),
+            ("http://127.0.0.1:8080", "http://127.0.0.1:8080"),
+            ("http://localhost:11434/", "http://localhost:11434"),
+            ("http://[::1]:9000", "http://[::1]:9000"),
+        ] {
+            assert_eq!(validate_base_url(given).as_deref(), Ok(wanted), "{given}");
+        }
+        for bad in [
+            "",
+            "example.com",
+            "http://example.com",
+            "http://192.168.0.5:8080",
+            "ftp://example.com",
+            "https://user@example.com",
+            "https://user:pw@example.com",
+            "https://example.com?x=1",
+            "https://example.com/#frag",
+            "https://exa mple.com",
+            "https://example.com:0",
+            "https://example.com:99999",
+            "https://example.com:",
+            "https://",
+            "https://-.example.com",
+            "https://example..com",
+            "https://example.com/a/../b",
+            "https://example.com//x",
+            "https://example.com/\"quote",
+            "https://exa\nmple.com",
+            &format!("https://example.com/{}", "a".repeat(300)),
+        ] {
+            assert!(validate_base_url(bad).is_err(), "{bad:?} must be refused");
+        }
+        let error = validate_base_url("https://user:hunter2@example.com").unwrap_err();
+        assert!(!error.contains("hunter2"), "an error never repeats what was typed");
+    }
+
+    #[test]
+    fn the_view_the_reference_and_debug_never_hold_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, notice) = ProviderStore::open(dir.path().join("providers.json"));
+        assert!(notice.is_none());
+        let id = store.save(form("Gateway"), 5).unwrap();
+        let provider = store.get(&id).unwrap();
+        for text in [serde_json::to_string(&provider.view()).unwrap(), serde_json::to_string(&provider.reference()).unwrap(), format!("{provider:?}"), serde_json::to_string(&store.list_views()).unwrap()] {
+            assert!(!text.contains("sk-secret-1234"), "{text}");
+        }
+        assert!(provider.view().has_token);
+        assert_eq!(provider.reference().host, "gateway.example.com");
+    }
+
+    #[test]
+    fn saving_keeps_or_clears_the_key_and_the_file_is_private_and_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.json");
+        let (store, _) = ProviderStore::open(path.clone());
+        let id = store.save(form("Gateway"), 1).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+
+        store.save(Form { id: Some(id.clone()), name: "Gateway 2".into(), base_url: "https://gateway.example.com".into(), ..Default::default() }, 2).unwrap();
+        assert_eq!(store.get(&id).unwrap().token.as_deref(), Some("sk-secret-1234"), "no new key typed: the old one stays");
+        store.save(Form { id: Some(id.clone()), name: "Gateway 2".into(), base_url: "https://gateway.example.com".into(), token: None, clear_token: true, ..Default::default() }, 3).unwrap();
+        assert_eq!(store.get(&id).unwrap().token, None);
+
+        let (again, _) = ProviderStore::open(path);
+        assert_eq!(again.get(&id).unwrap().name, "Gateway 2");
+        assert_eq!(again.get(&id).unwrap().updated, 3);
+        assert!(again.delete(&id));
+        assert!(!again.delete(&id));
+    }
+
+    #[test]
+    fn bad_forms_are_refused_and_a_broken_file_is_not_overwritten_by_opening() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.json");
+        let (store, _) = ProviderStore::open(path.clone());
+        store.save(form("A"), 1).unwrap();
+        assert!(store.save(form("A"), 1).is_err(), "names are unique");
+        assert!(store.save(Form { auth: Auth::XApiKey, token: None, ..form("B") }, 1).is_err(), "an API key address needs the key");
+        assert!(store.save(Form { token: Some("has space".into()), ..form("C") }, 1).is_err());
+        assert!(store.save(Form { model: "--flag".into(), ..form("D") }, 1).is_err());
+        assert!(store.save(Form { models: ["".into(), "bad name".into(), "".into()], ..form("E") }, 1).is_err());
+        assert!(store.save(Form { base_url: "http://example.com".into(), ..form("F") }, 1).is_err());
+        assert!(store.save(Form { id: Some("nope".into()), ..form("G") }, 1).is_err());
+        assert_eq!(store.list_views().len(), 1, "nothing was made by the refused forms");
+
+        std::fs::write(&path, "not json").unwrap();
+        let (broken, notice) = ProviderStore::open(path.clone());
+        assert!(notice.is_some() && broken.list_views().is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json", "opening leaves the file as it is");
+    }
+}

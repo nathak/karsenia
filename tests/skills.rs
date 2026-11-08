@@ -107,7 +107,7 @@ fn project(fx: &Fx, name: &str) -> PathBuf {
 async fn the_proposer_reads_the_persons_words_and_the_commands_that_worked_and_nothing_else() {
     let fx = fixture(WORK, quick()).await;
     let folder = project(&fx, "a");
-    let session = fx.server.registry.create(folder.to_str().unwrap(), None).unwrap();
+    let session = fx.server.registry.create(folder.to_str().unwrap(), None, None).unwrap();
     turn(&session, "please run the release checklist for this project").await;
 
     let ctx = fx.server.registry.propose_ctx().unwrap();
@@ -140,13 +140,13 @@ async fn an_approved_skill_reaches_the_next_chat_through_a_private_folder_that_g
     let store = fx.server.registry.skills().unwrap();
     let ctx = fx.server.registry.propose_ctx().unwrap();
 
-    let first = fx.server.registry.create(&cwd, None).unwrap();
+    let first = fx.server.registry.create(&cwd, None, None).unwrap();
     turn(&first, "run the release checklist").await;
     let proposal = ctx.manual(&first, None, None, "project").await.unwrap();
     let skill = store.approve(proposal.id, Default::default(), false).unwrap();
     assert!(!log_text(&fx).contains("--plugin-dir"), "a chat that was already running is not changed");
 
-    let second = fx.server.registry.create(&cwd, None).unwrap();
+    let second = fx.server.registry.create(&cwd, None, None).unwrap();
     let (_, mut rx) = second.subscribe(0).await.unwrap();
     second.send("hello".into(), vec![]).await.unwrap();
     let given = loop {
@@ -173,7 +173,7 @@ async fn an_approved_skill_reaches_the_next_chat_through_a_private_folder_that_g
 
     // Disabled, it is not given to the next chat at all.
     assert!(store.set_enabled(skill.id, false));
-    let third = fx.server.registry.create(&cwd, None).unwrap();
+    let third = fx.server.registry.create(&cwd, None, None).unwrap();
     turn(&third, "hello again").await;
     assert_eq!(log_text(&fx).lines().filter(|l| l.starts_with("ARGV") && l.contains("--plugin-dir")).count(), 1, "no new --plugin-dir for a disabled skill");
 }
@@ -184,12 +184,12 @@ async fn using_a_skill_is_noted() {
     let folder = project(&fx, "a");
     let store = fx.server.registry.skills().unwrap();
     let ctx = fx.server.registry.propose_ctx().unwrap();
-    let chat = fx.server.registry.create(&folder.to_string_lossy(), None).unwrap();
+    let chat = fx.server.registry.create(&folder.to_string_lossy(), None, None).unwrap();
     turn(&chat, "run the release checklist").await;
     let proposal = ctx.manual(&chat, None, None, "project").await.unwrap();
     store.approve(proposal.id, Default::default(), false).unwrap();
     assert!(store.overview().active[0].last_used.is_none());
-    let next = fx.server.registry.create(&folder.to_string_lossy(), None).unwrap();
+    let next = fx.server.registry.create(&folder.to_string_lossy(), None, None).unwrap();
     turn(&next, "go").await;
     wait_for("the use to be noted", || store.overview().active[0].last_used.is_some()).await;
 }
@@ -199,7 +199,7 @@ async fn automatic_proposals_are_off_by_default_and_need_a_long_turn_without_out
     let fx = fixture(&work_turns(3), quick()).await;
     let folder = project(&fx, "a");
     let store = fx.server.registry.skills().unwrap();
-    let chat = fx.server.registry.create(&folder.to_string_lossy(), None).unwrap();
+    let chat = fx.server.registry.create(&folder.to_string_lossy(), None, None).unwrap();
     turn(&chat, "run the release checklist").await;
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert!(!log_text(&fx).contains("PROPOSE_IN"), "off by default: no run, no cost");
@@ -227,7 +227,7 @@ async fn no_proposal_after(outside: &str, switched_on_after_it: bool) {
     let tools = r#"{"type":"assistant","parent_tool_use_id":null,"message":{"id":"a2","content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"make one"}},{"type":"tool_use","id":"b2","name":"Bash","input":{"command":"make two"}},{"type":"tool_use","id":"b3","name":"Bash","input":{"command":"make three"}}]}}"#;
     let scenario = format!("{{\"$wait\":\"user\"}}\n{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"K9\"}}\n{outside}\n{result}\n{{\"$wait\":\"user\"}}\n{tools}\n{result}\n{{\"$wait\":\"user\"}}\n", result = r#"{"type":"result","subtype":"success","is_error":false}"#);
     let fx = fixture(&scenario, quick()).await;
-    let chat = fx.server.registry.create(&project(&fx, "a").to_string_lossy(), None).unwrap();
+    let chat = fx.server.registry.create(&project(&fx, "a").to_string_lossy(), None, None).unwrap();
     if !switched_on_after_it {
         fx.server.registry.settings().update(|s| s.skills_auto = true);
     }
@@ -262,7 +262,7 @@ async fn a_chat_that_fetched_outside_text_gets_no_automatic_proposal() {
     let fx = fixture(WEB, quick()).await;
     fx.server.registry.settings().update(|s| s.skills_auto = true);
     let folder = project(&fx, "a");
-    let chat = fx.server.registry.create(&folder.to_string_lossy(), None).unwrap();
+    let chat = fx.server.registry.create(&folder.to_string_lossy(), None, None).unwrap();
     turn(&chat, "fetch the page and build").await;
     tokio::time::sleep(Duration::from_millis(700)).await;
     assert!(!log_text(&fx).contains("PROPOSE_IN"), "a web tool was used: third-party text may have shaped the turn");

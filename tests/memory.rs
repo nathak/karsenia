@@ -141,7 +141,7 @@ fn is_error(reply: &Value) -> bool {
 #[tokio::test]
 async fn a_saved_note_is_active_only_when_the_person_approved_that_exact_text() {
     let fx = fixture(CHAT, EXTRACTED, quick()).await;
-    let session = fx.server.registry.create(project(&fx, "a").to_str().unwrap(), None).unwrap();
+    let session = fx.server.registry.create(project(&fx, "a").to_str().unwrap(), None, None).unwrap();
     turn(&session, "hello").await;
     let store = fx.server.registry.memory().unwrap();
     let mut mcp = Mcp::for_chat(&fx, &session.sid).await;
@@ -184,7 +184,7 @@ async fn session_cwd(session: &SessionHandle) -> String {
 #[tokio::test]
 async fn saves_are_checked_rate_limited_and_search_sees_this_project_and_the_user_only() {
     let fx = fixture(CHAT, EXTRACTED, quick()).await;
-    let session = fx.server.registry.create(project(&fx, "a").to_str().unwrap(), None).unwrap();
+    let session = fx.server.registry.create(project(&fx, "a").to_str().unwrap(), None, None).unwrap();
     turn(&session, "hello").await;
     let store = fx.server.registry.memory().unwrap();
     let cwd = session_cwd(&session).await;
@@ -234,7 +234,7 @@ async fn the_chat_wide_allow_covers_read_only_tools_and_never_the_save_tool() {
 {"$wait":"user"}
 "#;
     let fx = fixture(scenario, EXTRACTED, quick()).await;
-    let session = fx.server.registry.create(project(&fx, "a").to_str().unwrap(), None).unwrap();
+    let session = fx.server.registry.create(project(&fx, "a").to_str().unwrap(), None, None).unwrap();
     let (_, mut rx) = session.subscribe(0).await.unwrap();
     session.send("go".into(), vec![]).await.unwrap();
     loop {
@@ -274,7 +274,7 @@ async fn a_new_chat_gets_the_notes_through_a_private_file_and_not_through_argv()
     note("project", Some(&cwd), "SECRETNOTE still waiting", "pending");
     note("project", Some("/elsewhere"), "SECRETNOTE other folder", "active");
 
-    let session = fx.server.registry.create(folder.to_str().unwrap(), None).unwrap();
+    let session = fx.server.registry.create(folder.to_str().unwrap(), None, None).unwrap();
     let (_, mut rx) = session.subscribe(0).await.unwrap();
     session.send("hello".into(), vec![]).await.unwrap();
     let used = loop {
@@ -310,7 +310,7 @@ async fn auto_save_reads_only_the_persons_messages_and_saves_by_the_setting() {
     fx.server.registry.settings().update(|s| s.memory_auto = Auto::Project);
     let mut heard = fx.server.registry.events.subscribe();
     let folder = project(&fx, "a");
-    let session = fx.server.registry.create(folder.to_str().unwrap(), None).unwrap();
+    let session = fx.server.registry.create(folder.to_str().unwrap(), None, None).unwrap();
     turn(&session, "I use pnpm in this project").await;
 
     wait_for("the extraction run", || log_text(&fx).contains("EXTRACT_IN")).await;
@@ -350,7 +350,7 @@ async fn auto_save_reads_only_the_persons_messages_and_saves_by_the_setting() {
 async fn with_auto_save_off_nothing_is_read_and_a_bad_answer_discards_the_run() {
     let fx = fixture(CHAT, EXTRACTED, quick()).await;
     let folder = project(&fx, "a");
-    let session = fx.server.registry.create(folder.to_str().unwrap(), None).unwrap();
+    let session = fx.server.registry.create(folder.to_str().unwrap(), None, None).unwrap();
     turn(&session, "I use pnpm in this project").await;
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert!(!log_text(&fx).contains("EXTRACT_IN"), "off means no run, and no cost");
@@ -372,7 +372,7 @@ async fn with_auto_save_off_nothing_is_read_and_a_bad_answer_discards_the_run() 
 async fn messages_with_secrets_or_pasted_code_are_never_sent_to_the_extractor() {
     let fx = fixture(CHAT, EXTRACTED, quick()).await;
     fx.server.registry.settings().update(|s| s.memory_auto = Auto::Project);
-    let session = fx.server.registry.create(project(&fx, "a").to_str().unwrap(), None).unwrap();
+    let session = fx.server.registry.create(project(&fx, "a").to_str().unwrap(), None, None).unwrap();
     turn(&session, "my key is sk-ant-api03-SECRETVALUE and I use pnpm").await;
     tokio::time::sleep(Duration::from_millis(700)).await;
     assert!(!log_text(&fx).contains("EXTRACT_IN"), "a message with a secret is not read, and with nothing else to read there is no run");
@@ -383,7 +383,7 @@ async fn a_note_about_the_person_that_auto_save_found_waits_for_a_click() {
     let fx = fixture(CHAT, EXTRACTED, quick()).await;
     fx.server.registry.settings().update(|s| s.memory_auto = Auto::ProjectUser);
     let folder = project(&fx, "a");
-    let session = fx.server.registry.create(folder.to_str().unwrap(), None).unwrap();
+    let session = fx.server.registry.create(folder.to_str().unwrap(), None, None).unwrap();
     turn(&session, "I use pnpm and I prefer Korean replies").await;
     let store = fx.server.registry.memory().unwrap();
     wait_for("the notes", || store.counts().0 + store.counts().1 >= 3).await;

@@ -9,6 +9,7 @@ use crate::index::Index;
 use crate::mcp::McpGate;
 use crate::memory::MemoryStore;
 use crate::propose::{spawn_worker, ProposeConfig, ProposeCtx};
+use crate::providers::ProviderStore;
 use crate::sched_store::SchedStore;
 use crate::schedule::SystemClock;
 use crate::scheduler::{SchedConfig, Scheduler};
@@ -36,6 +37,9 @@ pub struct Registry {
     /// Set when the schedule file could not be read and was set aside.
     pub sched_notice: Option<String>,
     sched: Option<(Arc<SchedStore>, Arc<Scheduler>)>,
+    providers: Arc<ProviderStore>,
+    /// Set when the providers file could not be read.
+    pub providers_notice: Option<String>,
     sessions: Arc<Mutex<HashMap<String, SessionHandle>>>,
 }
 
@@ -124,7 +128,8 @@ impl Registry {
                 (None, Some(format!("scheduled tasks are off: {error:#}")))
             }
         };
-        let registry = Self { dir: dir.clone(), bin, index, gate, memory, settings, events, turns, skills, propose_ctx, skill_turns, skills_notice, memory_notice, sched_notice, sched, sessions };
+        let (providers, providers_notice) = ProviderStore::open(dir.join("providers.json"));
+        let registry = Self { dir: dir.clone(), bin, index, gate, memory, settings, events, turns, skills, propose_ctx, skill_turns, skills_notice, memory_notice, sched_notice, sched, providers: Arc::new(providers), providers_notice, sessions };
         for entry in std::fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
@@ -135,11 +140,12 @@ impl Registry {
                 continue;
             }
             let log = read_log(&session::log_path(&dir, sid));
-            // The index is brought up to date before the session can emit anything of its own.
-            if let Some(index) = &registry.index {
+            let meta_has_no_provider = meta.provider.is_none();
+            // The index is brought up to date before the session can emit anything of its own. A provider chat is not in it.
+            if let (Some(index), None) = (&registry.index, &meta.provider) {
                 index.catch_up(sid, &meta.cwd.to_string_lossy(), meta.created, log.clone());
             }
-            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log, index: registry.index.clone(), mcp: registry.gate.clone(), memory: registry.memory.clone(), turns: registry.turns.clone(), skills: registry.skills.clone(), skill_turns: registry.skill_turns.clone() });
+            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log, index: registry.index.clone().filter(|_| meta_has_no_provider), mcp: registry.gate.clone(), memory: registry.memory.clone(), turns: registry.turns.clone(), skills: registry.skills.clone(), skill_turns: registry.skill_turns.clone(), providers: Some(registry.providers.clone()) });
             registry.sessions.lock().expect("registry lock").insert(sid.to_owned(), handle);
         }
         if let Some(index) = &registry.index {
@@ -150,7 +156,7 @@ impl Registry {
     }
 
     /// A new session in `cwd`; the folder must exist and must not be `/` or the home folder itself.
-    pub fn create(&self, cwd: &str, model: Option<String>) -> Result<SessionHandle, String> {
+    pub fn create(&self, cwd: &str, model: Option<String>, provider: Option<&str>) -> Result<SessionHandle, String> {
         let path = Path::new(cwd);
         if !path.is_absolute() {
             return Err("the folder must be an absolute path".into());
@@ -160,10 +166,17 @@ impl Registry {
         }
         let real = path.canonicalize().map_err(|e| e.to_string())?;
         let model = model.filter(|m| !m.trim().is_empty() && m.len() <= 100 && m.chars().all(|c| c.is_ascii_alphanumeric() || "-_.:/[]".contains(c)));
-        let meta = session::new_meta(real, model);
+        // A chat is bound to its provider here and never changes it. It is kept out of the history index: that index is read by the
+        // account's chats (search_history), and what a third party's endpoint wrote must not be carried over to them.
+        let bound = match provider.filter(|id| !id.is_empty()) {
+            Some(id) => Some(self.providers.get(id).ok_or("no such provider")?.reference()),
+            None => None,
+        };
+        let meta = session::new_meta(real, model, bound);
+        let meta_is_normal = meta.provider.is_none();
         let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
         crate::private::write(&session::meta_path(&self.dir, &meta.sid), &text).map_err(|e| e.to_string())?;
-        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), index: self.index.clone(), mcp: self.gate.clone(), memory: self.memory.clone(), turns: self.turns.clone(), skills: self.skills.clone(), skill_turns: self.skill_turns.clone() });
+        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), index: self.index.clone().filter(|_| meta_is_normal), mcp: self.gate.clone(), memory: self.memory.clone(), turns: self.turns.clone(), skills: self.skills.clone(), skill_turns: self.skill_turns.clone(), providers: Some(self.providers.clone()) });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok(handle)
     }
@@ -176,6 +189,10 @@ impl Registry {
         if let Some((_, scheduler)) = &self.sched {
             scheduler.kill_all();
         }
+    }
+
+    pub fn providers(&self) -> Arc<ProviderStore> {
+        self.providers.clone()
     }
 
     pub fn dir(&self) -> &Path {

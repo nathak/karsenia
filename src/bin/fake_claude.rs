@@ -4,6 +4,7 @@
 //!   {"$wait":"user"|"control_response"|"interrupt"}  read stdin until such a line arrives
 //!   {"$sleep":ms}                                    wait
 //!   {"$exit":code}                                   end the process
+//! FAKE_ENV_LOG: one JSON line per start, `{"argv": [...], "env": {...}}`, with the variables a credential could ride in (test values only).
 //! FAKE_LOG: every argument line (`ARGV ...`) and every stdin line (`IN ...`) is appended here as it arrives.
 use std::fs::OpenOptions;
 use std::io::{BufRead, Write};
@@ -15,6 +16,18 @@ fn log(path: &Option<String>, text: &str) {
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
             let _ = writeln!(file, "{text}");
         }
+    }
+}
+
+fn log_env(path: &Option<String>) {
+    let Some(path) = path else { return };
+    let env: serde_json::Map<String, serde_json::Value> = std::env::vars()
+        .filter(|(k, _)| ["ANTHROPIC_", "CLAUDE_", "AWS_BEARER", "SWB_MCP_"].iter().any(|p| k.starts_with(p)))
+        .map(|(k, v)| (k, serde_json::Value::String(v)))
+        .collect();
+    let line = serde_json::json!({"argv": std::env::args().skip(1).collect::<Vec<_>>(), "env": env, "cwd": std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default()});
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{line}");
     }
 }
 
@@ -36,6 +49,7 @@ fn matches(line: &str, wanted: &str) -> bool {
 fn main() {
     let log_path = std::env::var("FAKE_LOG").ok();
     log(&log_path, &format!("ARGV {}", std::env::args().skip(1).collect::<Vec<_>>().join(" ")));
+    log_env(&std::env::var("FAKE_ENV_LOG").ok());
 
     // A scheduled run (--max-turns with --output-format json): the prompt on stdin, one JSON result out.
     //   FAKE_SCHED: a file holding the result line to print; FAKE_SCHED_SLEEP_MS: wait first; FAKE_SCHED_EXIT: exit with this code instead.

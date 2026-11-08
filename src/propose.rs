@@ -165,6 +165,9 @@ impl ProposeCtx {
             return Err("today's limit of proposals is used up".into());
         }
         let input = handle.proposal_input(0).await.ok_or("the chat is gone")?;
+        if input.provider {
+            return Err("a chat that runs on another provider is not read for proposals: the proposal run goes to your Claude account".into());
+        }
         let texts = usable_texts(&input.user_texts);
         if input.tool_lines.is_empty() && hint.as_deref().map(str::trim).unwrap_or_default().is_empty() {
             return Err("there is nothing to learn from yet: no command has succeeded in this chat, and no hint was given".into());
@@ -197,6 +200,9 @@ impl ProposeCtx {
         }
         let Some(handle) = self.sessions.lock().ok().and_then(|s| s.get(sid).cloned()) else { return };
         let Some(input) = handle.proposal_input(settings.skills_auto_since).await else { return };
+        if input.provider {
+            return;
+        }
         // Third-party text reached this chat (a web page, an external tool): no automatic skill from it.
         if input.last_turn_tools < self.config.min_tools || input.external_used || input.tool_lines.is_empty() {
             return;

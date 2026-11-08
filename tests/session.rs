@@ -42,7 +42,7 @@ fn fixture(scenario: &str) -> Fx {
 
 impl Fx {
     fn session(&self) -> SessionHandle {
-        self.registry.create(self.project.to_str().unwrap(), Some("haiku".into())).unwrap()
+        self.registry.create(self.project.to_str().unwrap(), Some("haiku".into()), None).unwrap()
     }
 
     fn log_text(&self) -> String {
@@ -219,9 +219,9 @@ async fn images_are_checked_and_the_log_is_replayed_after_a_restart() {
 #[tokio::test]
 async fn a_folder_that_is_not_safe_is_refused() {
     let fx = fixture("");
-    assert!(fx.registry.create("/", None).is_err());
-    assert!(fx.registry.create("relative/dir", None).is_err());
-    assert!(fx.registry.create("/no/such/dir/at/all", None).is_err());
+    assert!(fx.registry.create("/", None, None).is_err());
+    assert!(fx.registry.create("relative/dir", None, None).is_err());
+    assert!(fx.registry.create("/no/such/dir/at/all", None, None).is_err());
 }
 
 #[tokio::test]

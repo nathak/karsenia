@@ -152,3 +152,10 @@ dialog .sugg { font-size: 13px; color: var(--muted); }
 .tag.good { color: var(--accent); border-color: var(--accent); }
 #sc-run-body .md { max-height: 50vh; overflow: auto; }
 #sc-run-body .warnline { border: 1px solid var(--danger); border-radius: 8px; padding: 6px 8px; font-size: 13px; margin: 6px 0; }
+
+#prov-form label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+#prov-form label.inline { flex-direction: row; }
+#prov-box { margin-top: 10px; }
+#prov-box > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+#prov-banner { margin: 6px 12px 0; border-color: var(--warn, var(--accent)); }
+.sess .d .via { font-weight: 600; }

@@ -151,3 +151,9 @@ export function parseHHMM(text) {
 /** A weekday mask (bit 0 Monday .. bit 6 Sunday) as seven booleans, and back. */
 export const maskToDays = mask => [0, 1, 2, 3, 4, 5, 6].map(i => (mask & (1 << i)) !== 0)
 export const daysToMask = days => days.reduce((mask, on, i) => (on ? mask | (1 << i) : mask), 0)
+
+/** The host a chat's whole content is sent to, or '' for a chat on the Claude account. */
+export function chatHost(session) {
+  const host = session && session.provider && session.provider.host
+  return typeof host === 'string' ? host : ''
+}

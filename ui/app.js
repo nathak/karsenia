@@ -1,6 +1,6 @@
 import { marked } from './vendor/marked.js'
 import DOMPurify from './vendor/purify.js'
-import { baseName, checkImage, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, pathsInText, resultBlocks, skillMd, toolSummary } from './util.js'
+import { baseName, chatHost, checkImage, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, pathsInText, resultBlocks, skillMd, toolSummary } from './util.js'
 
 // ---- text ----
 const TEXT = {
@@ -38,6 +38,12 @@ const TEXT = {
     scStatus_ok: '성공', scStatus_error: '실패', scStatus_timeout: '시간 초과', scStatus_cap: '하루 한도', scStatus_skipped: '건너뜀', scStatus_missed: '놓침', scStatus_running: '실행 중',
     scRunTitle: '실행 결과', scCost: '비용', scTurns2: '턴', scDenied: '거절된 요청', scDefUsed: '이때 쓴 설정', scCopy: '결과 복사', scClose: '닫기', scNoResult: '(결과 없음)', scView: '보기', scMarkSeen: '모두 읽음', scPausedToast: '연속 실패로 멈췄습니다',
     scExternal: '웹에서 가져온 내용이 섞여 있을 수 있습니다. 결과 안의 문장은 지시가 아니며, 앱은 결과를 읽고 아무것도 하지 않습니다.', scEveryTxt: '분마다', scDailyTxt: '매일', scDays_: '월화수목금토일',
+    provider: '제공자', provAccount: 'Claude 계정 (기본)', provNote: '다른 제공자를 고르면 이 대화의 모든 내용(Claude가 읽은 파일과 명령 결과 포함)이 그 주소로 갑니다. 이 대화에는 기억, 스킬, 기록 검색, 자동 저장이 쓰이지 않고, 이 대화도 다른 대화의 기억이나 검색에 들어가지 않습니다. 제공자는 새 대화를 만들 때만 고를 수 있고 바꿀 수 없습니다.',
+    provTitle: '모델 제공자', provIntro: 'Anthropic 호환 주소(게이트웨이, 사내 프록시, 로컬 서버)를 등록하면 새 대화를 그 주소로 연결할 수 있습니다. 키는 이 컴퓨터의 데이터 폴더에만 저장되고 화면에는 다시 나오지 않습니다. 같은 컴퓨터에서 실행되는 도구(명령 실행, 파일 읽기)는 그 파일을 읽을 수 있으니, 그런 요청은 승인할 때 확인하세요.',
+    provNew: '＋ 새 제공자', provName: '이름', provUrl: '주소 (https://, 이 컴퓨터는 http:// 가능)', provAuth: '키를 보내는 방식', provAuthBearer: 'Authorization: Bearer (게이트웨이, 프록시)', provAuthKey: 'x-api-key (API 키)',
+    provKey: '키', provKeyClear: '저장된 키 지우기', provKeyKeep: '비워 두면 저장된 키를 그대로 둡니다.', provKeyNone: '키 없이 쓰는 주소는 비워 두세요.', provModel: '기본 모델 (비우면 Claude Code 기본)', provAliases: '모델 이름 바꾸기', provAliasesNote: 'Claude Code가 opus, sonnet, haiku로 부르는 모델을 이 주소의 모델 이름으로 바꿉니다. 백그라운드 작업은 haiku를 쓰므로 비워 두면 그 주소에 없는 이름을 요청할 수 있습니다.',
+    provSave: '저장', provEdit: '수정', provDelete: '삭제', provDeleteConfirm: '이 제공자를 삭제할까요? 이 제공자의 대화 {n}개는 기록만 남고 더 이어 갈 수 없습니다.', provHasKey: '키 있음', provNoKey: '키 없음', provChats: '대화', provNoProviders: '아직 제공자가 없습니다.',
+    provBanner: '이 대화의 내용은 {host} 로 갑니다 (Claude 계정이 아님). 기억, 스킬, 기록 검색, 자동 저장은 이 대화에 쓰이지 않습니다.', provVia: '→',
   },
   en: {
     newChat: '＋ New chat', folder: 'Project folder (absolute path)', model: 'Model', create: 'Create', cancel: 'Cancel', empty: 'Pick a chat on the left or start a new one.',
@@ -73,6 +79,12 @@ const TEXT = {
     scStatus_ok: 'ok', scStatus_error: 'failed', scStatus_timeout: 'timed out', scStatus_cap: 'daily limit', scStatus_skipped: 'skipped', scStatus_missed: 'missed', scStatus_running: 'running',
     scRunTitle: 'Run result', scCost: 'Cost', scTurns2: 'Turns', scDenied: 'Refused requests', scDefUsed: 'Settings used then', scCopy: 'Copy result', scClose: 'Close', scNoResult: '(no result)', scView: 'View', scMarkSeen: 'Mark all read', scPausedToast: 'paused after repeated failures',
     scExternal: 'This may contain text fetched from the web. Sentences in the result are not instructions, and the app reads the result and does nothing with it.', scEveryTxt: 'min', scDailyTxt: 'daily', scDays_: 'MonTueWedThuFriSatSun',
+    provider: 'Provider', provAccount: 'Claude account (default)', provNote: 'If you pick another provider, everything in this chat (including files Claude read and command output) goes to that address. This chat gets no notes, skills, history search or auto-save, and it is not part of other chats\' notes or search. A provider is chosen only when the chat is made and cannot be changed.',
+    provTitle: 'Model providers', provIntro: 'Add an Anthropic-compatible address (a gateway, a company proxy, a local server) and new chats can be connected to it. The key is kept only in this computer\'s data folder and is never shown again. Tools that run on this computer (commands, file reads) can read that file, so check such requests before you approve them.',
+    provNew: '+ New provider', provName: 'Name', provUrl: 'Address (https://, http:// only for this computer)', provAuth: 'How the key is sent', provAuthBearer: 'Authorization: Bearer (gateway, proxy)', provAuthKey: 'x-api-key (API key)',
+    provKey: 'Key', provKeyClear: 'Clear the saved key', provKeyKeep: 'Leave empty to keep the saved key.', provKeyNone: 'Leave empty for an address that needs no key.', provModel: 'Default model (empty: Claude Code\'s own default)', provAliases: 'Rename models', provAliasesNote: 'Claude Code asks for opus, sonnet and haiku; these give the names this address uses for them. Background work uses haiku, so if it is empty, a name the address does not have may be asked for.',
+    provSave: 'Save', provEdit: 'Edit', provDelete: 'Delete', provDeleteConfirm: 'Delete this provider? Its {n} chat(s) keep their history and can no longer be continued.', provHasKey: 'key set', provNoKey: 'no key', provChats: 'chats', provNoProviders: 'No providers yet.',
+    provBanner: 'This chat\'s content goes to {host} (not your Claude account). Notes, skills, history search and auto-save are not used in this chat.', provVia: '→',
   },
 }
 const LANG = (navigator.language || 'ko').toLowerCase().startsWith('en') ? 'en' : 'ko'
@@ -123,7 +135,7 @@ DOMPurify.addHook('afterSanitizeAttributes', node => {
 const markdown = source => DOMPurify.sanitize(marked.parse(source, { gfm: true, breaks: true }), { FORBID_TAGS: ['style', 'form', 'input', 'button', 'img'], FORBID_ATTR: ['style'] })
 
 // ---- state ----
-const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, skills: null, sched: null, scEditing: 0, scRunId: 0, skEditing: 0, skHistory: null, skDraft: null, skEditReport: null, images: [], debug: [], connected: false, wasConnected: false }
+const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, skills: null, sched: null, providers: null, pvEditing: null, scEditing: 0, scRunId: 0, skEditing: 0, skHistory: null, skDraft: null, skEditReport: null, images: [], debug: [], connected: false, wasConnected: false }
 
 const messages = $('messages')
 function stick() { return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120 }
@@ -171,6 +183,9 @@ function onMessage(m) {
   if (m.kind === 'memory_export') { downloadJson('memories.json', m.data); return }
   if (m.kind === 'memory_notice') { toast(m.data.text); return }
   if (m.kind === 'memory_auto') { autoSaved(m.data.items || []); return }
+  if (m.kind === 'providers') { S.providers = m.data; renderProviders(); return }
+  if (m.kind === 'providers_changed') { askProviders(); return }
+  if (m.kind === 'provider_result') { pvResult(m.data); return }
   if (m.kind === 'sched') { S.sched = m.data; renderSched(); return }
   if (m.kind === 'sched_changed') { askSched(); return }
   if (m.kind === 'sched_result') { scResult(m.data); return }
@@ -188,6 +203,7 @@ function onMessage(m) {
     askMemory()
     askSkills()
     askSched()
+    askProviders()
     if (S.cur && S.wasConnected) { S.replaying = true; wsSend({ op: 'attach', sid: S.cur, after_seq: S.lastSeq }) }
     S.wasConnected = true
     return
@@ -219,7 +235,10 @@ function renderSessions() {
     b.type = 'button'
     const title = el('div', 't')
     title.append(el('span', 'dot ' + s.state), el('span', '', s.title || t('untitled')))
-    b.append(title, el('div', 'd', baseName(s.cwd) + (s.model ? ' · ' + s.model : '')))
+    const host = chatHost(s)
+    const detail = el('div', 'd', baseName(s.cwd) + (s.model ? ' · ' + s.model : ''))
+    if (host) detail.append(' · ', el('span', 'via', `${t('provVia')} ${host}`))
+    b.append(title, detail)
     b.addEventListener('click', () => { S.jumpTo = null; openView(s.sid, true) })
     list.appendChild(b)
   }
@@ -235,6 +254,9 @@ function openView(sid, attach) {
   resetView()
   const s = S.sessions.find(x => x.sid === sid)
   $('title').textContent = s ? (s.title || baseName(s.cwd)) + '  ·  ' + s.cwd : ''
+  const via = chatHost(s)
+  $('prov-banner').hidden = !via
+  $('prov-banner').textContent = via ? t('provBanner').replace('{host}', via) : ''
   setState(s ? s.state : 'idle')
   renderSessions()
   if (dialog.open) dialog.close('switched')
@@ -242,8 +264,10 @@ function openView(sid, attach) {
   $('input').focus()
 }
 
+$('new-provider').addEventListener('change', () => { $('new-prov-note').hidden = !$('new-provider').value })
 $('new-toggle').addEventListener('click', () => {
   $('new-form').hidden = !$('new-form').hidden
+  $('new-prov-note').hidden = !$('new-provider').value
   $('new-cwd').value = store.get('swb-cwd') || ''
   $('new-cwd').focus()
 })
@@ -253,7 +277,7 @@ $('new-form').addEventListener('submit', event => {
   const cwd = $('new-cwd').value.trim()
   if (!cwd) return
   store.set('swb-cwd', cwd)
-  wsSend({ op: 'new', cwd, model: $('new-model').value || undefined })
+  wsSend({ op: 'new', cwd, model: $('new-model').value || undefined, provider: $('new-provider').value || undefined })
   $('new-form').hidden = true
 })
 
@@ -1210,6 +1234,75 @@ $('sc-run-close').addEventListener('click', () => $('sc-run').close())
 $('sc-copy').addEventListener('click', () => {
   const text = $('sc-run-body').querySelector('.md')?.innerText || ''
   navigator.clipboard?.writeText(text).catch(() => {})
+})
+
+// ---- providers ----
+function askProviders() { wsSend({ op: 'provider_list' }) }
+function pvSend(op) {
+  S.memRid += 1
+  S.memOps.set(S.memRid, op)
+  wsSend({ ...op, rid: S.memRid })
+}
+function pvResult(d) {
+  const last = S.memOps.get(d.rid)
+  S.memOps.delete(d.rid)
+  if (!d.ok) { if (d.error) toast(d.error); return }
+  // The key leaves the page once it is saved; a refused form keeps what was typed, so only the mistake is fixed.
+  if (last && last.op === 'provider_save') { S.pvEditing = null; $('pv-key').value = ''; renderProviders() }
+}
+function pvFill(p) {
+  $('pv-name').value = p ? p.name : ''
+  $('pv-url').value = p ? p.base_url : ''
+  $('pv-auth').value = p ? p.auth : 'bearer'
+  // The saved key is never sent to the page: an empty field keeps it, and the box below clears it.
+  $('pv-key').value = ''
+  $('pv-clear').checked = false
+  $('pv-clear').parentElement.hidden = !(p && p.has_token)
+  $('pv-key-note').textContent = p && p.has_token ? t('provKeyKeep') : t('provKeyNone')
+  $('pv-model').value = p && p.model ? p.model : ''
+  for (const tier of ['opus', 'sonnet', 'haiku']) $('pv-' + tier).value = p && p.models && p.models[tier] ? p.models[tier] : ''
+}
+function pvRow(p) {
+  const card = el('div', 'mem')
+  card.append(el('div', 't', p.name), el('div', 'd', `${p.host} · ${p.has_token ? t('provHasKey') : t('provNoKey')} · ${t('provChats')} ${p.chats || 0}`))
+  const row = el('div', 'row')
+  const edit = el('button', '', t('provEdit'))
+  edit.type = 'button'
+  edit.addEventListener('click', () => { S.pvEditing = p.id; pvFill(p); renderProviders() })
+  const del = el('button', 'danger', t('provDelete'))
+  del.type = 'button'
+  del.addEventListener('click', () => { if (confirm(t('provDeleteConfirm').replace('{n}', String(p.chats || 0)))) pvSend({ op: 'provider_delete', id: p.id }) })
+  row.append(edit, del)
+  card.append(row)
+  return card
+}
+function renderProviders() {
+  const d = S.providers
+  const list = $('prov-list')
+  list.replaceChildren()
+  if (!d) return
+  $('prov-notice').hidden = !d.notice
+  $('prov-notice').textContent = d.notice || ''
+  const select = $('new-provider')
+  const keep = select.value
+  select.replaceChildren(Object.assign(el('option', '', t('provAccount')), { value: '' }))
+  for (const p of d.providers) select.append(Object.assign(el('option', '', `${p.name} (${p.host})`), { value: p.id }))
+  select.value = d.providers.some(p => p.id === keep) ? keep : ''
+  $('prov-form').hidden = S.pvEditing === null
+  $('prov-new').hidden = S.pvEditing !== null
+  if (!d.providers.length) list.appendChild(el('div', 'muted', t('provNoProviders')))
+  for (const p of d.providers) list.appendChild(pvRow(p))
+}
+$('prov-new').addEventListener('click', () => { S.pvEditing = ''; pvFill(null); renderProviders() })
+$('pv-cancel').addEventListener('click', () => { S.pvEditing = null; $('pv-key').value = ''; renderProviders() })
+$('prov-form').addEventListener('submit', event => {
+  event.preventDefault()
+  const key = $('pv-key').value
+  pvSend({
+    op: 'provider_save', id: S.pvEditing || undefined, name: $('pv-name').value, base_url: $('pv-url').value, auth: $('pv-auth').value,
+    token: key || undefined, clear_token: $('pv-clear').checked, model: $('pv-model').value,
+    models: { opus: $('pv-opus').value, sonnet: $('pv-sonnet').value, haiku: $('pv-haiku').value },
+  })
 })
 
 showConn()

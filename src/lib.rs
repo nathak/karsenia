@@ -6,6 +6,7 @@ pub mod mcp;
 pub mod propose;
 pub mod memory;
 pub mod private;
+pub mod providers;
 pub mod registry;
 pub mod sched_store;
 pub mod schedule;

@@ -10,6 +10,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
+use super::env::{pin_settings, EnvPlan};
 use super::protocol::{parse_line, Event};
 
 /// The longest stdout line read; a longer one ends the process (a stream that wrote it cannot be trusted to go on).
@@ -30,6 +31,10 @@ pub struct SpawnOpts {
     pub system_file: Option<PathBuf>,
     /// A one-off plugin folder holding this chat's approved skills.
     pub plugin_dir: Option<PathBuf>,
+    /// A provider chat's environment (empty for a normal chat). Its values hold the token, so it is never put into argv.
+    pub env: EnvPlan,
+    /// A provider chat's address: pinned on the command line, and project settings are not read (see `env`).
+    pub pinned_url: Option<String>,
 }
 
 #[derive(Debug)]
@@ -71,6 +76,11 @@ pub fn args(opts: &SpawnOpts) -> Vec<String> {
     if let Some(dir) = &opts.plugin_dir {
         args.extend(["--plugin-dir".to_owned(), dir.display().to_string()]);
     }
+    if let Some(url) = &opts.pinned_url {
+        // The project's own settings are not read: its `env` could point the address (and with it the token) somewhere else, and its
+        // hooks and key helpers would run beside a third party's key. The address is also given by value, which wins over the rest.
+        args.extend(["--setting-sources".to_owned(), "user".to_owned(), "--settings".to_owned(), pin_settings(url)]);
+    }
     args
 }
 
@@ -85,6 +95,12 @@ impl ClaudeProcess {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .process_group(0);
+        for name in &opts.env.remove {
+            command.env_remove(name);
+        }
+        for (name, value) in &opts.env.set {
+            command.env(name, value);
+        }
         let mut child = command.spawn().with_context(|| format!("could not start {}", opts.bin))?;
         let pid = child.id();
         let stdin = child.stdin.take().context("no stdin")?;
@@ -226,7 +242,7 @@ mod tests {
 
     #[test]
     fn the_arguments_include_the_permission_prompt_tool_and_resume() {
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()) };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()), env: EnvPlan::default(), pinned_url: None };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
         assert!(a.windows(2).any(|w| w == ["--model", "haiku"]));
@@ -235,7 +251,19 @@ mod tests {
         assert!(a.windows(2).any(|w| w == ["--append-system-prompt-file", "/d/run/x.mem.txt"]));
         assert!(a.windows(2).any(|w| w == ["--plugin-dir", "/d/run/x.skills"]));
         let plain = args(&SpawnOpts { resume: None, model: None, mcp_config: None, system_file: None, plugin_dir: None, ..opts });
-        assert!(!plain.iter().any(|x| x == "--resume" || x == "--model" || x == "--mcp-config" || x == "--append-system-prompt-file" || x == "--plugin-dir"));
+        assert!(!plain.iter().any(|x| x == "--resume" || x == "--model" || x == "--mcp-config" || x == "--append-system-prompt-file" || x == "--plugin-dir" || x == "--settings" || x == "--setting-sources"), "a normal chat's arguments are as they were");
+    }
+
+    #[test]
+    fn a_provider_chat_pins_its_address_and_skips_project_settings_and_no_secret_is_in_the_arguments() {
+        let env = EnvPlan { set: vec![("ANTHROPIC_AUTH_TOKEN".into(), "tok-secret-xyz".into())], remove: vec![] };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env, pinned_url: Some("https://gw.example.com/x".into()) };
+        let a = args(&opts);
+        assert!(a.windows(2).any(|w| w == ["--setting-sources", "user"]));
+        let settings = a.windows(2).find(|w| w[0] == "--settings").map(|w| w[1].clone()).unwrap();
+        assert_eq!(settings, r#"{"env":{"ANTHROPIC_BASE_URL":"https://gw.example.com/x"}}"#);
+        assert!(!a.join(" ").contains("tok-secret-xyz"));
+        assert!(!format!("{opts:?}").contains("tok-secret-xyz"), "Debug of the options hides the values");
     }
 
     #[test]
