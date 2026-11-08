@@ -10,6 +10,7 @@ use crate::mcp::McpGate;
 use crate::memory::MemoryStore;
 use crate::propose::{spawn_worker, ProposeConfig, ProposeCtx};
 use crate::providers::ProviderStore;
+use crate::random_hex;
 use crate::sched_store::SchedStore;
 use crate::schedule::SystemClock;
 use crate::scheduler::{SchedConfig, Scheduler};
@@ -38,6 +39,8 @@ pub struct Registry {
     pub sched_notice: Option<String>,
     sched: Option<(Arc<SchedStore>, Arc<Scheduler>)>,
     providers: Arc<ProviderStore>,
+    /// One random tag per run of the app (see `container::container_name`).
+    instance: String,
     /// Set when the providers file could not be read.
     pub providers_notice: Option<String>,
     sessions: Arc<Mutex<HashMap<String, SessionHandle>>>,
@@ -101,10 +104,12 @@ impl Registry {
             }
         };
         let settings = Arc::new(SettingsStore::open(dir.join("settings.json")));
+        let instance = random_hex(3);
         // Containers an earlier run of this app left (it was killed): removed, in the background.
         if let Ok(runtime) = crate::claude::container::validate_runtime(settings.get().container_runtime.as_deref().unwrap_or_default()) {
             let hash = crate::claude::container::data_hash(&dir);
-            std::thread::spawn(move || crate::claude::container::sweep(&runtime, &hash));
+            let tag = instance.clone();
+            std::thread::spawn(move || crate::claude::container::sweep(&runtime, &hash, &tag));
         }
         let (events, _) = tokio::sync::broadcast::channel(64);
         let sessions: Arc<Mutex<HashMap<String, SessionHandle>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -134,7 +139,7 @@ impl Registry {
             }
         };
         let (providers, providers_notice) = ProviderStore::open(dir.join("providers.json"));
-        let registry = Self { dir: dir.clone(), bin, index, gate, memory, settings, events, turns, skills, propose_ctx, skill_turns, skills_notice, memory_notice, sched_notice, sched, providers: Arc::new(providers), providers_notice, sessions };
+        let registry = Self { dir: dir.clone(), bin, index, gate, memory, settings, events, turns, skills, propose_ctx, skill_turns, skills_notice, memory_notice, sched_notice, sched, providers: Arc::new(providers), providers_notice, instance, sessions };
         for entry in std::fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
@@ -150,7 +155,7 @@ impl Registry {
             if let (Some(index), None) = (&registry.index, &meta.provider) {
                 index.catch_up(sid, &meta.cwd.to_string_lossy(), meta.created, log.clone());
             }
-            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log, index: registry.index.clone().filter(|_| meta_has_no_provider), mcp: registry.gate.clone(), memory: registry.memory.clone(), turns: registry.turns.clone(), skills: registry.skills.clone(), skill_turns: registry.skill_turns.clone(), providers: Some(registry.providers.clone()), settings: Some(registry.settings.clone()) });
+            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log, index: registry.index.clone().filter(|_| meta_has_no_provider), mcp: registry.gate.clone(), memory: registry.memory.clone(), turns: registry.turns.clone(), skills: registry.skills.clone(), skill_turns: registry.skill_turns.clone(), providers: Some(registry.providers.clone()), settings: Some(registry.settings.clone()), instance: registry.instance.clone() });
             registry.sessions.lock().expect("registry lock").insert(sid.to_owned(), handle);
         }
         if let Some(index) = &registry.index {
@@ -188,6 +193,7 @@ impl Registry {
             if settings.container_runtime.is_none() || settings.container_image.is_none() {
                 return Err("set the container runtime and image first".into());
             }
+            crate::claude::container::project_allowed(&real, &self.dir, std::env::var_os("HOME").map(PathBuf::from).as_deref()).map_err(str::to_owned)?;
             if crate::providers::is_local_host(&provider.host) {
                 return Err("an address on this computer cannot be reached from inside a container".into());
             }
@@ -196,7 +202,7 @@ impl Registry {
         let meta_is_normal = meta.provider.is_none();
         let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
         crate::private::write(&session::meta_path(&self.dir, &meta.sid), &text).map_err(|e| e.to_string())?;
-        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), index: self.index.clone().filter(|_| meta_is_normal), mcp: self.gate.clone(), memory: self.memory.clone(), turns: self.turns.clone(), skills: self.skills.clone(), skill_turns: self.skill_turns.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()) });
+        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), index: self.index.clone().filter(|_| meta_is_normal), mcp: self.gate.clone(), memory: self.memory.clone(), turns: self.turns.clone(), skills: self.skills.clone(), skill_turns: self.skill_turns.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), instance: self.instance.clone() });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok(handle)
     }

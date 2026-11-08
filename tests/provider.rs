@@ -309,7 +309,7 @@ async fn a_chat_whose_provider_was_deleted_or_moved_does_not_start_and_a_changed
     assert_eq!(runs[0]["env"]["ANTHROPIC_AUTH_TOKEN"], json!("sk-new-key-0000"), "a changed key and path on the same host are used by the next start");
 
     let orphan = fx.server.registry.create(folder.to_str().unwrap(), None, Some(&id)).unwrap();
-    assert!(store.delete(&id));
+    assert_eq!(store.delete(&id), Ok(true));
     let err = orphan.send("hello".into(), vec![]).await.unwrap_err();
     assert!(err.contains("deleted"), "{err}");
     assert_eq!(started(&fx).len(), 1, "no process was started for the chat without a provider");

@@ -173,11 +173,11 @@ async fn the_container_is_removed_by_name_when_the_chat_is_stopped_or_killed_and
     wait_for("stop to remove the container", || calls(&fx).iter().any(|c| *c == format!("CALL [rm] [-f] [{second_name}]"))).await;
 
     // A later start of the app removes what a crash left, found by the label of its own data folder.
-    std::fs::write(fx.root.join("ps.txt"), "abc123\nzz9\n$(touch pwned)\n").unwrap();
+    std::fs::write(fx.root.join("ps.txt"), "abc123 swb-old-aaaaaa-111\nzz9 swb-old2-aaaaaa-222\n$(touch pwned) swb-x-aaaaaa-333\n").unwrap();
     let _again = swb_app::registry::Registry::open(fx.root.join("data"), None).unwrap();
     wait_for("the sweep", || calls(&fx).iter().any(|c| *c == "CALL [rm] [-f] [zz9]")).await;
     let all = calls(&fx);
-    assert!(all.iter().any(|c| c.starts_with("CALL [ps] [-aq] [--filter] [label=swb.data=")), "{all:?}");
+    assert!(all.iter().any(|c| c.starts_with("CALL [ps] [-a] [--filter] [label=swb.data=")), "{all:?}");
     assert!(all.iter().any(|c| *c == "CALL [rm] [-f] [abc123]"));
     assert!(!all.iter().any(|c| c.contains("pwned")), "an id that is not plain letters and digits is never passed on");
     assert!(!fx.root.join("pwned").exists());
@@ -198,6 +198,12 @@ async fn a_container_chat_needs_a_provider_a_reachable_address_and_the_persons_s
     assert!(registry.create_in(folder, None, None, true).is_err(), "an account chat cannot run in a container: its credentials would have to go in");
     let local = registry.providers().save(Form { name: "Local".into(), base_url: "http://127.0.0.1:11434".into(), ..Default::default() }, 1).unwrap();
     assert!(registry.create_in(folder, None, Some(&local), true).is_err(), "a container's localhost is not this computer's");
+    // What the container is given must not hold the data folder (the key, the transcripts) or be inside it.
+    let data = fx.root.join("data");
+    std::fs::create_dir_all(data.join("chatcfg")).unwrap();
+    for exposed in [fx.root.clone(), data.clone(), data.join("chatcfg")] {
+        assert!(registry.create_in(exposed.to_str().unwrap(), None, Some(&id), true).is_err(), "{} would expose the data folder", exposed.display());
+    }
     let chat = registry.create_in(folder, None, Some(&id), true).unwrap();
 
     // The settings are checked again at every start: a changed or emptied setting stops the chat, it does not fall back to no container.

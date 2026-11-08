@@ -176,6 +176,8 @@ pub struct Setup {
     pub providers: Option<Arc<ProviderStore>>,
     /// Read when a container chat starts: the runtime and the image are the person's settings.
     pub settings: Option<Arc<crate::settings::SettingsStore>>,
+    /// One tag per run of the app, part of every container's name.
+    pub instance: String,
 }
 
 fn now_ms() -> u64 {
@@ -199,7 +201,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, index: setup.index, mcp: setup.mcp, memory: setup.memory, turns: setup.turns, skills: setup.skills, skill_turns: setup.skill_turns, providers: setup.providers, settings: setup.settings, secret: None, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, index: setup.index, mcp: setup.mcp, memory: setup.memory, turns: setup.turns, skills: setup.skills, skill_turns: setup.skill_turns, providers: setup.providers, settings: setup.settings, instance: setup.instance, secret: None, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -218,6 +220,7 @@ struct Actor {
     skill_turns: Option<mpsc::UnboundedSender<TurnEnd>>,
     providers: Option<Arc<ProviderStore>>,
     settings: Option<Arc<crate::settings::SettingsStore>>,
+    instance: String,
     /// The key of this chat's provider while its process runs: whatever the chat shows or stores has it replaced.
     secret: Option<String>,
     seq: u64,
@@ -305,10 +308,11 @@ impl Actor {
         if crate::providers::is_local_host(&crate::providers::host_of(&provider.base_url)) {
             return Err("an address on this computer cannot be reached from inside a container".into());
         }
+        c::project_allowed(&self.meta.cwd, &self.dir, std::env::var_os("HOME").map(PathBuf::from).as_deref()).map_err(str::to_owned)?;
         let settings = self.settings.as_ref().map(|s| s.get()).unwrap_or_default();
         let program = c::validate_runtime(settings.container_runtime.as_deref().unwrap_or_default()).map_err(|e| format!("container settings: {e}"))?;
         let image = c::validate_image(settings.container_image.as_deref().unwrap_or_default()).map_err(|e| format!("container settings: {e}"))?;
-        Ok(Some(c::Spec { runtime: c::Runtime { program, image }, name: c::container_name(&self.meta.sid, &random_hex(3)), data_hash: c::data_hash(&self.dir), config_dir: config_dir.to_path_buf() }))
+        Ok(Some(c::Spec { runtime: c::Runtime { program, image }, name: c::container_name(&self.meta.sid, &self.instance, &random_hex(3)), data_hash: c::data_hash(&self.dir), config_dir: config_dir.to_path_buf() }))
     }
 
     fn recall_path(&self) -> PathBuf {

@@ -250,7 +250,9 @@ impl ProviderStore {
         let base_url = validate_base_url(&form.base_url)?;
         let model = validate_model(&form.model)?;
         let models = Aliases { opus: validate_model(&form.models[0])?, sonnet: validate_model(&form.models[1])?, haiku: validate_model(&form.models[2])? };
-        let mut list = self.lock();
+        let mut guard = self.lock();
+        // Changed on a copy and kept only once the file is written: a save that fails changes nothing that a chat can start with.
+        let mut list = guard.clone();
         let existing = match &form.id {
             Some(id) => Some(list.iter().position(|p| &p.id == id).ok_or("that provider is gone")?),
             None => None,
@@ -282,18 +284,21 @@ impl ProviderStore {
             }
         };
         self.write(&list)?;
+        *guard = list;
         Ok(id)
     }
 
-    pub fn delete(&self, id: &str) -> bool {
-        let mut list = self.lock();
-        let before = list.len();
+    /// Ok(false) when there was no such provider; Err when the file could not be written (the provider stays, key and all).
+    pub fn delete(&self, id: &str) -> Result<bool, String> {
+        let mut guard = self.lock();
+        let mut list = guard.clone();
         list.retain(|p| p.id != id);
-        let removed = list.len() != before;
-        if removed {
-            let _ = self.write(&list);
+        if list.len() == guard.len() {
+            return Ok(false);
         }
-        removed
+        self.write(&list)?;
+        *guard = list;
+        Ok(true)
     }
 }
 
@@ -395,8 +400,25 @@ mod tests {
         let (again, _) = ProviderStore::open(path);
         assert_eq!(again.get(&id).unwrap().name, "Gateway 2");
         assert_eq!(again.get(&id).unwrap().updated, 3);
-        assert!(again.delete(&id));
-        assert!(!again.delete(&id));
+        assert_eq!(again.delete(&id), Ok(true));
+        assert_eq!(again.delete(&id), Ok(false));
+    }
+
+    #[test]
+    fn a_save_or_delete_that_cannot_be_written_changes_nothing_in_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sub").join("providers.json");
+        std::fs::create_dir(path.parent().unwrap()).unwrap();
+        let (store, _) = ProviderStore::open(path.clone());
+        let id = store.save(form("A"), 1).unwrap();
+        // The folder goes away: nothing can be written.
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        assert!(store.save(Form { id: Some(id.clone()), name: "Renamed".into(), base_url: "https://other.example.com".into(), ..Default::default() }, 2).is_err());
+        assert_eq!(store.get(&id).unwrap().name, "A", "a rejected edit changed what chats start with");
+        assert!(store.save(form("B"), 2).is_err());
+        assert_eq!(store.list_views().len(), 1, "a rejected new provider is in the list");
+        assert!(store.delete(&id).is_err());
+        assert!(store.get(&id).is_some(), "a delete that failed to persist removed it from memory");
     }
 
     #[test]

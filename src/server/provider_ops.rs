@@ -92,11 +92,15 @@ pub fn handle(state: &AppState, name: &str, op: &Value, out: &UnboundedSender<St
             }
         }
         "provider_delete" => {
-            let done = store.delete(op["id"].as_str().unwrap_or_default());
-            if done {
-                let _ = state.registry.events.send(json!({"v": 1, "kind": "providers_changed", "data": {}}));
+            match store.delete(op["id"].as_str().unwrap_or_default()) {
+                Ok(done) => {
+                    if done {
+                        let _ = state.registry.events.send(json!({"v": 1, "kind": "providers_changed", "data": {}}));
+                    }
+                    result(out, &rid, done, json!({}));
+                }
+                Err(reason) => result(out, &rid, false, json!({"error": reason})),
             }
-            result(out, &rid, done, json!({}));
         }
         _ => result(out, &rid, false, json!({"error": "unknown provider operation"})),
     }

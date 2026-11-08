@@ -225,12 +225,12 @@ tmpfs, `--pids-limit=512 --memory=4g`, your user id (`--userns=keep-id` for podm
 read-write, and the chat's own settings folder), no host network, and the provider's key by name only (`-e NAME`, the value comes from the
 runtime client's environment, so it is not in any argument). The home folder, the data folder and the account's credentials are not mounted.
 The container has a name and a label of this data folder: stop, kill and process exit remove it by name (`rm -f`), because killing the
-`docker run` client does not stop the container, and the next start of the app removes any left by a crash.
+`docker run` client does not stop the container, and the next start of the app removes any left by a crash (never one of its own run: every name carries a tag of the run).
 
 Limits: only provider chats (an account chat would need the account's credentials inside, where a command could read them); the project
 folder is mounted read-write, so the container does not protect it; the network is open (the provider, the web, your LAN); an address on
 this computer (`localhost`) is refused because a container's `localhost` is not this computer's; no notes, skills or history search
-(as for any provider chat); a path with `:` `,` or a backslash cannot be mounted; whoever can run `docker inspect` (the docker group is
+(as for any provider chat); a path with `:` `,` or a backslash cannot be mounted; a project folder that is, holds, or lies inside the data folder, or that is the home folder, holds it, or lies in `~/.claude`, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config`, `~/.kube`, `~/.docker` or `~/.local` is refused (the account's credentials and the app's key file are there); whoever can run `docker inspect` (the docker group is
 root-equivalent) sees the key in the container's environment; the settings are checked again at every start, so a changed one stops the chat
 instead of quietly running it outside a container.
 

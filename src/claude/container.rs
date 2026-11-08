@@ -60,8 +60,29 @@ fn mountable(path: &Path) -> Result<String, &'static str> {
     Ok(text.to_owned())
 }
 
-pub fn container_name(sid: &str, random: &str) -> String {
-    format!("{NAME_PREFIX}{sid}-{random}")
+/// `swb-<chat id>-<instance>-<random>`: `instance` is one random tag per run of this app, so a sweep at start can tell the
+/// containers it must leave alone (this run's) from those an earlier run left.
+pub fn container_name(sid: &str, instance: &str, random: &str) -> String {
+    format!("{NAME_PREFIX}{sid}-{instance}-{random}")
+}
+
+/// A project folder a container may be given: not the data folder, not a folder that holds it, not the home folder or a folder that
+/// holds it (the account's credentials and `~/.claude.json` are there), and not a place in the home folder that keeps secrets.
+/// Paths are compared as given, so pass canonical ones.
+pub fn project_allowed(project: &Path, data_dir: &Path, home: Option<&Path>) -> Result<(), &'static str> {
+    let data = data_dir.canonicalize().unwrap_or_else(|_| data_dir.to_path_buf());
+    if project.starts_with(&data) || data.starts_with(project) {
+        return Err("a container cannot be given the app's data folder, or a folder that holds it");
+    }
+    if let Some(home) = home.and_then(|h| h.canonicalize().ok()) {
+        if home.starts_with(project) {
+            return Err("a container cannot be given the home folder or a folder that holds it: the account's credentials are there");
+        }
+        if [".claude", ".ssh", ".aws", ".gnupg", ".config", ".kube", ".docker", ".local"].iter().any(|dir| project.starts_with(home.join(dir))) {
+            return Err("a container cannot be given a folder where the home folder keeps credentials and settings");
+        }
+    }
+    Ok(())
 }
 
 /// One number for one data folder (FNV-1a): the label by which the containers of this app are found again.
@@ -130,11 +151,17 @@ pub fn remove(program: &Path, name: &str, wait: std::time::Duration) {
     });
 }
 
-/// Removes the containers a crash of an earlier run of this app left (found by the label of this data folder).
-pub fn sweep(program: &Path, data_hash: &str) {
-    let Ok(listing) = std::process::Command::new(program).args(["ps", "-aq", "--filter", &format!("label=swb.data={data_hash}")]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output() else { return };
-    for id in String::from_utf8_lossy(&listing.stdout).split_whitespace().filter(|id| id.chars().all(|c| c.is_ascii_alphanumeric())) {
-        remove(program, id, std::time::Duration::from_secs(5));
+/// Removes the containers an earlier run of this app left (found by the label of this data folder). The ones of this run
+/// (`instance`) are not touched, so a sweep that is late cannot remove a chat that has just started.
+pub fn sweep(program: &Path, data_hash: &str, instance: &str) {
+    let Ok(listing) = std::process::Command::new(program).args(["ps", "-a", "--filter", &format!("label=swb.data={data_hash}"), "--format", "{{.ID}} {{.Names}}"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output() else { return };
+    let own = format!("-{instance}-");
+    for line in String::from_utf8_lossy(&listing.stdout).lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(id), name) = (parts.next(), parts.next().unwrap_or_default()) else { continue };
+        if id.chars().all(|c| c.is_ascii_alphanumeric()) && !name.contains(&own) {
+            remove(program, id, std::time::Duration::from_secs(5));
+        }
     }
 }
 
@@ -193,6 +220,48 @@ mod tests {
         for good in ["claude", "my-claude:latest", "ghcr.io/me/claude@sha256:abc123", "registry.local:5000/team/claude:1.2"] {
             assert_eq!(validate_image(good).as_deref(), Ok(good));
         }
+    }
+
+    #[test]
+    fn a_project_may_not_expose_the_data_folder_or_the_home_folders_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let home = root.join("home").join("me");
+        let data = home.join(".local").join("share").join("app");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(home.join(".claude").join("sub")).unwrap();
+        std::fs::create_dir_all(home.join("work").join("proj")).unwrap();
+        let allowed = |p: &Path| project_allowed(p, &data, Some(&home));
+        assert!(allowed(&home.join("work").join("proj")).is_ok());
+        assert!(allowed(&root.join("elsewhere")).is_ok());
+        for bad in [&data, &data.join("chatcfg"), data.parent().unwrap(), &home, home.parent().unwrap(), &root, &home.join(".claude"), &home.join(".claude").join("sub"), &home.join(".local")] {
+            assert!(allowed(bad).is_err(), "{} must be refused", bad.display());
+        }
+        // With the data folder elsewhere, the home rules stand on their own.
+        let far = root.join("far-data");
+        std::fs::create_dir_all(&far).unwrap();
+        let alone = |p: &Path| project_allowed(p, &far, Some(&home));
+        assert!(alone(&home.join("work")).is_ok());
+        for bad in [&home, home.parent().unwrap(), &root, &home.join(".claude"), &home.join(".ssh")] {
+            assert!(alone(bad).is_err(), "{} must be refused", bad.display());
+        }
+    }
+
+    #[test]
+    fn a_late_sweep_leaves_this_runs_containers_alone_and_never_passes_an_odd_id_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let ps = dir.path().join("ps.txt");
+        let docker = dir.path().join("docker");
+        std::fs::write(&docker, format!("#!/bin/sh\necho \"$*\" >> '{}'\nif [ \"$1\" = ps ]; then cat '{}'; fi\n", log.display(), ps.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(&ps, "old1 swb-a-111111-aaa\nmine1 swb-b-222222-bbb\nold2 swb-c-333333-ccc\n$(touch x) swb-d-111111-ddd\n").unwrap();
+        sweep(&docker, "00ff", "222222");
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(calls.contains("rm -f old1") && calls.contains("rm -f old2"));
+        assert!(!calls.contains("mine1"), "a container of this run was removed: {calls}");
+        assert!(!calls.contains("touch"), "{calls}");
     }
 
     #[test]
