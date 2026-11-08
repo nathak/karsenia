@@ -159,3 +159,7 @@ dialog .sugg { font-size: 13px; color: var(--muted); }
 #prov-box > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 #prov-banner { margin: 6px 12px 0; border-color: var(--warn, var(--accent)); }
 .sess .d .via { font-weight: 600; }
+#ctr-form label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+#new-ctr-row { flex-direction: row; gap: 6px; font-size: 12px; }
+#chats { overflow-y: auto; }
+#sessions { min-height: 140px; }

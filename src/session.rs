@@ -79,6 +79,9 @@ pub struct Meta {
     /// The provider this chat was made against; fixed for the chat's life. Chats made before providers existed read as None.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderRef>,
+    /// The chat's `claude` runs in a container (only possible with a provider; EXPERIMENTAL).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub container: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -171,14 +174,16 @@ pub struct Setup {
     /// Told the same, so an automatic skill proposal can be considered.
     pub skill_turns: Option<mpsc::UnboundedSender<TurnEnd>>,
     pub providers: Option<Arc<ProviderStore>>,
+    /// Read when a container chat starts: the runtime and the image are the person's settings.
+    pub settings: Option<Arc<crate::settings::SettingsStore>>,
 }
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-pub fn new_meta(cwd: PathBuf, model: Option<String>, provider: Option<ProviderRef>) -> Meta {
-    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider }
+pub fn new_meta(cwd: PathBuf, model: Option<String>, provider: Option<ProviderRef>, container: bool) -> Meta {
+    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider, container }
 }
 
 pub fn log_path(dir: &std::path::Path, sid: &str) -> PathBuf {
@@ -194,7 +199,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, index: setup.index, mcp: setup.mcp, memory: setup.memory, turns: setup.turns, skills: setup.skills, skill_turns: setup.skill_turns, providers: setup.providers, secret: None, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, index: setup.index, mcp: setup.mcp, memory: setup.memory, turns: setup.turns, skills: setup.skills, skill_turns: setup.skill_turns, providers: setup.providers, settings: setup.settings, secret: None, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -212,6 +217,7 @@ struct Actor {
     skills: Option<Arc<SkillStore>>,
     skill_turns: Option<mpsc::UnboundedSender<TurnEnd>>,
     providers: Option<Arc<ProviderStore>>,
+    settings: Option<Arc<crate::settings::SettingsStore>>,
     /// The key of this chat's provider while its process runs: whatever the chat shows or stores has it replaced.
     secret: Option<String>,
     seq: u64,
@@ -287,6 +293,22 @@ impl Actor {
             return Err("the address of this chat's provider was changed; make a new chat".into());
         }
         Ok(Some(provider))
+    }
+
+    /// The container this chat starts in, when it is a container chat: needs the person's runtime and image, and an address the
+    /// container can reach (its own `localhost` is not this computer's).
+    fn container_spec(&self, provider: &crate::providers::Provider, config_dir: &std::path::Path) -> Result<Option<crate::claude::container::Spec>, String> {
+        use crate::claude::container as c;
+        if !self.meta.container {
+            return Ok(None);
+        }
+        if crate::providers::is_local_host(&crate::providers::host_of(&provider.base_url)) {
+            return Err("an address on this computer cannot be reached from inside a container".into());
+        }
+        let settings = self.settings.as_ref().map(|s| s.get()).unwrap_or_default();
+        let program = c::validate_runtime(settings.container_runtime.as_deref().unwrap_or_default()).map_err(|e| format!("container settings: {e}"))?;
+        let image = c::validate_image(settings.container_image.as_deref().unwrap_or_default()).map_err(|e| format!("container settings: {e}"))?;
+        Ok(Some(c::Spec { runtime: c::Runtime { program, image }, name: c::container_name(&self.meta.sid, &random_hex(3)), data_hash: c::data_hash(&self.dir), config_dir: config_dir.to_path_buf() }))
     }
 
     fn recall_path(&self) -> PathBuf {
@@ -438,6 +460,7 @@ impl Actor {
             };
             // A provider chat gets nothing of the account's side of the app: no notes, no skills, no history search. What the
             // account's chats know must not reach a third party, and what the third party writes must not reach them.
+            let mut container = None;
             let (mcp_config, system_file, plugin_dir, env, pinned_url, model) = match &provider {
                 Some(provider) => {
                     let config_dir = self.dir.join("chatcfg").join(&self.meta.sid);
@@ -446,9 +469,21 @@ impl Actor {
                         self.emit("error", json!({"message": message}));
                         return (Err(message), None);
                     }
+                    container = match self.container_spec(provider, &config_dir) {
+                        Ok(spec) => spec,
+                        Err(message) => {
+                            self.emit("error", json!({"message": message}));
+                            return (Err(message), None);
+                        }
+                    };
                     let inherited: Vec<String> = std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()).collect();
                     self.secret = provider.token.clone().filter(|token| token.len() >= 8);
                     (None, None, None, crate::claude::env::plan(&inherited, Some(provider), &config_dir), Some(provider.base_url.clone()), self.meta.model.clone().or_else(|| provider.model.clone()))
+                }
+                None if self.meta.container => {
+                    let message = "a container chat needs a provider".to_owned();
+                    self.emit("error", json!({"message": message}));
+                    return (Err(message), None);
                 }
                 None => {
                     let mcp_config = match &self.mcp {
@@ -466,7 +501,7 @@ impl Actor {
                     (mcp_config, system_file, plugin_dir, Default::default(), None, self.meta.model.clone())
                 }
             };
-            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url };
+            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container };
             match ClaudeProcess::spawn(&opts) {
                 Ok((process, rx)) => {
                     self.process = Some(process);

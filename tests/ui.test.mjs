@@ -116,3 +116,10 @@ test('a chat on another provider names the host its content goes to, and a chat 
   assert.equal(chatHost({ sid: 'a', provider: { host: 5 } }), '')
   assert.equal(chatHost(undefined), '')
 })
+
+import { isLocalHost } from '../ui/util.js'
+
+test('this computer is told from other hosts', () => {
+  for (const h of ['localhost', 'localhost:11434', '127.0.0.1:8080', '[::1]:9000']) assert.equal(isLocalHost(h), true, h)
+  for (const h of ['gw.example.com', 'localhost.evil.com', '127.0.0.2', '', undefined]) assert.equal(isLocalHost(h), false, String(h))
+})

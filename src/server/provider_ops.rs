@@ -57,7 +57,11 @@ pub fn handle(state: &AppState, name: &str, op: &Value, out: &UnboundedSender<St
                         value
                     })
                     .collect();
-                let _ = out.send(plain("providers", None, json!({"providers": providers, "notice": registry.providers_notice})));
+                let settings = registry.settings().get();
+                let runtime = settings.container_runtime.clone().unwrap_or_default();
+                let image = settings.container_image.clone().unwrap_or_default();
+                let ready = crate::claude::container::validate_runtime(&runtime).is_ok() && crate::claude::container::validate_image(&image).is_ok();
+                let _ = out.send(plain("providers", None, json!({"providers": providers, "notice": registry.providers_notice, "container": {"runtime": runtime, "image": image, "ready": ready}})));
             });
         }
         "provider_save" => match form(op).and_then(|f| store.save(f, crate::now_ms())) {
@@ -67,6 +71,26 @@ pub fn handle(state: &AppState, name: &str, op: &Value, out: &UnboundedSender<St
             }
             Err(reason) => result(out, &rid, false, json!({"error": reason})),
         },
+        // The runtime and the image of container chats: both empty clears them. Only the person sets them, here.
+        "provider_container" => {
+            let (runtime, image) = (text(op, "runtime"), text(op, "image"));
+            let checked = if runtime.trim().is_empty() && image.trim().is_empty() {
+                Ok((None, None))
+            } else {
+                crate::claude::container::validate_runtime(&runtime).and_then(|r| crate::claude::container::validate_image(&image).map(|i| (Some(r.display().to_string()), Some(i))))
+            };
+            match checked {
+                Ok((runtime, image)) => {
+                    state.registry.settings().update(|s| {
+                        s.container_runtime = runtime;
+                        s.container_image = image;
+                    });
+                    let _ = state.registry.events.send(json!({"v": 1, "kind": "providers_changed", "data": {}}));
+                    result(out, &rid, true, json!({}));
+                }
+                Err(reason) => result(out, &rid, false, json!({"error": reason})),
+            }
+        }
         "provider_delete" => {
             let done = store.delete(op["id"].as_str().unwrap_or_default());
             if done {

@@ -252,7 +252,8 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
             let cwd = op["cwd"].as_str().unwrap_or_default();
             let model = op["model"].as_str().map(str::to_owned);
             let provider = op["provider"].as_str().filter(|id| !id.is_empty());
-            match state.registry.create(cwd, model, provider) {
+            let container = op["container"].as_bool() == Some(true);
+            match state.registry.create_in(cwd, model, provider, container) {
                 Ok(handle) => {
                     let info = handle.info().await;
                     let _ = out.send(plain("created", Some(&handle.sid), serde_json::to_value(info).unwrap_or(Value::Null)));

@@ -46,6 +46,11 @@ pub struct Settings {
     /// Scheduled tasks run only while this is on (off by default; the person switches it on in the Schedule tab).
     #[serde(default)]
     pub sched_on: bool,
+    /// The container runtime (an absolute path to docker or podman) and the image a container chat runs in. Both are set by the person.
+    #[serde(default)]
+    pub container_runtime: Option<String>,
+    #[serde(default)]
+    pub container_image: Option<String>,
 }
 
 pub struct SettingsStore {

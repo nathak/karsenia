@@ -157,3 +157,8 @@ export function chatHost(session) {
   const host = session && session.provider && session.provider.host
   return typeof host === 'string' ? host : ''
 }
+
+/** True when `host[:port]` is this computer itself (an address a container cannot reach). */
+export function isLocalHost(host) {
+  return /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(typeof host === 'string' ? host : '')
+}

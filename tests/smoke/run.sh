@@ -19,6 +19,9 @@ cp "$here/propose-clean.json" "$work/propose.json"
 cp "$here/sched-result.json" "$work/sched.json"
 printf '#!/bin/sh\nFAKE_SCENARIO=%s/scenario.jsonl FAKE_PROPOSE=%s/propose.json FAKE_SCHED=%s/sched.json exec %s/target/debug/fake-claude "$@"\n' "$work" "$work" "$work" "$root" > "$work/claude"
 chmod +x "$work/claude"
+# A stand-in docker for the container section: `run ... smoke-image claude <args>` starts the fake claude, anything else does nothing.
+printf '#!/bin/sh\ncase "$1" in\n  run) shift; while [ $# -gt 0 ]; do if [ "$1" = smoke-image ]; then shift; break; fi; shift; done; shift\n       FAKE_SCENARIO=%s/scenario.jsonl exec %s/target/debug/fake-claude "$@" ;;\n  *) exit 0 ;;\nesac\n' "$work" "$root" > "$work/docker"
+chmod +x "$work/docker"
 cargo build --manifest-path "$root/Cargo.toml" >/dev/null
 SWB_UI_DIR="$root/ui" "$root/target/debug/smart-workbench-app" --port 4311 --data "$work/data" --claude "$work/claude" > "$work/server.out" &
 server=$!

@@ -10,6 +10,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
+use super::container::{self, Spec};
 use super::env::{pin_settings, EnvPlan};
 use super::protocol::{parse_line, Event};
 
@@ -35,6 +36,8 @@ pub struct SpawnOpts {
     pub env: EnvPlan,
     /// A provider chat's address: pinned on the command line, and project settings are not read (see `env`).
     pub pinned_url: Option<String>,
+    /// Run inside a container (a provider chat only; EXPERIMENTAL, see `container`).
+    pub container: Option<Spec>,
 }
 
 #[derive(Debug)]
@@ -50,6 +53,8 @@ pub struct ClaudeProcess {
     pid: Option<u32>,
     /// False once stdout has ended: a line queued after that would never be read.
     alive: Arc<AtomicBool>,
+    /// The runtime and the container's name: killing the client of `docker run` does not stop the container, `rm -f` does.
+    container: Option<(PathBuf, String)>,
 }
 
 pub fn claude_bin() -> String {
@@ -86,9 +91,18 @@ pub fn args(opts: &SpawnOpts) -> Vec<String> {
 
 impl ClaudeProcess {
     pub fn spawn(opts: &SpawnOpts) -> Result<(Self, mpsc::UnboundedReceiver<ProcEvent>)> {
-        let mut command = Command::new(&opts.bin);
+        let (program, argv) = match &opts.container {
+            Some(spec) => {
+                let names: Vec<String> = opts.env.set.iter().map(|(name, _)| name.clone()).filter(|name| name != "CLAUDE_CONFIG_DIR").collect();
+                // SAFETY: getuid and getgid only read the process's own ids.
+                let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+                (spec.runtime.program.as_os_str().to_owned(), container::run_args(spec, &opts.cwd, &names, &args(opts), uid, gid).map_err(|e| anyhow::anyhow!(e))?)
+            }
+            None => (std::ffi::OsString::from(&opts.bin), args(opts)),
+        };
+        let mut command = Command::new(&program);
         command
-            .args(args(opts))
+            .args(argv)
             .current_dir(&opts.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -99,9 +113,14 @@ impl ClaudeProcess {
             command.env_remove(name);
         }
         for (name, value) in &opts.env.set {
+            // In a container the config folder is a path inside it, given by the runtime's own `-e`; the host path stays out.
+            if opts.container.is_some() && name == "CLAUDE_CONFIG_DIR" {
+                command.env_remove(name);
+                continue;
+            }
             command.env(name, value);
         }
-        let mut child = command.spawn().with_context(|| format!("could not start {}", opts.bin))?;
+        let mut child = command.spawn().with_context(|| format!("could not start {}", program.to_string_lossy()))?;
         let pid = child.id();
         let stdin = child.stdin.take().context("no stdin")?;
         let stdout = child.stdout.take().context("no stdout")?;
@@ -171,7 +190,8 @@ impl ClaudeProcess {
             let _ = event_tx.send(ProcEvent::Exited(code));
         });
 
-        Ok((Self { stdin: line_tx, pid, alive }, event_rx))
+        let container = opts.container.as_ref().map(|spec| (spec.runtime.program.clone(), spec.name.clone()));
+        Ok((Self { stdin: line_tx, pid, alive, container }, event_rx))
     }
 
     /// Queues one line for stdin; false when the process is gone.
@@ -187,17 +207,30 @@ impl ClaudeProcess {
                 libc::killpg(pid as i32, libc::SIGKILL);
             }
         }
+        if let Some((program, name)) = &self.container {
+            container::remove(program, name, Duration::from_secs(2));
+        }
     }
 
     /// Ends the process and everything it started: SIGTERM to its group, SIGKILL after three seconds.
     pub fn stop(&self) {
         kill_group(self.pid);
+        if let Some((program, name)) = self.container.clone() {
+            // The client passes SIGTERM on; whatever is left after three seconds is removed with the container.
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                let _ = tokio::task::spawn_blocking(move || container::remove(&program, &name, Duration::from_secs(5))).await;
+            });
+        }
     }
 }
 
 impl Drop for ClaudeProcess {
     fn drop(&mut self) {
         kill_group(self.pid);
+        if let Some((program, name)) = self.container.take() {
+            std::thread::spawn(move || container::remove(&program, &name, Duration::from_secs(5)));
+        }
     }
 }
 
@@ -242,7 +275,7 @@ mod tests {
 
     #[test]
     fn the_arguments_include_the_permission_prompt_tool_and_resume() {
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()), env: EnvPlan::default(), pinned_url: None };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()), env: EnvPlan::default(), pinned_url: None, container: None };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
         assert!(a.windows(2).any(|w| w == ["--model", "haiku"]));
@@ -257,7 +290,7 @@ mod tests {
     #[test]
     fn a_provider_chat_pins_its_address_and_skips_project_settings_and_no_secret_is_in_the_arguments() {
         let env = EnvPlan { set: vec![("ANTHROPIC_AUTH_TOKEN".into(), "tok-secret-xyz".into())], remove: vec![] };
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env, pinned_url: Some("https://gw.example.com/x".into()) };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env, pinned_url: Some("https://gw.example.com/x".into()), container: None };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--setting-sources", "user"]));
         let settings = a.windows(2).find(|w| w[0] == "--settings").map(|w| w[1].clone()).unwrap();

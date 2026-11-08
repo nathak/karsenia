@@ -101,6 +101,11 @@ impl Registry {
             }
         };
         let settings = Arc::new(SettingsStore::open(dir.join("settings.json")));
+        // Containers an earlier run of this app left (it was killed): removed, in the background.
+        if let Ok(runtime) = crate::claude::container::validate_runtime(settings.get().container_runtime.as_deref().unwrap_or_default()) {
+            let hash = crate::claude::container::data_hash(&dir);
+            std::thread::spawn(move || crate::claude::container::sweep(&runtime, &hash));
+        }
         let (events, _) = tokio::sync::broadcast::channel(64);
         let sessions: Arc<Mutex<HashMap<String, SessionHandle>>> = Arc::new(Mutex::new(HashMap::new()));
         let bin = bin.unwrap_or_else(claude_bin);
@@ -145,7 +150,7 @@ impl Registry {
             if let (Some(index), None) = (&registry.index, &meta.provider) {
                 index.catch_up(sid, &meta.cwd.to_string_lossy(), meta.created, log.clone());
             }
-            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log, index: registry.index.clone().filter(|_| meta_has_no_provider), mcp: registry.gate.clone(), memory: registry.memory.clone(), turns: registry.turns.clone(), skills: registry.skills.clone(), skill_turns: registry.skill_turns.clone(), providers: Some(registry.providers.clone()) });
+            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log, index: registry.index.clone().filter(|_| meta_has_no_provider), mcp: registry.gate.clone(), memory: registry.memory.clone(), turns: registry.turns.clone(), skills: registry.skills.clone(), skill_turns: registry.skill_turns.clone(), providers: Some(registry.providers.clone()), settings: Some(registry.settings.clone()) });
             registry.sessions.lock().expect("registry lock").insert(sid.to_owned(), handle);
         }
         if let Some(index) = &registry.index {
@@ -157,6 +162,11 @@ impl Registry {
 
     /// A new session in `cwd`; the folder must exist and must not be `/` or the home folder itself.
     pub fn create(&self, cwd: &str, model: Option<String>, provider: Option<&str>) -> Result<SessionHandle, String> {
+        self.create_in(cwd, model, provider, false)
+    }
+
+    /// As `create`; `container` runs the chat's `claude` in a container (needs a provider, and the runtime and image set).
+    pub fn create_in(&self, cwd: &str, model: Option<String>, provider: Option<&str>, container: bool) -> Result<SessionHandle, String> {
         let path = Path::new(cwd);
         if !path.is_absolute() {
             return Err("the folder must be an absolute path".into());
@@ -172,11 +182,21 @@ impl Registry {
             Some(id) => Some(self.providers.get(id).ok_or("no such provider")?.reference()),
             None => None,
         };
-        let meta = session::new_meta(real, model, bound);
+        if container {
+            let provider = bound.as_ref().ok_or("a container chat needs a provider")?;
+            let settings = self.settings.get();
+            if settings.container_runtime.is_none() || settings.container_image.is_none() {
+                return Err("set the container runtime and image first".into());
+            }
+            if crate::providers::is_local_host(&provider.host) {
+                return Err("an address on this computer cannot be reached from inside a container".into());
+            }
+        }
+        let meta = session::new_meta(real, model, bound, container);
         let meta_is_normal = meta.provider.is_none();
         let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
         crate::private::write(&session::meta_path(&self.dir, &meta.sid), &text).map_err(|e| e.to_string())?;
-        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), index: self.index.clone().filter(|_| meta_is_normal), mcp: self.gate.clone(), memory: self.memory.clone(), turns: self.turns.clone(), skills: self.skills.clone(), skill_turns: self.skill_turns.clone(), providers: Some(self.providers.clone()) });
+        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), index: self.index.clone().filter(|_| meta_is_normal), mcp: self.gate.clone(), memory: self.memory.clone(), turns: self.turns.clone(), skills: self.skills.clone(), skill_turns: self.skill_turns.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()) });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok(handle)
     }

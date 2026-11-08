@@ -106,6 +106,12 @@ pub fn host_of(base_url: &str) -> String {
     rest.split('/').next().unwrap_or_default().to_owned()
 }
 
+/// True when `host[:port]` names this computer itself.
+pub fn is_local_host(host: &str) -> bool {
+    let name = if host.starts_with('[') { host.split_once(']').map_or(host, |(h, _)| h).to_owned() + "]" } else { host.split(':').next().unwrap_or_default().to_owned() };
+    matches!(name.as_str(), "localhost" | "127.0.0.1" | "[::1]")
+}
+
 /// Checks and normalises an address; returns it without a trailing slash. The error never repeats the input.
 ///
 /// `https` anywhere; plain `http` only to this machine (a local gateway). No user name, query or fragment: the address is put
@@ -143,7 +149,7 @@ pub fn validate_base_url(text: &str) -> Result<String, &'static str> {
             return Err("the port is not valid");
         }
     }
-    let local = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]");
+    let local = is_local_host(&host);
     match scheme.as_str() {
         "https" => {}
         "http" if local => {}
@@ -346,6 +352,16 @@ mod tests {
         }
         let error = validate_base_url("https://user:hunter2@example.com").unwrap_err();
         assert!(!error.contains("hunter2"), "an error never repeats what was typed");
+    }
+
+    #[test]
+    fn this_computer_is_told_from_other_hosts() {
+        for local in ["localhost", "localhost:11434", "127.0.0.1", "127.0.0.1:8080", "[::1]", "[::1]:9000"] {
+            assert!(is_local_host(local), "{local}");
+        }
+        for other in ["gw.example.com", "gw.example.com:443", "localhost.evil.com", "127.0.0.2", "10.0.0.1:80", "[::2]"] {
+            assert!(!is_local_host(other), "{other}");
+        }
     }
 
     #[test]

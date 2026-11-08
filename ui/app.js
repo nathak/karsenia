@@ -1,6 +1,6 @@
 import { marked } from './vendor/marked.js'
 import DOMPurify from './vendor/purify.js'
-import { baseName, chatHost, checkImage, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, pathsInText, resultBlocks, skillMd, toolSummary } from './util.js'
+import { baseName, chatHost, checkImage, isLocalHost, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, pathsInText, resultBlocks, skillMd, toolSummary } from './util.js'
 
 // ---- text ----
 const TEXT = {
@@ -44,6 +44,8 @@ const TEXT = {
     provKey: '키', provKeyClear: '저장된 키 지우기', provKeyKeep: '비워 두면 저장된 키를 그대로 둡니다.', provKeyNone: '키 없이 쓰는 주소는 비워 두세요.', provModel: '기본 모델 (비우면 Claude Code 기본)', provAliases: '모델 이름 바꾸기', provAliasesNote: 'Claude Code가 opus, sonnet, haiku로 부르는 모델을 이 주소의 모델 이름으로 바꿉니다. 백그라운드 작업은 haiku를 쓰므로 비워 두면 그 주소에 없는 이름을 요청할 수 있습니다.',
     provSave: '저장', provEdit: '수정', provDelete: '삭제', provDeleteConfirm: '이 제공자를 삭제할까요? 이 제공자의 대화 {n}개는 기록만 남고 더 이어 갈 수 없습니다.', provHasKey: '키 있음', provNoKey: '키 없음', provChats: '대화', provNoProviders: '아직 제공자가 없습니다.',
     provBanner: '이 대화의 내용은 {host} 로 갑니다 (Claude 계정이 아님). 기억, 스킬, 기록 검색, 자동 저장은 이 대화에 쓰이지 않습니다.', provVia: '→',
+    ctrUse: '컨테이너 안에서 실행 (실험)', ctrTitle: '컨테이너 (실험)', ctrIntro: '제공자를 쓰는 대화의 claude를 docker 또는 podman 컨테이너 안에서 실행합니다. 컨테이너는 프로젝트 폴더(읽기·쓰기)와 이 대화의 설정 폴더만 보고, 홈 폴더, 데이터 폴더, Claude 계정 인증 정보는 보지 못합니다. 프로젝트 폴더 자체는 보호하지 않고 네트워크는 열려 있으며, 이 컴퓨터의 주소(localhost)는 컨테이너에서 닿지 않습니다. 이미지에는 claude가 들어 있어야 하고, 실제 docker·podman으로는 아직 검증하지 못했습니다.',
+    ctrRuntime: '실행 파일 (절대 경로, docker 또는 podman)', ctrImage: '이미지 (미리 받아 둔 것, 자동으로 받지 않습니다)', ctrReady: '컨테이너 대화를 만들 수 있습니다.', ctrNotReady: '실행 파일과 이미지를 모두 적어야 컨테이너 대화를 만들 수 있습니다.', ctrBanner: '이 대화는 컨테이너 안에서 실행됩니다.', ctrTag: '컨테이너',
   },
   en: {
     newChat: '＋ New chat', folder: 'Project folder (absolute path)', model: 'Model', create: 'Create', cancel: 'Cancel', empty: 'Pick a chat on the left or start a new one.',
@@ -85,6 +87,8 @@ const TEXT = {
     provKey: 'Key', provKeyClear: 'Clear the saved key', provKeyKeep: 'Leave empty to keep the saved key.', provKeyNone: 'Leave empty for an address that needs no key.', provModel: 'Default model (empty: Claude Code\'s own default)', provAliases: 'Rename models', provAliasesNote: 'Claude Code asks for opus, sonnet and haiku; these give the names this address uses for them. Background work uses haiku, so if it is empty, a name the address does not have may be asked for.',
     provSave: 'Save', provEdit: 'Edit', provDelete: 'Delete', provDeleteConfirm: 'Delete this provider? Its {n} chat(s) keep their history and can no longer be continued.', provHasKey: 'key set', provNoKey: 'no key', provChats: 'chats', provNoProviders: 'No providers yet.',
     provBanner: 'This chat\'s content goes to {host} (not your Claude account). Notes, skills, history search and auto-save are not used in this chat.', provVia: '→',
+    ctrUse: 'Run inside a container (experimental)', ctrTitle: 'Container (experimental)', ctrIntro: 'Runs the claude of a chat that uses a provider inside a docker or podman container. The container sees the project folder (read-write) and this chat\'s own settings folder, and not your home folder, the data folder or the Claude account\'s credentials. It does not protect the project folder itself, the network is open, and an address on this computer (localhost) cannot be reached from inside. The image must contain claude. It has not been verified with a real docker or podman yet.',
+    ctrRuntime: 'Program (absolute path, docker or podman)', ctrImage: 'Image (already pulled; it is never pulled for you)', ctrReady: 'Container chats can be made.', ctrNotReady: 'Both the program and the image are needed before a container chat can be made.', ctrBanner: 'This chat runs inside a container.', ctrTag: 'container',
   },
 }
 const LANG = (navigator.language || 'ko').toLowerCase().startsWith('en') ? 'en' : 'ko'
@@ -237,7 +241,7 @@ function renderSessions() {
     title.append(el('span', 'dot ' + s.state), el('span', '', s.title || t('untitled')))
     const host = chatHost(s)
     const detail = el('div', 'd', baseName(s.cwd) + (s.model ? ' · ' + s.model : ''))
-    if (host) detail.append(' · ', el('span', 'via', `${t('provVia')} ${host}`))
+    if (host) detail.append(' · ', el('span', 'via', `${t('provVia')} ${host}${s.container ? ` · ${t('ctrTag')}` : ''}`))
     b.append(title, detail)
     b.addEventListener('click', () => { S.jumpTo = null; openView(s.sid, true) })
     list.appendChild(b)
@@ -256,7 +260,7 @@ function openView(sid, attach) {
   $('title').textContent = s ? (s.title || baseName(s.cwd)) + '  ·  ' + s.cwd : ''
   const via = chatHost(s)
   $('prov-banner').hidden = !via
-  $('prov-banner').textContent = via ? t('provBanner').replace('{host}', via) : ''
+  $('prov-banner').textContent = via ? t('provBanner').replace('{host}', via) + (s.container ? ' ' + t('ctrBanner') : '') : ''
   setState(s ? s.state : 'idle')
   renderSessions()
   if (dialog.open) dialog.close('switched')
@@ -264,10 +268,20 @@ function openView(sid, attach) {
   $('input').focus()
 }
 
-$('new-provider').addEventListener('change', () => { $('new-prov-note').hidden = !$('new-provider').value })
+// The container box is offered only for a provider a container can reach, once the program and the image are set.
+function updateNewChat() {
+  const p = (S.providers?.providers || []).find(x => x.id === $('new-provider').value)
+  $('new-prov-note').hidden = !p
+  const offer = Boolean(p && S.providers?.container?.ready && !isLocalHost(p.host))
+  $('new-ctr-row').hidden = !offer
+  if (!offer) $('new-container').checked = false
+}
+$('new-provider').addEventListener('change', updateNewChat)
 $('new-toggle').addEventListener('click', () => {
   $('new-form').hidden = !$('new-form').hidden
-  $('new-prov-note').hidden = !$('new-provider').value
+  // A form opened again starts on the Claude account: a chat is never put on a third party by what was chosen last time.
+  if (!$('new-form').hidden) $('new-provider').value = ''
+  updateNewChat()
   $('new-cwd').value = store.get('swb-cwd') || ''
   $('new-cwd').focus()
 })
@@ -277,7 +291,7 @@ $('new-form').addEventListener('submit', event => {
   const cwd = $('new-cwd').value.trim()
   if (!cwd) return
   store.set('swb-cwd', cwd)
-  wsSend({ op: 'new', cwd, model: $('new-model').value || undefined, provider: $('new-provider').value || undefined })
+  wsSend({ op: 'new', cwd, model: $('new-model').value || undefined, provider: $('new-provider').value || undefined, container: $('new-container').checked || undefined })
   $('new-form').hidden = true
 })
 
@@ -1288,11 +1302,22 @@ function renderProviders() {
   select.replaceChildren(Object.assign(el('option', '', t('provAccount')), { value: '' }))
   for (const p of d.providers) select.append(Object.assign(el('option', '', `${p.name} (${p.host})`), { value: p.id }))
   select.value = d.providers.some(p => p.id === keep) ? keep : ''
+  const ctr = d.container || {}
+  if (!$('ctr-form').contains(document.activeElement)) {
+    $('ctr-runtime').value = ctr.runtime || ''
+    $('ctr-image').value = ctr.image || ''
+  }
+  $('ctr-state').textContent = ctr.ready ? t('ctrReady') : t('ctrNotReady')
+  updateNewChat()
   $('prov-form').hidden = S.pvEditing === null
   $('prov-new').hidden = S.pvEditing !== null
   if (!d.providers.length) list.appendChild(el('div', 'muted', t('provNoProviders')))
   for (const p of d.providers) list.appendChild(pvRow(p))
 }
+$('ctr-form').addEventListener('submit', event => {
+  event.preventDefault()
+  pvSend({ op: 'provider_container', runtime: $('ctr-runtime').value, image: $('ctr-image').value })
+})
 $('prov-new').addEventListener('click', () => { S.pvEditing = ''; pvFill(null); renderProviders() })
 $('pv-cancel').addEventListener('click', () => { S.pvEditing = null; $('pv-key').value = ''; renderProviders() })
 $('prov-form').addEventListener('submit', event => {

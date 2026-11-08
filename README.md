@@ -206,12 +206,33 @@ changed only by you in the page: there is no MCP tool for it. An `https://` addr
 not start again (it was made for another party): make a new chat. A changed key or path on the same host is used at the next start.
 
 Limits worth knowing: tools that run on this computer (a command, a file read) run as you, so one you approve can read
-`providers.json` or the account's credentials file, and a provider chat's permission prompts are the only guard (read them; this is the reason
-the container option exists). The chat's `claude` and the commands it runs inherit the key in their environment. Your own plugins, hooks and
+`providers.json` or the account's credentials file, and a provider chat's permission prompts are the only guard (read them; the container option below narrows what a command can reach). The chat's `claude` and the commands it runs inherit the key in their environment. Your own plugins, hooks and
 permission rules in `~/.claude` do not apply in a provider chat (its settings folder is empty), nor do the project's settings. Claude Code's
 background model (haiku) goes to the same address: if the address names models differently, fill in the model names. Managed
 organisation policy applies whatever the flags say. The transcripts Claude Code keeps for a provider chat are in its own settings
 folder under `chatcfg/` and are not removed when the provider is.
+
+### Running a provider chat in a container (experimental)
+
+In the Model providers box, give the absolute path of `docker` or `podman` and the name of an image that contains `claude` (pulled by you
+beforehand: the app passes `--pull=never`, so a mistyped name fails instead of fetching another image). A new chat on a provider then
+offers "Run inside a container". **This part has not been run against a real docker or podman**: it was written from their documented
+options and tested with a stand-in runtime that records what it was asked and starts the fake `claude` (`tests/container.rs`), so it
+checks what the app asks for and how it cleans up, not what the runtime does with it. Try it on something unimportant first.
+
+What the app asks for: `run --rm -i --init --pull=never --cap-drop=ALL --security-opt=no-new-privileges --read-only`, a small `/tmp`
+tmpfs, `--pids-limit=512 --memory=4g`, your user id (`--userns=keep-id` for podman), exactly two mounts (the project folder at its own path,
+read-write, and the chat's own settings folder), no host network, and the provider's key by name only (`-e NAME`, the value comes from the
+runtime client's environment, so it is not in any argument). The home folder, the data folder and the account's credentials are not mounted.
+The container has a name and a label of this data folder: stop, kill and process exit remove it by name (`rm -f`), because killing the
+`docker run` client does not stop the container, and the next start of the app removes any left by a crash.
+
+Limits: only provider chats (an account chat would need the account's credentials inside, where a command could read them); the project
+folder is mounted read-write, so the container does not protect it; the network is open (the provider, the web, your LAN); an address on
+this computer (`localhost`) is refused because a container's `localhost` is not this computer's; no notes, skills or history search
+(as for any provider chat); a path with `:` `,` or a backslash cannot be mounted; whoever can run `docker inspect` (the docker group is
+root-equivalent) sees the key in the container's environment; the settings are checked again at every start, so a changed one stops the chat
+instead of quietly running it outside a container.
 
 ## Security
 
@@ -242,7 +263,7 @@ SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude,
 ## Layout
 
 `src/claude/` everything specific to the CLI (protocol, process) · `src/session.rs` one chat's task (state, pending permissions, log) ·
-`src/index.rs` the FTS5 index · `src/memory.rs` the notes, their checks and the recall block · `src/extract.rs` auto-save · `src/settings.rs` · `src/providers.rs` providers and their checks · `src/claude/env.rs` the environment of a provider chat · `src/schedule.rs` times · `src/sched_store.rs` tasks and runs · `src/scheduler.rs` the clock loop and one run · `src/skills.rs` skills, their risk report and the one-off folder · `src/propose.rs` proposals · `src/mcp.rs` the stdio MCP server and the per-chat secrets · `src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files + the MCP socket · `ui/` plain ES modules, `ui/vendor/` marked and DOMPurify (pinned, licenses included).
+`src/index.rs` the FTS5 index · `src/memory.rs` the notes, their checks and the recall block · `src/extract.rs` auto-save · `src/settings.rs` · `src/providers.rs` providers and their checks · `src/claude/env.rs` the environment of a provider chat · `src/claude/container.rs` the container arguments · `src/schedule.rs` times · `src/sched_store.rs` tasks and runs · `src/scheduler.rs` the clock loop and one run · `src/skills.rs` skills, their risk report and the one-off folder · `src/propose.rs` proposals · `src/mcp.rs` the stdio MCP server and the per-chat secrets · `src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files + the MCP socket · `ui/` plain ES modules, `ui/vendor/` marked and DOMPurify (pinned, licenses included).
 
 ## Verified against Claude Code 2.1.316
 
@@ -253,4 +274,4 @@ host, the IDE connection protocol, and Windows/macOS.
 
 ## Next
 
-a container launcher for provider chats · a Telegram gateway · Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages) · file tree and editor · PTY terminal.
+a Telegram gateway · Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages) · file tree and editor · PTY terminal.
