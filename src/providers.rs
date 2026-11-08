@@ -176,8 +176,9 @@ pub fn validate_name(text: &str) -> Result<String, &'static str> {
 
 pub fn validate_token(text: &str) -> Result<String, &'static str> {
     let token = text.trim();
-    if token.is_empty() || token.len() > MAX_TOKEN || !token.chars().all(|c| c.is_ascii_graphic()) {
-        return Err("the key is empty, too long, or holds a space or a character that is not plain text");
+    // Under 8 characters is not a key, and a chat's output is scrubbed of a key only from 8 characters on.
+    if token.len() < 8 || token.len() > MAX_TOKEN || !token.chars().all(|c| c.is_ascii_graphic()) {
+        return Err("the key must be 8 to 4096 characters, with no space or character that is not plain text");
     }
     Ok(token.to_owned())
 }
@@ -430,6 +431,7 @@ mod tests {
         assert!(store.save(form("A"), 1).is_err(), "names are unique");
         assert!(store.save(Form { auth: Auth::XApiKey, token: None, ..form("B") }, 1).is_err(), "an API key address needs the key");
         assert!(store.save(Form { token: Some("has space".into()), ..form("C") }, 1).is_err());
+        assert!(store.save(Form { token: Some("short".into()), ..form("C2") }, 1).is_err(), "a key under 8 characters would not be scrubbed from the chat");
         assert!(store.save(Form { model: "--flag".into(), ..form("D") }, 1).is_err());
         assert!(store.save(Form { models: ["".into(), "bad name".into(), "".into()], ..form("E") }, 1).is_err());
         assert!(store.save(Form { base_url: "http://example.com".into(), ..form("F") }, 1).is_err());

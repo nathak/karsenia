@@ -193,7 +193,7 @@ impl Registry {
             if settings.container_runtime.is_none() || settings.container_image.is_none() {
                 return Err("set the container runtime and image first".into());
             }
-            crate::claude::container::project_allowed(&real, &self.dir, std::env::var_os("HOME").map(PathBuf::from).as_deref()).map_err(str::to_owned)?;
+            crate::claude::container::project_allowed(&real, &self.dir, std::env::var_os("HOME").map(PathBuf::from).as_deref(), std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).as_deref()).map_err(str::to_owned)?;
             if crate::providers::is_local_host(&provider.host) {
                 return Err("an address on this computer cannot be reached from inside a container".into());
             }

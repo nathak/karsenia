@@ -276,3 +276,17 @@ async fn the_person_sets_the_runtime_and_image_in_the_page_and_odd_ones_are_refu
     ws.send(Message::Text(json!({"op": "provider_list"}).to_string())).await.unwrap();
     assert_eq!(next_kind(&mut ws, "providers").await["container"]["ready"], json!(false));
 }
+
+#[tokio::test]
+async fn a_link_put_in_place_of_the_project_folder_after_the_chat_was_made_does_not_start_it() {
+    let fx = fixture(true).await;
+    let id = remote(&fx);
+    let folder = project(&fx);
+    let chat = fx.server.registry.create_in(folder.to_str().unwrap(), None, Some(&id), true).unwrap();
+    // Another chat's command replaces the folder with a link to somewhere that holds the data folder.
+    std::fs::remove_dir_all(&folder).unwrap();
+    std::os::unix::fs::symlink(&fx.root, &folder).unwrap();
+    let err = chat.send("hello".into(), vec![]).await.unwrap_err();
+    assert!(err.contains("not where this chat was made"), "{err}");
+    assert!(calls(&fx).iter().all(|c| !c.starts_with("CALL [run]")), "the runtime was asked to run with the folder behind the link");
+}

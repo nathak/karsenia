@@ -208,7 +208,7 @@ impl ClaudeProcess {
             }
         }
         if let Some((program, name)) = &self.container {
-            container::remove(program, name, Duration::from_secs(2));
+            container::remove(program, name, Duration::ZERO);
         }
     }
 
@@ -229,7 +229,8 @@ impl Drop for ClaudeProcess {
     fn drop(&mut self) {
         kill_group(self.pid);
         if let Some((program, name)) = self.container.take() {
-            std::thread::spawn(move || container::remove(&program, &name, Duration::from_secs(5)));
+            // Started here and not waited for: the host may be ending, and the command goes on without it.
+            container::remove(&program, &name, Duration::ZERO);
         }
     }
 }

@@ -6,7 +6,8 @@
 //! Only provider chats may use it. An account chat would need the account's credentials inside the container, where a command the
 //! chat runs could read them, which would defeat the purpose. The container is a second wall around the commands and file reads a
 //! chat is allowed to make (the chat sees the project folder and nothing of the rest of the home folder, the data folder or the
-//! account's credentials). It does not protect the project folder itself (mounted read-write), and the network is open.
+//! account's credentials). It does not protect the project folder itself (mounted read-write: what a command writes there, such as a
+//! `.claude/settings.json` or a hook, is read later by an account chat in the same folder), and the network is open.
 use std::path::{Path, PathBuf};
 
 /// Where the config folder of a chat is inside the container.
@@ -69,24 +70,39 @@ pub fn container_name(sid: &str, instance: &str, random: &str) -> String {
 /// A project folder a container may be given: not the data folder, not a folder that holds it, not the home folder or a folder that
 /// holds it (the account's credentials and `~/.claude.json` are there), and not a place in the home folder that keeps secrets.
 /// Paths are compared as given, so pass canonical ones.
-pub fn project_allowed(project: &Path, data_dir: &Path, home: Option<&Path>) -> Result<(), &'static str> {
+pub fn project_allowed(project: &Path, data_dir: &Path, home: Option<&Path>, runtime_dir: Option<&Path>) -> Result<(), &'static str> {
     let data = data_dir.canonicalize().unwrap_or_else(|_| data_dir.to_path_buf());
     if project.starts_with(&data) || data.starts_with(project) {
         return Err("a container cannot be given the app's data folder, or a folder that holds it");
     }
-    if let Some(home) = home.and_then(|h| h.canonicalize().ok()) {
-        if home.starts_with(project) {
-            return Err("a container cannot be given the home folder or a folder that holds it: the account's credentials are there");
-        }
-        if [".claude", ".ssh", ".aws", ".gnupg", ".config", ".kube", ".docker", ".local"].iter().any(|dir| project.starts_with(home.join(dir))) {
-            return Err("a container cannot be given a folder where the home folder keeps credentials and settings");
-        }
+    // Without a home folder the rules below cannot be applied, so nothing is given away on a guess.
+    let Some(home) = home.and_then(|h| h.canonicalize().ok()) else {
+        return Err("the home folder is not known, so a container chat cannot be checked");
+    };
+    if home.starts_with(project) {
+        return Err("a container cannot be given the home folder or a folder that holds it: the account's credentials are there");
+    }
+    if [".claude", ".ssh", ".aws", ".gnupg", ".config", ".kube", ".docker", ".local"].iter().any(|dir| project.starts_with(home.join(dir))) {
+        return Err("a container cannot be given a folder where the home folder keeps credentials and settings");
+    }
+    // Folders where this user's programs keep sockets (tmux, ssh-agent, gpg-agent, the container runtime's own): a container that runs
+    // as the same user could drive them. A project that holds one of them is refused, and so is one inside the run folders.
+    let mut sockets: Vec<PathBuf> = ["/tmp", "/var/tmp", "/dev/shm", "/run", "/var/run"].iter().map(PathBuf::from).collect();
+    sockets.extend(runtime_dir.and_then(|d| d.canonicalize().ok()));
+    if sockets.iter().any(|dir| dir.starts_with(project)) {
+        return Err("a container cannot be given /tmp, /run or a folder that holds them: programs keep sockets there that it could drive");
+    }
+    let runtime = runtime_dir.and_then(|d| d.canonicalize().ok());
+    if project.starts_with("/run") || project.starts_with("/var/run") || runtime.is_some_and(|r| project.starts_with(r)) {
+        return Err("a container cannot be given a folder in /run or the user's runtime folder: programs keep sockets there that it could drive");
     }
     Ok(())
 }
 
 /// One number for one data folder (FNV-1a): the label by which the containers of this app are found again.
 pub fn data_hash(dir: &Path) -> String {
+    // The same folder reached by another spelling (a link, a trailing slash) is the same folder.
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     let h = dir.to_string_lossy().bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
     format!("{h:016x}")
 }
@@ -135,7 +151,8 @@ pub fn run_args(spec: &Spec, cwd: &Path, env_names: &[String], claude_args: &[St
     Ok(args)
 }
 
-/// `rm -f <name>`: removes the container whether it runs or not. Waits at most `wait` for it.
+/// `rm -f <name>`: removes the container whether it runs or not. The command is started at once; `wait` is how long to wait for it
+/// (zero: do not wait, which is right when this process may be about to end: the command goes on without it).
 pub fn remove(program: &Path, name: &str, wait: std::time::Duration) {
     let Ok(mut child) = std::process::Command::new(program).args(["rm", "-f", name]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() else { return };
     let start = std::time::Instant::now();
@@ -231,7 +248,7 @@ mod tests {
         std::fs::create_dir_all(&data).unwrap();
         std::fs::create_dir_all(home.join(".claude").join("sub")).unwrap();
         std::fs::create_dir_all(home.join("work").join("proj")).unwrap();
-        let allowed = |p: &Path| project_allowed(p, &data, Some(&home));
+        let allowed = |p: &Path| project_allowed(p, &data, Some(&home), None);
         assert!(allowed(&home.join("work").join("proj")).is_ok());
         assert!(allowed(&root.join("elsewhere")).is_ok());
         for bad in [&data, &data.join("chatcfg"), data.parent().unwrap(), &home, home.parent().unwrap(), &root, &home.join(".claude"), &home.join(".claude").join("sub"), &home.join(".local")] {
@@ -240,11 +257,22 @@ mod tests {
         // With the data folder elsewhere, the home rules stand on their own.
         let far = root.join("far-data");
         std::fs::create_dir_all(&far).unwrap();
-        let alone = |p: &Path| project_allowed(p, &far, Some(&home));
+        let alone = |p: &Path| project_allowed(p, &far, Some(&home), None);
         assert!(alone(&home.join("work")).is_ok());
         for bad in [&home, home.parent().unwrap(), &root, &home.join(".claude"), &home.join(".ssh")] {
             assert!(alone(bad).is_err(), "{} must be refused", bad.display());
         }
+        // Folders of sockets, and a home folder that is not known.
+        for bad in ["/tmp", "/var/tmp", "/dev/shm", "/run", "/run/user", "/var", "/run/user/1000/podman"] {
+            assert!(alone(Path::new(bad)).is_err(), "{bad} must be refused");
+        }
+        let runtime = root.join("xdg-run");
+        std::fs::create_dir_all(runtime.join("podman")).unwrap();
+        assert!(project_allowed(&runtime, &far, Some(&home), Some(&runtime)).is_err());
+        assert!(project_allowed(&runtime.join("podman"), &far, Some(&home), Some(&runtime)).is_err());
+        assert!(project_allowed(&home.join("work"), &far, Some(&home), Some(&runtime)).is_ok());
+        assert!(project_allowed(Path::new("/tmp/some-project"), &far, Some(&home), None).is_ok(), "a project that merely lives in /tmp is fine");
+        assert!(project_allowed(&home.join("work"), &far, None, None).is_err(), "no home folder known: no container chat");
     }
 
     #[test]

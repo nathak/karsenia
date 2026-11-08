@@ -308,7 +308,12 @@ impl Actor {
         if crate::providers::is_local_host(&crate::providers::host_of(&provider.base_url)) {
             return Err("an address on this computer cannot be reached from inside a container".into());
         }
-        c::project_allowed(&self.meta.cwd, &self.dir, std::env::var_os("HOME").map(PathBuf::from).as_deref()).map_err(str::to_owned)?;
+        // The folder is looked at again now: a link put in its place since the chat was made must not turn it into another folder.
+        let real = self.meta.cwd.canonicalize().map_err(|e| format!("the project folder cannot be read: {e}"))?;
+        if real != self.meta.cwd {
+            return Err("the project folder is not where this chat was made (a link or a move); make a new chat".into());
+        }
+        c::project_allowed(&real, &self.dir, std::env::var_os("HOME").map(PathBuf::from).as_deref(), std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).as_deref()).map_err(str::to_owned)?;
         let settings = self.settings.as_ref().map(|s| s.get()).unwrap_or_default();
         let program = c::validate_runtime(settings.container_runtime.as_deref().unwrap_or_default()).map_err(|e| format!("container settings: {e}"))?;
         let image = c::validate_image(settings.container_image.as_deref().unwrap_or_default()).map_err(|e| format!("container settings: {e}"))?;

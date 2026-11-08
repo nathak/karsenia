@@ -200,7 +200,7 @@ Scheduled tasks always use your account.
 
 **The key.** Stored in `<data>/providers.json` (`0600`). The page is never sent it again (`has_token` and the host only), it is passed to
 the process in the environment (never in the arguments, which any user can read), and anything of the chat that would be shown or stored
-is scrubbed of it (`[provider key]`; it catches the key as one piece of text, not an encoded or split one). Providers are made and
+is scrubbed of it (`[provider key]`; it catches the key as one piece of text, not an encoded or split one; a key must be at least 8 characters). Providers are made and
 changed only by you in the page: there is no MCP tool for it. An `https://` address is required, except for this computer (`localhost`,
 `127.0.0.1`, `[::1]`), no user name, query or fragment. If a chat's provider is deleted, or its address (host) is changed, the chat does
 not start again (it was made for another party): make a new chat. A changed key or path on the same host is used at the next start.
@@ -225,12 +225,12 @@ tmpfs, `--pids-limit=512 --memory=4g`, your user id (`--userns=keep-id` for podm
 read-write, and the chat's own settings folder), no host network, and the provider's key by name only (`-e NAME`, the value comes from the
 runtime client's environment, so it is not in any argument). The home folder, the data folder and the account's credentials are not mounted.
 The container has a name and a label of this data folder: stop, kill and process exit remove it by name (`rm -f`), because killing the
-`docker run` client does not stop the container, and the next start of the app removes any left by a crash (never one of its own run: every name carries a tag of the run).
+`docker run` client does not stop the container, and the next start of the app removes any left by a crash (never one of its own run: every name carries a tag of the run). Only one app should use a data folder at a time: a second one started on the same folder takes the first one's running containers for leftovers and removes them (there is no lock on the folder). Stop and exit start the removal and do not wait for it, so a container can outlive an app that is killed hard until the next start sweeps it (with the client gone, its stdin closes, which should end `claude`; that is not checked with a real runtime).
 
 Limits: only provider chats (an account chat would need the account's credentials inside, where a command could read them); the project
-folder is mounted read-write, so the container does not protect it; the network is open (the provider, the web, your LAN); an address on
+folder is mounted read-write, so the container does not protect it, and **what a command writes there outlives the container**: a `.claude/settings.json` with an `env` or a hook, a `.git/hook`, an `.envrc` written by an approved command is read later by an account chat opened in the same folder, and an `env` there sends the account's token to another address (measured). The same holds for a provider chat outside a container once you approve a write. Read what a command writes into the project before you open an account chat there; the network is open (the provider, the web, your LAN); an address on
 this computer (`localhost`) is refused because a container's `localhost` is not this computer's; no notes, skills or history search
-(as for any provider chat); a path with `:` `,` or a backslash cannot be mounted; a project folder that is, holds, or lies inside the data folder, or that is the home folder, holds it, or lies in `~/.claude`, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config`, `~/.kube`, `~/.docker` or `~/.local` is refused (the account's credentials and the app's key file are there); whoever can run `docker inspect` (the docker group is
+(as for any provider chat); a path with `:` `,` or a backslash cannot be mounted; a project folder that is, holds, or lies inside the data folder, or that is the home folder, holds it, or lies in `~/.claude`, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config`, `~/.kube`, `~/.docker` or `~/.local` is refused (the account's credentials and the app's key file are there), and so is `/tmp`, `/var/tmp`, `/dev/shm`, `/run`, the user's runtime folder, any folder that holds one of them, and any folder inside `/run` or the runtime folder (programs keep sockets there, tmux, ssh-agent, gpg-agent and the runtime's own, which a container running as you could drive); the folder is looked at again at every start and a link put in its place stops the chat; a container chat is refused when the home folder is not known; whoever can run `docker inspect` (the docker group is
 root-equivalent) sees the key in the container's environment; the settings are checked again at every start, so a changed one stops the chat
 instead of quietly running it outside a container.
 
