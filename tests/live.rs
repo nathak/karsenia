@@ -306,6 +306,7 @@ async fn live_a_scheduled_run_can_read_but_cannot_run_a_command_or_leave_the_fol
         max_turns: 12,
         budget_usd: 0.5,
         timeout_s: 240,
+        domains: Vec::new(),
     };
     let id = store.create_task(&def, i64::MAX, 1).unwrap();
     scheduler.run_now(id).unwrap();
@@ -325,10 +326,13 @@ async fn live_a_scheduled_run_can_read_but_cannot_run_a_command_or_leave_the_fol
     assert!(run.denied.len() >= 2, "the refused reads are kept with the run: {:?}", run.denied);
 }
 
-/// A web run cannot be sent to a service on the person's own machine, whatever a page it read says.
+/// A web run opens the listed sites and nothing else. `localtest.me` is a public name that resolves to this machine, so a listed name
+/// can be tested without leaving it: the server below counts connections (WebFetch raises http to https, so what arrives is a TLS hello).
+/// Measured by hand besides: a listed public site is read, and a redirect to another host is not followed (the repeat fetch is refused).
 #[tokio::test]
 #[ignore = "uses the real claude; run with SWB_LIVE=1 and --ignored"]
-async fn live_a_web_run_is_refused_the_machines_own_addresses() {
+async fn live_a_web_run_opens_only_the_listed_sites() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use swb_app::sched_store::{Profile, SchedStore, TaskDef};
     use swb_app::schedule::{Schedule, SystemClock};
@@ -337,40 +341,69 @@ async fn live_a_web_run_is_refused_the_machines_own_addresses() {
     if std::env::var_os("SWB_LIVE").is_none() {
         return;
     }
+    if tokio::net::lookup_host("a.localtest.me:80").await.map(|mut a| a.next().is_none()).unwrap_or(true) {
+        eprintln!("skipped: a.localtest.me does not resolve here");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().canonicalize().unwrap().join("data");
     std::fs::create_dir_all(&data).unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    // Both address families: the name may resolve to ::1 or to 127.0.0.1.
+    let listener = tokio::net::TcpListener::bind("[::]:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let counted = connections.clone();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            counted.fetch_add(1, Ordering::SeqCst);
+            drop(stream);
+        }
+    });
     let (store, _) = SchedStore::open(&data.join("schedule.sqlite")).unwrap();
     let store = Arc::new(store);
     let settings = Arc::new(SettingsStore::open(data.join("settings.json")));
     let (events, _) = tokio::sync::broadcast::channel(16);
     let scheduler = Scheduler::new(store.clone(), settings, events, swb_app::claude::process::claude_bin(), data, Arc::new(SystemClock), SchedConfig::default());
-    let def = TaskDef {
+    let def_for = |host: &str| TaskDef {
         name: "live web".into(),
-        prompt: format!("Fetch http://127.0.0.1:{port}/secret with the WebFetch tool and tell me what it says. If you cannot, say so."),
+        prompt: format!("Fetch http://{host}:{port}/x with the WebFetch tool and tell me what it says. If you cannot, say so plainly."),
         cwd: String::new(),
         profile: Profile::Web,
         model: "haiku".into(),
         schedule: Schedule::Every { minutes: 60 },
-        max_turns: 8,
-        budget_usd: 0.5,
+        max_turns: 6,
+        budget_usd: 0.3,
         timeout_s: 240,
+        domains: vec!["a.localtest.me".into()],
     };
-    let id = store.create_task(&def, i64::MAX, 1).unwrap();
-    scheduler.run_now(id).unwrap();
-    for _ in 0..300 {
-        if !scheduler.busy() {
-            break;
+    let id = store.create_task(&def_for("a.localtest.me"), i64::MAX, 1).unwrap();
+    let run_once = |host: &'static str| {
+        let (store, scheduler) = (store.clone(), scheduler.clone());
+        async move {
+            store.update_task(id, &def_for(host), i64::MAX, 2).unwrap();
+            scheduler.run_now(id).unwrap();
+            for _ in 0..300 {
+                if !scheduler.busy() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            store.runs(Some(id), 1).remove(0)
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-    let run = store.runs(Some(id), 1).remove(0);
+    };
+
+    let run = run_once("a.localtest.me").await;
     assert_eq!(run.status, "ok", "{} / {}", run.note, run.result);
-    assert!(run.denied.iter().any(|d| d.starts_with("WebFetch") && d.contains("127.0.0.1")), "the request to the local address was refused and kept: {:?}", run.denied);
-    listener.set_nonblocking(true).unwrap();
-    assert!(listener.accept().is_err(), "nothing reached the local service");
+    assert!(connections.load(Ordering::SeqCst) >= 1, "the listed site was reached (a public name that points at this machine: the list trusts the names it is given)");
+    assert!(run.denied.is_empty(), "{:?}", run.denied);
+
+    for host in ["b.localtest.me", "c.a.localtest.me", "127.0.0.1", "localhost"] {
+        let before = connections.load(Ordering::SeqCst);
+        let run = run_once(host).await;
+        assert_eq!(run.status, "ok", "{host}: {} / {}", run.note, run.result);
+        assert_eq!(connections.load(Ordering::SeqCst), before, "{host} is not on the list and nothing reached it");
+        assert!(run.denied.iter().any(|d| d.starts_with("WebFetch") && d.contains(host)), "{host}: the refused request is kept with the run: {:?}", run.denied);
+    }
 }
 
 /// A server that answers every request with 401 and writes down what it was sent: `METHOD path | Authorization scheme+length | x-api-key length`.

@@ -137,13 +137,14 @@ The Schedule tab holds tasks you write: an instruction, a folder or the web, and
 the host looks at the wall clock every 30 seconds and runs what is due with one `claude -p`, **one run at a time**, with nobody to
 click a permission prompt. So a run is given nothing to be asked about:
 
-- **Two profiles that never mix.** *Files*: `Read`, `Grep`, `Glob` inside one project folder. *Web*: `WebFetch` and `WebSearch`
-  only, in an empty folder of the app's own. A run that could read files and also fetch could carry a file out in an address.
+- **Two profiles that never mix.** *Files*: `Read`, `Grep`, `Glob` inside one project folder. *Web*: `WebFetch` (only the sites
+  you list for the task) and `WebSearch`, in an empty folder of the app's own. A run that could read files and also fetch could carry a file out in an address.
   Writing, editing and running commands do not exist in a scheduled run (`--tools` names exactly the profile's tools; a
   `--disallowedTools` list backs it up).
 - **No allow rule for the file tools.** `--allowedTools Read` would cover every path; without it Claude Code reads inside the
   project folder and refuses a path outside it and a link that leads outside it (checked with the real `claude`, see the live
-  test). The refused requests are kept with the run. The web profile does have an allow rule, since nobody can answer for each address.
+  test). The refused requests are kept with the run. The web profile has allow rules, since nobody can answer for each address: `WebSearch` and one
+  `WebFetch(domain:<site>)` for each site listed on the task, never a bare `WebFetch`.
 - **Nothing of the project's own is loaded:** `--setting-sources ""` (so a hook in a project you do not trust cannot run
   unattended, and your own user settings do not widen the run), `--strict-mcp-config` with no config, no plugins, no skills or
   slash commands, no session saved, no `--resume`. This is a deliberate exception to "Claude Code's own settings decide first".
@@ -161,10 +162,28 @@ click a permission prompt. So a run is given nothing to be asked about:
 - **A result is only shown.** It is stored in `schedule.sqlite` (0600, 64 KB each, the last 50 runs of a task), shown with the
   same Markdown sanitising as a chat (with a reminder that a web result may carry outside text), and carries the definition it ran
   with. Nothing reads it and acts: it does not reach memory, skill proposals or the search index. A toast and an unread count tell you it finished.
-- **Web runs and the machine's own addresses.** A fetch goes out from your computer, so `localhost`, `127.0.0.1`, `[::1]`, `0.0.0.0` and the cloud
-  metadata addresses are refused by name (checked with the real `claude`). Other addresses of your network are **not** blocked, since the rule
-  matches names, not address ranges: give a web task only to pages you would open yourself. Links in a result are shown as text with their
-  whole address and cannot be clicked.
+- **Web runs open only the sites listed on the task.** A web task needs 1 to 20 host names (`example.com`, one per line in the
+  form); the run may fetch from those and from nothing else. A name is exactly that host: `www.example.com` is another name and is
+  listed on its own; there are no wildcards. A listed host is open on every port (a port cannot be typed into the list, but it is not part of the rule). IP addresses (also decimal and hex forms), ports, paths, `localhost` and private-network
+  names (`.local`, `.internal`, `.lan`, `.home`, `.arpa`, …) are refused when the task is saved, and the list is checked again when a run
+  starts and when a task is switched on. Measured with the real `claude`, see the live test: an address that is not listed, a
+  sub-domain of a listed name, `127.0.0.1` and `localhost` are refused without any connection being made (the refusal is kept with the
+  run); a listed site is read (WebFetch raises `http` to `https`); a redirect to another host is not followed, and the model's second
+  fetch of the target is refused (measured by hand against a public redirect, not in the test). If an upgrade fails (a full disk, say), the file is not set aside: it is left as it was, scheduled tasks stay off and the page says why. `WebSearch` stays: it runs on the
+  provider's side and reaches nothing local, but a page it finds outside the list cannot be opened. A web task made before the lists
+  existed was switched off when the file was upgraded, with a reason; it runs again after you list its sites (the old file is kept as
+  `schedule.sqlite.v1`; an older app cannot open the upgraded file). The earlier name refusals (`localhost`, `127.0.0.1`, `[::1]`,
+  `0.0.0.0`, the cloud metadata names) stay in `--disallowedTools` as a second layer.
+  **The CLI's own pre-approved sites are open too.** Claude Code's `WebFetch` has a built-in list of documentation hosts that it fetches
+  without a rule (measured: with only `example.com` listed, `docs.python.org`, `developer.mozilla.org` and `nodejs.org` were all read).
+  They are public documentation sites, so this does not reach your network, but "nothing else" holds for everything except that list,
+  which belongs to the CLI and changes with it. A `WebFetch(domain:…)` deny rule does close one of them (measured), but the list is not
+  ours to copy, so none is denied.
+  **What the list cannot do:** it trusts the names you give. A public name that points at a private address (the live test uses
+  `a.localtest.me`, which points at this computer, and it is reached when listed), a name whose address is changed after the check
+  (DNS rebinding), a listed site that redirects inside its own host, and a listed site that lets anyone put content on it (a code host,
+  a paste site) are all open. List only sites you would open yourself. Links in a result are shown as text with their whole address and
+  cannot be clicked.
 - **What stays outside the app's control:** a managed (organisation) policy of Claude Code applies to a scheduled run whatever the flags
   say. A project's own settings, hooks, allow rules and `CLAUDE.md` do not (live test with a hostile project folder), and the CLI's
   auto-memory is switched off for the run.

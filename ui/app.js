@@ -1,6 +1,8 @@
 import { marked } from './vendor/marked.js'
 import DOMPurify from './vendor/purify.js'
-import { baseName, chatHost, checkImage, isLocalHost, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, pathsInText, resultBlocks, skillMd, toolSummary } from './util.js'
+import { baseName, chatHost, checkImage, isLocalHost, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, parseSites, pathsInText, resultBlocks, skillMd, toolSummary } from './util.js'
+// The reason the host gives a web task made before sites were listed (src/sched_store.rs NEEDS_DOMAINS); shown translated.
+const NEEDS_SITES = 'needs the sites it may open: edit the task and list them'
 
 // ---- text ----
 const TEXT = {
@@ -34,6 +36,7 @@ const TEXT = {
     scFolder: '프로젝트 폴더 (절대 경로)', scSchedule: '반복', scDaily: '매일 정해진 시각', scEvery: '일정 간격', scTime: '시각', scDays: '요일', scMinutes: '간격 (분, 15 이상)',
     scAdvanced: '세부 설정', scModel: '모델', scTurns: '최대 턴', scBudget: '최대 비용 ($)', scTimeout: '시간 제한 (초)', scSave: '저장', scCancel: '취소',
     scTasks: '예약 목록', scRuns: '최근 실행', scNoTasks: '아직 예약이 없습니다.', scNext: '다음', scRunNow: '지금 실행', scStop: '중단', scStatus_stopped: '중단함', scEnable: '켜기', scDisable: '끄기', scEdit: '수정', scDelete: '삭제', scDeleteConfirm: '이 예약과 실행 기록을 삭제할까요?',
+    scSites: '열 수 있는 사이트 (한 줄에 하나)', scSitesNote: '이 목록의 사이트만 열 수 있습니다. www 같은 하위 도메인은 따로 적어야 합니다. IP 주소, 포트, 내부 이름(localhost, .local 등)은 받지 않습니다. 검색은 목록과 상관없이 되지만 목록 밖 페이지는 열지 못합니다.', scSitesLabel: '열 수 있는 사이트', scNeedsSites: '예전에 만든 웹 예약이라 열 수 있는 사이트가 없습니다. 수정에서 사이트를 적어야 다시 켤 수 있습니다.',
     scPaused: '멈춤', scOff: '꺼짐', scWebTag: '웹', scFilesTag: '파일 읽기', scTools: '쓸 수 있는 도구',
     scStatus_ok: '성공', scStatus_error: '실패', scStatus_timeout: '시간 초과', scStatus_cap: '하루 한도', scStatus_skipped: '건너뜀', scStatus_missed: '놓침', scStatus_running: '실행 중',
     scRunTitle: '실행 결과', scCost: '비용', scTurns2: '턴', scDenied: '거절된 요청', scDefUsed: '이때 쓴 설정', scCopy: '결과 복사', scClose: '닫기', scNoResult: '(결과 없음)', scView: '보기', scMarkSeen: '모두 읽음', scPausedToast: '연속 실패로 멈췄습니다',
@@ -77,6 +80,7 @@ const TEXT = {
     scFolder: 'Project folder (absolute path)', scSchedule: 'Repeat', scDaily: 'Every day at a time', scEvery: 'At an interval', scTime: 'Time', scDays: 'Weekdays', scMinutes: 'Every (minutes, 15 or more)',
     scAdvanced: 'Details', scModel: 'Model', scTurns: 'Most turns', scBudget: 'Most cost ($)', scTimeout: 'Time limit (seconds)', scSave: 'Save', scCancel: 'Cancel',
     scTasks: 'Tasks', scRuns: 'Recent runs', scNoTasks: 'No tasks yet.', scNext: 'Next', scRunNow: 'Run now', scStop: 'Stop', scStatus_stopped: 'stopped', scEnable: 'Turn on', scDisable: 'Turn off', scEdit: 'Edit', scDelete: 'Delete', scDeleteConfirm: 'Delete this task and its run history?',
+    scSites: 'Sites it may open (one per line)', scSitesNote: 'Only the sites on this list can be opened. A sub-domain such as www must be listed on its own. IP addresses, ports and internal names (localhost, .local and the like) are not accepted. Searching works whatever the list says, but a page outside it cannot be opened.', scSitesLabel: 'Sites it may open', scNeedsSites: 'This web task was made before sites were listed, so it may open none. Edit it and list the sites to switch it on again.',
     scPaused: 'paused', scOff: 'off', scWebTag: 'web', scFilesTag: 'read files', scTools: 'Tools it may use',
     scStatus_ok: 'ok', scStatus_error: 'failed', scStatus_timeout: 'timed out', scStatus_cap: 'daily limit', scStatus_skipped: 'skipped', scStatus_missed: 'missed', scStatus_running: 'running',
     scRunTitle: 'Run result', scCost: 'Cost', scTurns2: 'Turns', scDenied: 'Refused requests', scDefUsed: 'Settings used then', scCopy: 'Copy result', scClose: 'Close', scNoResult: '(no result)', scView: 'View', scMarkSeen: 'Mark all read', scPausedToast: 'paused after repeated failures',
@@ -1121,6 +1125,7 @@ function scFormKind() {
 function scFormProfile() {
   const web = document.querySelector('input[name="sc-profile"]:checked').value === 'web'
   $('sc-cwd-row').hidden = web
+  $('sc-sites-row').hidden = !web
 }
 $('sc-kind').addEventListener('change', scFormKind)
 for (const radio of document.querySelectorAll('input[name="sc-profile"]')) radio.addEventListener('change', scFormProfile)
@@ -1129,6 +1134,7 @@ function scFill(task) {
   $('sc-prompt').value = task ? task.prompt : ''
   for (const radio of document.querySelectorAll('input[name="sc-profile"]')) radio.checked = radio.value === (task ? task.profile : 'folder')
   $('sc-cwd').value = task ? task.cwd : ''
+  $('sc-sites').value = task && task.domains ? task.domains.join('\n') : ''
   $('sc-kind').value = task ? task.kind : 'daily'
   $('sc-time').value = task && task.kind === 'daily' ? fmtMinute(task.minute_of_day) : '09:00'
   const days = task ? maskToDays(task.weekdays) : [true, true, true, true, true, false, false]
@@ -1150,7 +1156,7 @@ $('sc-form').addEventListener('submit', event => {
   const days = [...$('sc-days').querySelectorAll('input')].map(b => b.checked)
   scSend({
     op: 'sched_save', id: S.scEditing > 0 ? S.scEditing : 0, name: $('sc-name').value.trim(), prompt: $('sc-prompt').value.trim(), profile,
-    cwd: profile === 'web' ? '' : $('sc-cwd').value.trim(), kind: $('sc-kind').value, minute_of_day: parseHHMM($('sc-time').value), weekdays: daysToMask(days),
+    cwd: profile === 'web' ? '' : $('sc-cwd').value.trim(), domains: profile === 'web' ? parseSites($('sc-sites').value) : [], kind: $('sc-kind').value, minute_of_day: parseHHMM($('sc-time').value), weekdays: daysToMask(days),
     every_min: Number($('sc-min').value), model: $('sc-model').value, max_turns: Number($('sc-turns').value), budget_usd: Number($('sc-budget').value), timeout_s: Number($('sc-timeout').value),
   })
 })
@@ -1161,8 +1167,9 @@ function scTask(task) {
   head.append(el('span', '', task.name), el('span', 'tag', task.profile === 'web' ? t('scWebTag') : t('scFilesTag')), el('span', 'tag', scSummary(task)))
   if (!task.enabled) head.appendChild(el('span', 'tag warn', task.paused_reason ? t('scPaused') : t('scOff')))
   card.appendChild(head)
-  if (task.paused_reason) card.appendChild(el('div', 'muted', task.paused_reason))
+  if (task.paused_reason) card.appendChild(el('div', 'muted', task.paused_reason === NEEDS_SITES ? t('scNeedsSites') : task.paused_reason))
   if (task.profile === 'folder') card.appendChild(el('div', 'muted', task.cwd))
+  else if (task.domains && task.domains.length) card.appendChild(el('div', 'muted', `${t('scSitesLabel')}: ${task.domains.join(', ')}`))
   card.appendChild(el('div', 'muted', `${t('scTools')}: ${task.tools}`))
   if (task.enabled && task.next_due) card.appendChild(el('div', 'muted', `${t('scNext')}: ${scWhen(task.next_due)}`))
   const acts = el('div', 'acts')

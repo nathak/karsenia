@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::{plain, AppState};
-use crate::sched_store::{Profile, TaskDef};
+use crate::sched_store::{normalize_domains, Profile, TaskDef};
 use crate::schedule::Schedule;
 use crate::scheduler::folder_allowed;
 
@@ -49,6 +49,15 @@ fn parse_def(state: &AppState, op: &Value) -> Result<TaskDef, String> {
             folder_allowed(std::path::Path::new(&given), state.registry.dir())?.display().to_string()
         }
     };
+    // The sites a web task may open. Absent means none (a web task is then refused, never widened); anything but a list of strings is refused.
+    let domains = match &op["domains"] {
+        Value::Null => Vec::new(),
+        Value::Array(items) => {
+            let strings: Option<Vec<String>> = items.iter().map(|v| v.as_str().map(str::to_owned)).collect();
+            normalize_domains(&strings.ok_or("the sites are a list of names")?)?
+        }
+        _ => return Err("the sites are a list of names".into()),
+    };
     let def = TaskDef {
         name: text(op, "name"),
         prompt: text(op, "prompt"),
@@ -59,6 +68,7 @@ fn parse_def(state: &AppState, op: &Value) -> Result<TaskDef, String> {
         max_turns: op["max_turns"].as_u64().unwrap_or(20).min(1000) as u32,
         budget_usd: op["budget_usd"].as_f64().unwrap_or(0.5),
         timeout_s: op["timeout_s"].as_u64().unwrap_or(600).min(100_000) as u32,
+        domains,
     };
     def.check()?;
     Ok(def)
@@ -92,7 +102,13 @@ pub fn handle(state: &AppState, name: &str, op: &Value, out: &UnboundedSender<St
         },
         "sched_enable" => {
             let on = op["on"].as_bool() == Some(true);
-            let next = store.task(id).map(|t| scheduler.first_due(&t.def)).unwrap_or(0);
+            let task = store.task(id);
+            // A task whose site list is not acceptable (an old web task with none) is not switched on.
+            if let (true, Some(Err(reason))) = (on, task.as_ref().map(|t| t.def.check_sites())) {
+                result(out, &rid, false, json!({"error": reason}));
+                return;
+            }
+            let next = task.map(|t| scheduler.first_due(&t.def)).unwrap_or(0);
             let done = store.set_enabled(id, on, next);
             if done {
                 changed(state);

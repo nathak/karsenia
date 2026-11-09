@@ -162,3 +162,20 @@ export function chatHost(session) {
 export function isLocalHost(host) {
   return /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(typeof host === 'string' ? host : '')
 }
+
+/**
+ * The site names typed into a web task's list: split on lines, commas and spaces, lower case, a pasted address reduced to its host,
+ * no repeats. This only helps the typing; the host checks every name again and refuses what is not a plain host name.
+ */
+export function parseSites(text) {
+  const out = []
+  for (const piece of String(text || '').split(/[\s,;]+/)) {
+    let name = piece.trim().toLowerCase()
+    if (!name) continue
+    if (name.includes('/') || name.includes('://')) {
+      try { name = new URL(name.includes('://') ? name : `https://${name}`).hostname } catch { /* kept as typed: the host refuses it */ }
+    }
+    if (!out.includes(name)) out.push(name)
+  }
+  return out
+}

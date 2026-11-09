@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { baseName, checkImage, fmtTurn, imagePaths, pathsInText, resultBlocks, toolSummary } from '../ui/util.js'
+import { readFileSync } from 'node:fs'
+
+import { baseName, checkImage, fmtTurn, imagePaths, parseSites, pathsInText, resultBlocks, toolSummary } from '../ui/util.js'
 
 test('a tool call is summed up by what it works on', () => {
   assert.equal(toolSummary('Bash', { command: 'ls -la\nmore' }), 'ls -la')
@@ -122,4 +124,23 @@ import { isLocalHost } from '../ui/util.js'
 test('this computer is told from other hosts', () => {
   for (const h of ['localhost', 'localhost:11434', '127.0.0.1:8080', '[::1]:9000']) assert.equal(isLocalHost(h), true, h)
   for (const h of ['gw.example.com', 'localhost.evil.com', '127.0.0.2', '', undefined]) assert.equal(isLocalHost(h), false, String(h))
+})
+
+test('the sites of a web task are split, lower-cased, reduced to hosts and not repeated', () => {
+  assert.deepEqual(parseSites('Example.com\nnews.example.org, example.com;  a.example.net'), ['example.com', 'news.example.org', 'a.example.net'])
+  assert.deepEqual(parseSites('https://Example.com/path?q=1 http://news.example.org:8080/x'), ['example.com', 'news.example.org'])
+  assert.deepEqual(parseSites('example.com/a/b'), ['example.com'])
+  assert.deepEqual(parseSites('https://user:pw@Example.com/a'), ['example.com'], 'a user part is dropped with the rest of the address')
+  assert.deepEqual(parseSites(''), [])
+  assert.deepEqual(parseSites(undefined), [])
+  // What is not a host name is passed on as typed, for the host to refuse.
+  assert.deepEqual(parseSites('127.0.0.1 *.example.com localhost'), ['127.0.0.1', '*.example.com', 'localhost'])
+})
+
+test('the strings of the site list exist in both languages and the host reason the page translates is the one the host sends', () => {
+  const app = readFileSync(new URL('../ui/app.js', import.meta.url), 'utf8')
+  for (const key of ['scSites', 'scSitesNote', 'scSitesLabel', 'scNeedsSites']) assert.equal(app.split(`${key}:`).length - 1, 2, `${key} is in both languages`)
+  const rust = readFileSync(new URL('../src/sched_store.rs', import.meta.url), 'utf8')
+  const reason = /const NEEDS_SITES = '([^']+)'/.exec(app)[1]
+  assert.ok(rust.includes(`pub const NEEDS_DOMAINS: &str = "${reason}";`), 'the page recognises the reason the host stores')
 })

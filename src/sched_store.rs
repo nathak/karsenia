@@ -11,13 +11,17 @@ use serde_json::{json, Value};
 
 use crate::schedule::Schedule;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 pub const MAX_TASKS: usize = 30;
 pub const MAX_NAME: usize = 80;
 pub const MAX_PROMPT: usize = 4000;
 /// Runs kept per task; older ones are dropped.
 pub const KEEP_RUNS: i64 = 50;
 pub const MAX_RESULT: usize = 64 * 1024;
+/// Sites a web task may open.
+pub const MAX_DOMAINS: usize = 20;
+/// Why a web task made before the site list existed is paused; the page translates it.
+pub const NEEDS_DOMAINS: &str = "needs the sites it may open: edit the task and list them";
 const MAX_DENIED: usize = 50;
 const MAX_DENIED_CHARS: usize = 300;
 
@@ -40,6 +44,7 @@ CREATE TABLE tasks(
   enabled INTEGER NOT NULL DEFAULT 1,
   fails INTEGER NOT NULL DEFAULT 0,
   paused_reason TEXT NOT NULL DEFAULT '',
+  domains TEXT NOT NULL DEFAULT '[]',
   last_due INTEGER NOT NULL DEFAULT 0,
   next_due INTEGER NOT NULL DEFAULT 0,
   created INTEGER NOT NULL,
@@ -98,16 +103,6 @@ impl Profile {
         }
     }
 
-    /// Tools that are allowed outright (no question, any argument). The file tools are not: an allow rule for `Read` covers every path,
-    /// while without one Claude Code reads inside the project folder only and refuses a path (or a link) that leads outside it.
-    /// The web tools need it, since nobody is there to answer for each address.
-    pub fn allowed(self) -> Option<&'static str> {
-        match self {
-            Self::Folder => None,
-            Self::Web => Some("WebFetch,WebSearch"),
-        }
-    }
-
     /// Belt and braces beside `--tools`: names that must never be usable, whatever a setting says.
     pub fn disallowed(self) -> &'static str {
         match self {
@@ -129,9 +124,78 @@ pub struct TaskDef {
     pub max_turns: u32,
     pub budget_usd: f64,
     pub timeout_s: u32,
+    /// The sites a web task may open (normalised, see `normalize_domain`); empty for a folder task.
+    pub domains: Vec<String>,
+}
+
+/// Last labels that name something on a private network or are reserved: never a site to fetch from. Names that merely resolve to a
+/// private address (nip.io and the like) cannot be listed here and are not stopped; the README says so.
+const SPECIAL_TLDS: [&str; 11] = ["localhost", "local", "internal", "localdomain", "arpa", "lan", "home", "corp", "intranet", "test", "invalid"];
+
+/// A site name as it is kept: trimmed, lower case, one trailing dot dropped. Only a host name is accepted: no address, port, path,
+/// wildcard or user. An address is refused by the last label (a name's last label is letters, an address's is a number).
+pub fn normalize_domain(raw: &str) -> Result<String, String> {
+    let name = raw.trim().to_ascii_lowercase();
+    let name = name.strip_suffix('.').unwrap_or(&name);
+    let bad = |why: &str| Err(format!("{}: {why}", clip(raw.trim(), 60)));
+    if name.is_empty() {
+        return Err("a site name is empty".into());
+    }
+    if !name.is_ascii() {
+        return bad("write an international name in its xn-- form");
+    }
+    if name.len() > 253 {
+        return bad("too long");
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.') {
+        return bad("only a host name, such as example.com (no address, port, path or *)");
+    }
+    let labels: Vec<&str> = name.split('.').collect();
+    if labels.len() < 2 {
+        return bad("a name needs a dot, such as example.com");
+    }
+    if labels.iter().any(|l| l.is_empty() || l.len() > 63 || l.starts_with('-') || l.ends_with('-')) {
+        return bad("not a valid host name");
+    }
+    let tld = labels[labels.len() - 1];
+    let is_name = (tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_lowercase())) || (tld.starts_with("xn--") && tld.len() > 4);
+    if !is_name {
+        return bad("an address is not a site name");
+    }
+    if SPECIAL_TLDS.contains(&tld) {
+        return bad("a name on a private network is not allowed");
+    }
+    Ok(name.to_owned())
+}
+
+/// Normalises a list the person typed: each name, duplicates dropped, order kept.
+pub fn normalize_domains(raw: &[String]) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for item in raw {
+        let name = normalize_domain(item)?;
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    Ok(out)
 }
 
 impl TaskDef {
+    /// What is allowed outright in a run (no question, nobody is there to answer). The file tools are not: an allow rule for `Read`
+    /// covers every path, while without one Claude Code reads inside the project folder only and refuses a path (or a link) that leads
+    /// outside it. A web run may open only the listed sites; there is never a bare `WebFetch` rule. Search runs on the provider's side
+    /// and reaches nothing local.
+    pub fn allowed_tools(&self) -> Option<String> {
+        match self.profile {
+            Profile::Folder => None,
+            Profile::Web => {
+                let mut rules = vec!["WebSearch".to_owned()];
+                rules.extend(self.domains.iter().map(|d| format!("WebFetch(domain:{d})")));
+                Some(rules.join(","))
+            }
+        }
+    }
+
     /// The checks that need no file system. The folder is checked by the caller (`is_safe_cwd`, not inside the data folder).
     pub fn check(&self) -> Result<(), String> {
         let name = self.name.trim();
@@ -159,12 +223,32 @@ impl TaskDef {
             Profile::Web if !self.cwd.is_empty() => return Err("a web task has no project folder".into()),
             _ => {}
         }
+        self.check_sites()?;
         self.schedule.check()
+    }
+
+    /// The site list against the profile. Also checked again where a run starts or a task is switched on, so a file edited by hand
+    /// cannot give a web run a list that was never accepted (or none).
+    pub fn check_sites(&self) -> Result<(), String> {
+        match self.profile {
+            Profile::Web if self.domains.is_empty() => return Err("a web task needs the sites it may open".into()),
+            Profile::Folder if !self.domains.is_empty() => return Err("a folder task opens no sites".into()),
+            _ => {}
+        }
+        if self.domains.len() > MAX_DOMAINS {
+            return Err(format!("at most {MAX_DOMAINS} sites"));
+        }
+        for (i, domain) in self.domains.iter().enumerate() {
+            if normalize_domain(domain)? != *domain || self.domains[..i].contains(domain) {
+                return Err(format!("{domain}: the site list is not in its normal form"));
+            }
+        }
+        Ok(())
     }
 
     /// What a run is shown to have used, kept with each run so a changed definition cannot hide.
     pub fn snapshot(&self) -> String {
-        json!({"name": self.name, "prompt": self.prompt, "cwd": self.cwd, "profile": self.profile.name(), "tools": self.profile.tools(), "model": self.model, "max_turns": self.max_turns, "budget_usd": self.budget_usd, "timeout_s": self.timeout_s}).to_string()
+        json!({"name": self.name, "prompt": self.prompt, "cwd": self.cwd, "profile": self.profile.name(), "tools": self.profile.tools(), "domains": self.domains, "model": self.model, "max_turns": self.max_turns, "budget_usd": self.budget_usd, "timeout_s": self.timeout_s}).to_string()
     }
 }
 
@@ -192,7 +276,7 @@ impl Task {
             "model": self.def.model, "kind": kind, "minute_of_day": minute_of_day, "weekdays": weekdays, "every_min": every_min,
             "max_turns": self.def.max_turns, "budget_usd": self.def.budget_usd, "timeout_s": self.def.timeout_s,
             "enabled": self.enabled, "fails": self.fails, "paused_reason": self.paused_reason,
-            "last_due": self.last_due, "next_due": self.next_due, "tools": self.def.profile.tools(),
+            "last_due": self.last_due, "next_due": self.next_due, "tools": self.def.profile.tools(), "domains": self.def.domains,
         })
     }
 }
@@ -249,7 +333,7 @@ pub struct SchedStore {
     pub path: PathBuf,
 }
 
-const TASK_COLS: &str = "id, name, prompt, cwd, profile, model, kind, minute_of_day, weekdays, every_min, max_turns, budget, timeout_s, enabled, fails, paused_reason, last_due, next_due, created, updated";
+const TASK_COLS: &str = "id, name, prompt, cwd, profile, model, kind, minute_of_day, weekdays, every_min, max_turns, budget, timeout_s, enabled, fails, paused_reason, last_due, next_due, created, updated, domains";
 const RUN_COLS: &str = "id, task_id, task_name, due, started, finished, status, cost, turns, result, denied, note, def, seen";
 
 fn task_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
@@ -269,6 +353,7 @@ fn task_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             max_turns: r.get::<_, i64>(10)? as u32,
             budget_usd: r.get(11)?,
             timeout_s: r.get::<_, i64>(12)? as u32,
+            domains: serde_json::from_str(&r.get::<_, String>(20)?).unwrap_or_default(),
         },
         enabled: r.get::<_, i64>(13)? != 0,
         fails: r.get::<_, i64>(14)? as u32,
@@ -300,11 +385,50 @@ fn run_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Run> {
     })
 }
 
+fn domains_json(def: &TaskDef) -> String {
+    serde_json::to_string(&def.domains).unwrap_or_else(|_| "[]".into())
+}
+
 fn schedule_cols(s: &Schedule) -> (&'static str, i64, i64, i64) {
     match *s {
         Schedule::Daily { minute_of_day, weekdays } => ("daily", i64::from(minute_of_day), i64::from(weekdays), 0),
         Schedule::Every { minutes } => ("every", 0, 127, i64::from(minutes)),
     }
+}
+
+/// Version 1 had no site list: a web task then could open any site. Such a task is switched off, with a reason, until the person lists
+/// the sites; nothing is ever widened. A copy of the old file is kept first (an older app cannot read the new one).
+fn migrate_v1(conn: &Connection, path: &Path) -> Result<()> {
+    let result = migrate_v1_steps(conn, path);
+    if result.is_err() {
+        // An open transaction is dropped with the connection anyway; this only makes it explicit.
+        let _ = conn.execute_batch("ROLLBACK");
+    }
+    result.map_err(|error| anyhow::Error::new(UpgradeFailed(format!("{error:#}"))))
+}
+
+/// Why a file could not be upgraded. Unlike a damaged file it is not set aside: it is left exactly as it was, and scheduled tasks stay off.
+#[derive(Debug)]
+struct UpgradeFailed(String);
+
+impl std::fmt::Display for UpgradeFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the schedule file could not be upgraded and was left as it was ({})", self.0)
+    }
+}
+
+impl std::error::Error for UpgradeFailed {}
+
+fn migrate_v1_steps(conn: &Connection, path: &Path) -> Result<()> {
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+    let backup = path.with_extension("sqlite.v1");
+    if !backup.exists() {
+        std::fs::copy(path, &backup).context("could not keep a copy of the schedule file before upgrading it")?;
+    }
+    conn.execute_batch("BEGIN; ALTER TABLE tasks ADD COLUMN domains TEXT NOT NULL DEFAULT '[]';")?;
+    conn.execute("UPDATE tasks SET enabled = 0, paused_reason = ?1 WHERE profile <> 'folder'", params![NEEDS_DOMAINS])?;
+    conn.execute_batch("PRAGMA user_version = 2; COMMIT;")?;
+    Ok(())
 }
 
 impl SchedStore {
@@ -313,6 +437,7 @@ impl SchedStore {
         let mut notice = None;
         let conn = match Self::try_open(path) {
             Ok(conn) => conn,
+            Err(error) if error.downcast_ref::<UpgradeFailed>().is_some() => return Err(error),
             Err(error) => {
                 let broken = path.with_extension("sqlite.broken");
                 let _ = std::fs::rename(path, &broken);
@@ -343,7 +468,11 @@ impl SchedStore {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             return Ok(conn);
         }
-        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let mut version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version == 1 {
+            migrate_v1(&conn, path)?;
+            version = SCHEMA_VERSION;
+        }
         if version != SCHEMA_VERSION {
             anyhow::bail!("schedule file version {version} is not understood");
         }
@@ -365,8 +494,8 @@ impl SchedStore {
         }
         let (kind, minute, weekdays, every) = schedule_cols(&def.schedule);
         conn.execute(
-            "INSERT INTO tasks(name, prompt, cwd, profile, model, kind, minute_of_day, weekdays, every_min, max_turns, budget, timeout_s, enabled, next_due, created, updated) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13,?14,?14)",
-            params![def.name.trim(), def.prompt.trim(), def.cwd, def.profile.name(), def.model, kind, minute, weekdays, every, def.max_turns, def.budget_usd, def.timeout_s, next_due, now as i64],
+            "INSERT INTO tasks(name, prompt, cwd, profile, model, kind, minute_of_day, weekdays, every_min, max_turns, budget, timeout_s, enabled, next_due, created, updated, domains) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13,?14,?14,?15)",
+            params![def.name.trim(), def.prompt.trim(), def.cwd, def.profile.name(), def.model, kind, minute, weekdays, every, def.max_turns, def.budget_usd, def.timeout_s, next_due, now as i64, domains_json(def)],
         )
         .map_err(|e| e.to_string())?;
         Ok(conn.last_insert_rowid())
@@ -379,8 +508,8 @@ impl SchedStore {
         let n = self
             .lock()
             .execute(
-                "UPDATE tasks SET name=?2, prompt=?3, cwd=?4, profile=?5, model=?6, kind=?7, minute_of_day=?8, weekdays=?9, every_min=?10, max_turns=?11, budget=?12, timeout_s=?13, next_due=?14, updated=?15, fails=0 WHERE id=?1",
-                params![id, def.name.trim(), def.prompt.trim(), def.cwd, def.profile.name(), def.model, kind, minute, weekdays, every, def.max_turns, def.budget_usd, def.timeout_s, next_due, now as i64],
+                "UPDATE tasks SET name=?2, prompt=?3, cwd=?4, profile=?5, model=?6, kind=?7, minute_of_day=?8, weekdays=?9, every_min=?10, max_turns=?11, budget=?12, timeout_s=?13, next_due=?14, updated=?15, domains=?16, fails=0 WHERE id=?1",
+                params![id, def.name.trim(), def.prompt.trim(), def.cwd, def.profile.name(), def.model, kind, minute, weekdays, every, def.max_turns, def.budget_usd, def.timeout_s, next_due, now as i64, domains_json(def)],
             )
             .map_err(|e| e.to_string())?;
         if n == 0 { Err("no such task".into()) } else { Ok(()) }
@@ -513,7 +642,7 @@ mod tests {
     use super::*;
 
     pub fn def(name: &str) -> TaskDef {
-        TaskDef { name: name.into(), prompt: "summarise the README".into(), cwd: "/tmp".into(), profile: Profile::Folder, model: "sonnet".into(), schedule: Schedule::Daily { minute_of_day: 540, weekdays: 127 }, max_turns: 20, budget_usd: 0.5, timeout_s: 600 }
+        TaskDef { name: name.into(), prompt: "summarise the README".into(), cwd: "/tmp".into(), profile: Profile::Folder, model: "sonnet".into(), schedule: Schedule::Daily { minute_of_day: 540, weekdays: 127 }, max_turns: 20, budget_usd: 0.5, timeout_s: 600, domains: Vec::new() }
     }
 
     #[test]
@@ -528,7 +657,8 @@ mod tests {
         assert!(TaskDef { timeout_s: 5, ..def("a") }.check().is_err());
         assert!(TaskDef { cwd: String::new(), ..def("a") }.check().is_err(), "a folder task needs a folder");
         assert!(TaskDef { profile: Profile::Web, ..def("a") }.check().is_err(), "a web task has no folder");
-        assert!(TaskDef { profile: Profile::Web, cwd: String::new(), ..def("a") }.check().is_ok());
+        assert!(TaskDef { profile: Profile::Web, cwd: String::new(), domains: vec!["example.com".into()], ..def("a") }.check().is_ok());
+        assert!(TaskDef { profile: Profile::Web, cwd: String::new(), ..def("a") }.check().is_err(), "a web task needs sites");
         assert!(TaskDef { schedule: Schedule::Every { minutes: 5 }, ..def("a") }.check().is_err());
     }
 
@@ -636,5 +766,130 @@ mod tests {
         assert_eq!(run.denied.len(), MAX_DENIED);
         store.lock().execute("UPDATE tasks SET profile = 'shell'", []).unwrap();
         assert_eq!(store.task(id).unwrap().def.profile, Profile::Web);
+        assert!(store.task(id).unwrap().def.check().is_err(), "and with no sites listed it cannot run");
+    }
+
+    #[test]
+    fn a_site_name_is_a_plain_host_name_and_nothing_else() {
+        for (given, kept) in [("example.com", "example.com"), ("Example.COM.", "example.com"), (" sub.example.co.uk ", "sub.example.co.uk"), ("xn--bcher-kva.example", "xn--bcher-kva.example")] {
+            assert_eq!(normalize_domain(given).as_deref(), Ok(kept), "{given}");
+        }
+        let long_label = format!("{}.com", "a".repeat(64));
+        let too_long = format!("{}.com", ["abcdefghi"; 30].join("."));
+        for bad in [
+            "", " ", "localhost", "a.localhost", "printer.local", "metadata.google.internal", "x.home.arpa", "1.0.0.127.in-addr.arpa", "intranet", "nas.lan", "x.test", "x.invalid",
+            "1.2.3.4", "127.1", "0x7f.1", "0x7f000001", "2130706433", "[::1]", "::1", "example.com:8080", "https://example.com", "example.com/p", "*.example.com", "u@example.com",
+            "bücher.de", "a..b.com", "-a.com", "a-.com", "a.-com", "a b.com", &long_label, &too_long, "a.c", "a.1com", "example.com..",
+        ] {
+            assert!(normalize_domain(bad).is_err(), "{bad:?} must be refused");
+        }
+        let list = vec!["B.example.com".to_owned(), "a.example.com".to_owned(), "b.example.com.".to_owned()];
+        assert_eq!(normalize_domains(&list).unwrap(), vec!["b.example.com", "a.example.com"], "normalised, duplicates dropped, order kept");
+    }
+
+    #[test]
+    fn the_check_holds_the_site_list_to_the_profile() {
+        let web = |domains: &[&str]| TaskDef { profile: Profile::Web, cwd: String::new(), domains: domains.iter().map(|d| (*d).to_owned()).collect(), ..def("w") };
+        assert!(web(&["example.com"]).check().is_ok());
+        assert!(web(&[]).check().is_err(), "a web task needs sites");
+        assert!(web(&["Example.com"]).check().is_err(), "a list that is not normalised is refused, not fixed");
+        assert!(web(&["example.com", "example.com"]).check().is_err());
+        assert!(web(&["127.0.0.1"]).check().is_err());
+        let many: Vec<String> = (0..=MAX_DOMAINS).map(|i| format!("s{i}.example.com")).collect();
+        assert!(TaskDef { domains: many, ..web(&["example.com"]) }.check().is_err());
+        assert!(TaskDef { domains: vec!["example.com".into()], ..def("f") }.check().is_err(), "a folder task opens no sites");
+    }
+
+    #[test]
+    fn what_is_allowed_outright_is_the_search_and_the_listed_sites_never_a_bare_fetch() {
+        let web = TaskDef { profile: Profile::Web, cwd: String::new(), domains: vec!["a.example.com".into(), "b.example.org".into()], ..def("w") };
+        assert_eq!(web.allowed_tools().as_deref(), Some("WebSearch,WebFetch(domain:a.example.com),WebFetch(domain:b.example.org)"));
+        assert_eq!(def("f").allowed_tools(), None);
+    }
+
+    #[test]
+    fn sites_are_kept_and_shown_with_the_task_and_with_each_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = SchedStore::open(&dir.path().join("s.sqlite")).unwrap();
+        let web = TaskDef { profile: Profile::Web, cwd: String::new(), domains: vec!["a.example.com".into()], ..def("w") };
+        let id = store.create_task(&web, 0, 0).unwrap();
+        assert_eq!(store.task(id).unwrap().def.domains, vec!["a.example.com"]);
+        assert_eq!(store.task(id).unwrap().to_json()["domains"], json!(["a.example.com"]));
+        store.update_task(id, &TaskDef { domains: vec!["b.example.com".into(), "c.example.com".into()], ..web.clone() }, 0, 1).unwrap();
+        assert_eq!(store.task(id).unwrap().def.domains, vec!["b.example.com", "c.example.com"]);
+        let run = store.start_run(&store.task(id).unwrap(), 0, 2);
+        let shown: Value = serde_json::from_str(&store.run(run).unwrap().def).unwrap();
+        assert_eq!(shown["domains"], json!(["b.example.com", "c.example.com"]), "the run keeps the sites it was allowed");
+    }
+
+    /// A schedule file of the first version: tasks had no site list, and a web task could open any site.
+    fn make_v1(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch("ALTER TABLE tasks DROP COLUMN domains;").unwrap();
+        for (name, profile, cwd) in [("files", "folder", "/tmp"), ("news", "web", ""), ("odd", "shell", "")] {
+            conn.execute(
+                "INSERT INTO tasks(name, prompt, cwd, profile, model, kind, every_min, max_turns, budget, timeout_s, enabled, created, updated) VALUES (?1,'p',?2,?3,'sonnet','every',30,20,0.5,600,1,1,1)",
+                params![name, cwd, profile],
+            )
+            .unwrap();
+        }
+        conn.pragma_update(None, "user_version", 1).unwrap();
+    }
+
+    #[test]
+    fn a_first_version_file_is_upgraded_a_web_task_is_switched_off_until_it_lists_sites_and_a_copy_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.sqlite");
+        make_v1(&path);
+        let (store, notice) = SchedStore::open(&path).unwrap();
+        assert!(notice.is_none(), "{notice:?}");
+        let by_name = |name: &str| store.tasks().into_iter().find(|t| t.def.name == name).unwrap();
+        let files = by_name("files");
+        assert!(files.enabled && files.paused_reason.is_empty(), "a folder task is left as it was");
+        for name in ["news", "odd"] {
+            let task = by_name(name);
+            assert!(!task.enabled, "{name}");
+            assert_eq!(task.paused_reason, NEEDS_DOMAINS);
+            assert!(task.def.domains.is_empty() && task.def.check().is_err(), "{name} cannot run without sites");
+        }
+        assert!(dir.path().join("s.sqlite.v1").exists(), "the file as it was is kept");
+        let version: i64 = store.lock().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        // The way back on is to list sites.
+        let news = by_name("news");
+        store.update_task(news.id, &TaskDef { domains: vec!["example.com".into()], profile: Profile::Web, cwd: String::new(), ..news.def.clone() }, 0, 2).unwrap();
+        assert_eq!(by_name("news").def.domains, vec!["example.com"]);
+        drop(store);
+        let (again, notice) = SchedStore::open(&path).unwrap();
+        assert!(notice.is_none() && again.tasks().len() == 3, "upgrading is done once");
+    }
+
+    #[test]
+    fn an_upgrade_that_fails_leaves_the_file_where_it_was_and_loses_no_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.sqlite");
+        make_v1(&path);
+        // The column is already there, so the upgrade's first step fails.
+        Connection::open(&path).unwrap().execute_batch("ALTER TABLE tasks ADD COLUMN domains TEXT NOT NULL DEFAULT '[]';").unwrap();
+        let error = SchedStore::open(&path).err().expect("open refuses").to_string();
+        assert!(error.contains("left as it was"), "{error}");
+        assert!(path.exists() && !dir.path().join("s.sqlite.broken").exists(), "the file is not set aside");
+        let conn = Connection::open(&path).unwrap();
+        let (tasks, version): (i64, i64) = (conn.query_row("SELECT count(*) FROM tasks", [], |r| r.get(0)).unwrap(), conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap());
+        assert_eq!((tasks, version), (3, 1), "every task is still there, in the old version");
+        let enabled: i64 = conn.query_row("SELECT count(*) FROM tasks WHERE enabled = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(enabled, 3, "nothing was half-changed");
+    }
+
+    #[test]
+    fn a_file_of_a_newer_version_is_still_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.sqlite");
+        drop(SchedStore::open(&path).unwrap());
+        Connection::open(&path).unwrap().pragma_update(None, "user_version", 3).unwrap();
+        let (_, notice) = SchedStore::open(&path).unwrap();
+        assert!(notice.unwrap().contains("not understood"));
     }
 }

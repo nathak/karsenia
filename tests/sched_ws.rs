@@ -120,9 +120,10 @@ async fn a_task_is_made_checked_changed_and_deleted_by_the_person_and_bad_forms_
     assert!(task["next_due"].as_i64().unwrap() > 0);
 
     // A web task has no folder.
-    let web = ask(&mut ws, json!({"op": "sched_save", "rid": 3, "name": "News", "prompt": "Top story?", "profile": "web", "cwd": "", "kind": "every", "every_min": 60})).await;
+    let web = ask(&mut ws, json!({"op": "sched_save", "rid": 3, "name": "News", "prompt": "Top story?", "profile": "web", "cwd": "", "kind": "every", "every_min": 60, "domains": ["News.Example.com."]})).await;
     assert_eq!(web["ok"], json!(true), "{web}");
-    let mixed = ask(&mut ws, json!({"op": "sched_save", "rid": 4, "name": "News", "prompt": "Top story?", "profile": "web", "cwd": fx.project.display().to_string(), "kind": "every", "every_min": 60})).await;
+    assert_eq!(list(&mut ws).await["tasks"][1]["domains"], json!(["news.example.com"]), "kept in its normal form");
+    let mixed = ask(&mut ws, json!({"op": "sched_save", "rid": 4, "name": "News", "prompt": "Top story?", "profile": "web", "cwd": fx.project.display().to_string(), "kind": "every", "every_min": 60, "domains": ["example.com"]})).await;
     assert_eq!(mixed["ok"], json!(false), "a web task with a project folder mixes files and the web");
 
     let mut edit = form(&fx, 5);
@@ -180,4 +181,53 @@ async fn switching_on_is_the_persons_act_and_survives_in_the_listing() {
     // The page is told when something changes.
     ws.send(Message::Text(json!({"op": "sched_seen"}).to_string())).await.unwrap();
     until_kind(&mut ws, "sched_changed").await;
+}
+
+#[tokio::test]
+async fn a_web_task_names_the_sites_it_may_open_and_only_host_names_are_taken() {
+    let fx = fixture().await;
+    let mut ws = good(&fx).await;
+    let web = |rid: i64, domains: Value| {
+        let mut op = json!({"op": "sched_save", "rid": rid, "name": "News", "prompt": "Top story?", "profile": "web", "cwd": "", "kind": "every", "every_min": 60});
+        if !domains.is_null() {
+            op["domains"] = domains;
+        }
+        op
+    };
+    for (what, domains) in [
+        ("no list at all", Value::Null),
+        ("an empty list", json!([])),
+        ("a string instead of a list", json!("example.com")),
+        ("an object", json!({"a": "example.com"})),
+        ("a list with a number in it", json!(["example.com", 5])),
+        ("a loopback address", json!(["127.0.0.1"])),
+        ("a decimal address", json!(["2130706433"])),
+        ("localhost", json!(["localhost"])),
+        ("a private name", json!(["nas.local"])),
+        ("a port", json!(["example.com:8080"])),
+        ("an address with a path", json!(["https://example.com/a"])),
+        ("a wildcard", json!(["*.example.com"])),
+        ("too many sites", json!((0..21).map(|i| format!("s{i}.example.com")).collect::<Vec<_>>())),
+    ] {
+        let answer = ask(&mut ws, web(2, domains)).await;
+        assert_eq!(answer["ok"], json!(false), "{what} must be refused: {answer}");
+    }
+    assert_eq!(list(&mut ws).await["tasks"].as_array().unwrap().len(), 0, "nothing was made by the refused forms");
+    let folder = ask(&mut ws, json!({"op": "sched_save", "rid": 3, "name": "F", "prompt": "p", "profile": "folder", "cwd": fx.project.display().to_string(), "kind": "every", "every_min": 60, "domains": ["example.com"]})).await;
+    assert_eq!(folder["ok"], json!(false), "a folder task opens no sites: {folder}");
+
+    // A web task kept without sites (made by an older version, or edited by hand) is not switched on and does not run.
+    let id = ask(&mut ws, web(4, json!(["example.com"]))).await["id"].as_i64().unwrap();
+    let conn = rusqlite::Connection::open(fx.data.join("schedule.sqlite")).unwrap();
+    conn.execute("UPDATE tasks SET domains = '[]', enabled = 0", []).unwrap();
+    drop(conn);
+    let on = ask(&mut ws, json!({"op": "sched_enable", "rid": 5, "id": id, "on": true})).await;
+    assert_eq!(on["ok"], json!(false), "{on}");
+    assert!(on["error"].as_str().unwrap().contains("sites"), "{on}");
+    assert_eq!(list(&mut ws).await["tasks"][0]["enabled"], json!(false));
+    let now = ask(&mut ws, json!({"op": "sched_run_now", "rid": 6, "id": id})).await;
+    assert_eq!(now["ok"], json!(false), "{now}");
+    // Giving it sites is the way back.
+    assert_eq!(ask(&mut ws, { let mut op = web(7, json!(["example.org"])); op["id"] = json!(id); op }).await["ok"], json!(true));
+    assert_eq!(ask(&mut ws, json!({"op": "sched_enable", "rid": 8, "id": id, "on": true})).await["ok"], json!(true));
 }

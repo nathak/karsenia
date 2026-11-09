@@ -57,7 +57,7 @@ fn config() -> SchedConfig {
 fn folder_def(fx: &Fx, name: &str) -> TaskDef {
     let project = fx.root.join("project");
     std::fs::create_dir_all(&project).unwrap();
-    TaskDef { name: name.into(), prompt: format!("report on {name}"), cwd: project.display().to_string(), profile: Profile::Folder, model: "sonnet".into(), schedule: Schedule::Every { minutes: 30 }, max_turns: 20, budget_usd: 0.5, timeout_s: 600 }
+    TaskDef { name: name.into(), prompt: format!("report on {name}"), cwd: project.display().to_string(), profile: Profile::Folder, model: "sonnet".into(), schedule: Schedule::Every { minutes: 30 }, max_turns: 20, budget_usd: 0.5, timeout_s: 600, domains: Vec::new() }
 }
 
 /// Creates a task due at `due`.
@@ -130,14 +130,16 @@ async fn a_due_task_runs_once_with_a_narrow_command_and_its_result_is_stored() {
 #[tokio::test]
 async fn a_web_task_runs_in_an_empty_folder_of_the_apps_own_with_web_tools_only() {
     let fx = fixture(config(), "").await;
-    let def = TaskDef { profile: Profile::Web, cwd: String::new(), ..folder_def(&fx, "news") };
+    let def = TaskDef { profile: Profile::Web, cwd: String::new(), domains: vec!["example.com".into(), "news.example.org".into()], ..folder_def(&fx, "news") };
     let id = add(&fx, &def, T0 - 1);
     fx.scheduler.step();
     idle(&fx).await;
     assert_eq!(statuses(&fx, id), vec!["ok"]);
     let argv = log_text(&fx).lines().find(|l| l.starts_with("ARGV")).unwrap().to_owned();
     assert!(argv.contains("--tools WebFetch,WebSearch"), "{argv}");
-    assert!(argv.contains("--allowedTools WebFetch,WebSearch"), "{argv}");
+    assert!(argv.contains("--allowedTools WebSearch,WebFetch(domain:example.com),WebFetch(domain:news.example.org)"), "{argv}");
+    let allowed = argv.split_whitespace().skip_while(|w| *w != "--allowedTools").nth(1).unwrap();
+    assert!(!allowed.split(',').any(|rule| rule == "WebFetch"), "no rule opens every site: {allowed}");
     assert!(!argv.contains("--tools Read"), "{argv}");
     let folder = fx.data.join("sched").join(id.to_string());
     assert!(folder.is_dir(), "the run's own folder exists");
@@ -415,4 +417,21 @@ async fn a_run_stopped_three_times_is_not_paused() {
     }
     let task = fx.store.task(id).unwrap();
     assert_eq!((task.enabled, task.fails), (true, 0));
+}
+
+#[tokio::test]
+async fn a_web_task_whose_site_list_was_emptied_behind_the_apps_back_starts_nothing_and_is_paused() {
+    let fx = fixture(config(), "").await;
+    let def = TaskDef { profile: Profile::Web, cwd: String::new(), domains: vec!["example.com".into()], ..folder_def(&fx, "news") };
+    let id = add(&fx, &def, T0 - 1);
+    let conn = rusqlite::Connection::open(fx.data.join("schedule.sqlite")).unwrap();
+    conn.execute("UPDATE tasks SET domains = '[]'", []).unwrap();
+    drop(conn);
+    fx.scheduler.step();
+    idle(&fx).await;
+    assert_eq!(statuses(&fx, id), vec!["error"]);
+    assert_eq!(log_text(&fx).matches("SCHED_IN").count(), 0, "no process was started");
+    let task = fx.store.task(id).unwrap();
+    assert!(!task.enabled && task.paused_reason.contains("sites"), "{task:?}");
+    assert!(fx.scheduler.run_now(id).is_err(), "and it cannot be run by hand either");
 }

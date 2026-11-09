@@ -51,8 +51,8 @@ impl Default for SchedConfig {
 /// The arguments of a scheduled run. Every switch here narrows; none widens.
 pub fn build_args(def: &TaskDef) -> Vec<String> {
     let mut args: Vec<String> = vec!["-p".into(), "--model".into(), def.model.clone(), "--output-format".into(), "json".into()];
-    if let Some(allowed) = def.profile.allowed() {
-        args.extend(["--allowedTools".into(), allowed.to_owned()]);
+    if let Some(allowed) = def.allowed_tools() {
+        args.extend(["--allowedTools".into(), allowed]);
     }
     for (flag, value) in [
         ("--tools", def.profile.tools().to_owned()),
@@ -242,6 +242,7 @@ impl Scheduler {
     /// "Run now": queued at once whatever the schedule says, and counted in the day's limit. The reason is returned when it cannot.
     pub fn run_now(self: &Arc<Self>, id: i64) -> Result<(), String> {
         let task = self.store.task(id).ok_or("no such task")?;
+        task.def.check_sites()?;
         if self.store.runs_on(self.day()) >= self.config.daily_cap {
             return Err("today's limit of runs is used up".into());
         }
@@ -351,13 +352,17 @@ impl Scheduler {
         self.store.count_run(today);
         let run_id = self.store.start_run(&task, due, now);
         self.emit("sched_changed", json!({}));
-        let outcome = match self.workdir(&task) {
+        // A site list that was never accepted (a web task without sites, a file edited by hand) never starts a process.
+        let invalid = task.def.check_sites().err();
+        let outcome = match invalid.clone().map_or_else(|| self.workdir(&task), Err) {
             Ok(dir) => self.run_claude(&task.def, &dir).await,
             Err(note) => Outcome { status: "error".into(), note, ..Default::default() },
         };
         let fails = self.store.finish_run(run_id, id, &outcome, self.clock.now_ms());
-        let paused = outcome.status != "ok" && fails >= self.config.max_failures;
-        if paused {
+        let paused = outcome.status != "ok" && (invalid.is_some() || fails >= self.config.max_failures);
+        if let (Some(why), true) = (&invalid, paused) {
+            self.store.pause(id, &format!("the definition is not valid: {}", clip(why, 200)));
+        } else if paused {
             self.store.pause(id, &format!("{fails} runs in a row failed; the last: {}", clip(if outcome.note.is_empty() { &outcome.status } else { &outcome.note }, 200)));
         }
         self.emit("sched_run", json!({"task_id": id, "run_id": run_id, "name": task.def.name, "status": outcome.status, "paused": paused}));
@@ -454,7 +459,7 @@ mod tests {
     use crate::schedule::Schedule;
 
     fn def(profile: Profile) -> TaskDef {
-        TaskDef { name: "t".into(), prompt: "p".into(), cwd: if profile == Profile::Folder { "/tmp".into() } else { String::new() }, profile, model: "sonnet".into(), schedule: Schedule::Every { minutes: 30 }, max_turns: 20, budget_usd: 0.5, timeout_s: 600 }
+        TaskDef { name: "t".into(), prompt: "p".into(), cwd: if profile == Profile::Folder { "/tmp".into() } else { String::new() }, profile, model: "sonnet".into(), schedule: Schedule::Every { minutes: 30 }, max_turns: 20, budget_usd: 0.5, timeout_s: 600, domains: if profile == Profile::Web { vec!["example.com".into()] } else { Vec::new() } }
     }
 
     fn pair(args: &[String], flag: &str) -> Option<String> {
@@ -492,7 +497,9 @@ mod tests {
         for tool in ["Bash", "Write", "Edit", "Read", "Grep", "Glob", "Task", "Agent"] {
             assert!(disallowed.split(',').any(|d| d == tool), "{tool} must be disallowed");
         }
-        assert_eq!(pair(&args, "--allowedTools").as_deref(), Some("WebFetch,WebSearch"), "nobody is there to answer for each address");
+        assert_eq!(pair(&args, "--allowedTools").as_deref(), Some("WebSearch,WebFetch(domain:example.com)"), "nobody is there to answer, so only the listed sites are allowed and never a bare WebFetch");
+        let many = TaskDef { domains: vec!["a.example.com".into(), "b.example.org".into()], ..def(Profile::Web) };
+        assert_eq!(pair(&build_args(&many), "--allowedTools").as_deref(), Some("WebSearch,WebFetch(domain:a.example.com),WebFetch(domain:b.example.org)"));
         for local in ["localhost", "127.0.0.1", "[::1]", "169.254.169.254"] {
             assert!(disallowed.split(',').any(|d| d == format!("WebFetch(domain:{local})")), "{local} must be refused: a fetch from the person's machine would reach local services");
         }
