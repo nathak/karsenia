@@ -4,10 +4,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use swb_app::sched_store::{Profile, SchedStore, TaskDef};
-use swb_app::schedule::{FixedClock, Schedule};
-use swb_app::scheduler::{SchedConfig, Scheduler};
-use swb_app::settings::SettingsStore;
+use tenrec::sched_store::{Profile, SchedStore, TaskDef};
+use tenrec::schedule::{FixedClock, Schedule};
+use tenrec::scheduler::{SchedConfig, Scheduler};
+use tenrec::settings::SettingsStore;
 
 const FAKE: &str = env!("CARGO_BIN_EXE_fake-claude");
 const T0: i64 = 1_800_000_000_000;

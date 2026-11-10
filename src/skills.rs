@@ -50,7 +50,7 @@ pub fn name_problem(name: &str) -> Option<&'static str> {
     if !(3..=64).contains(&name.len()) || !shape.is_match(name) {
         return Some("a name is 3 to 64 lower-case letters, digits and single dashes");
     }
-    if ["claude", "anthropic", "swb"].iter().any(|bad| name.contains(bad)) || RESERVED.contains(&name) {
+    if ["claude", "anthropic", "tenrec", "swb"].iter().any(|bad| name.contains(bad)) || RESERVED.contains(&name) {
         return Some("that name is reserved");
     }
     None
@@ -579,7 +579,7 @@ impl SkillStore {
         }
         let meta = dir.join(".claude-plugin");
         crate::private::create_dir(&meta)?;
-        crate::private::write(&meta.join("plugin.json"), &json!({"name": "swb", "version": "1", "description": "Skills approved in SmartWorkbench App"}).to_string())?;
+        crate::private::write(&meta.join("plugin.json"), &json!({"name": "tenrec", "version": "1", "description": "Skills approved in Tenrec"}).to_string())?;
         Ok(written)
     }
 }
@@ -611,7 +611,7 @@ mod tests {
         for good in ["release-check", "a1b", "run-tests-2"] {
             assert_eq!(name_problem(good), None, "{good}");
         }
-        for bad in ["ab", "Release", "release_check", "-x-", "a--b", "../etc", "release/check", "my claude skill", "claude-helper", "swb-x", "anthropic-tools", "help", "x".repeat(65).as_str(), ""] {
+        for bad in ["ab", "Release", "release_check", "-x-", "a--b", "../etc", "release/check", "my claude skill", "claude-helper", "swb-x", "tenrec-x", "anthropic-tools", "help", "x".repeat(65).as_str(), ""] {
             assert!(name_problem(bad).is_some(), "{bad}");
         }
     }
@@ -783,7 +783,7 @@ mod tests {
         assert!(md.starts_with("---\nname: here-skill\ndescription: \"Use when"));
         assert!(!target.join("skills/there-skill").exists() && !target.join("skills/off-skill").exists());
         let plugin: Value = serde_json::from_str(&std::fs::read_to_string(target.join(".claude-plugin/plugin.json")).unwrap()).unwrap();
-        assert_eq!(plugin["name"], "swb");
+        assert_eq!(plugin["name"], "tenrec");
         for forbidden in ["hooks", "agents", ".mcp.json", "commands"] {
             assert!(!target.join(forbidden).exists(), "{forbidden} is never written");
         }

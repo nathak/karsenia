@@ -46,7 +46,7 @@ pub struct Config {
     /// 0 picks a free port.
     pub port: u16,
     pub data_dir: PathBuf,
-    /// The `claude` program (default: SWB_CLAUDE, else `claude`).
+    /// The `claude` program (default: TENREC_CLAUDE, else `claude`).
     pub bin: Option<String>,
     /// The program `claude` runs as the MCP server (`<exe> mcp`); None turns history search for Claude off.
     pub mcp_bin: Option<PathBuf>,
@@ -123,8 +123,8 @@ async fn static_file(uri: axum::http::Uri) -> Response {
     let Some((name, kind, bytes)) = ASSETS.iter().find(|(name, _, _)| *name == wanted) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    // SWB_UI_DIR serves the UI from disk, so editing it needs no rebuild while developing.
-    let body: Vec<u8> = match std::env::var_os("SWB_UI_DIR") {
+    // TENREC_UI_DIR serves the UI from disk, so editing it needs no rebuild while developing.
+    let body: Vec<u8> = match std::env::var_os("TENREC_UI_DIR") {
         Some(dir) => std::fs::read(PathBuf::from(dir).join(name)).unwrap_or_else(|_| bytes.to_vec()),
         None => bytes.to_vec(),
     };

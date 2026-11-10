@@ -23,7 +23,7 @@ chmod +x "$work/claude"
 printf '#!/bin/sh\ncase "$1" in\n  run) shift; while [ $# -gt 0 ]; do if [ "$1" = smoke-image ]; then shift; break; fi; shift; done; shift\n       FAKE_SCENARIO=%s/scenario.jsonl exec %s/target/debug/fake-claude "$@" ;;\n  *) exit 0 ;;\nesac\n' "$work" "$root" > "$work/docker"
 chmod +x "$work/docker"
 cargo build --manifest-path "$root/Cargo.toml" >/dev/null
-SWB_UI_DIR="$root/ui" "$root/target/debug/smart-workbench-app" --port 4311 --data "$work/data" --claude "$work/claude" > "$work/server.out" &
+TENREC_UI_DIR="$root/ui" "$root/target/debug/tenrec" --port 4311 --data "$work/data" --claude "$work/claude" > "$work/server.out" &
 server=$!
 trap 'kill $server 2>/dev/null; rm -rf "$work"' EXIT
 sleep 1

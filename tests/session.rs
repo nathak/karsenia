@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::Value;
-use swb_app::claude::protocol::Image;
-use swb_app::registry::Registry;
-use swb_app::session::{Envelope, SessionHandle};
+use tenrec::claude::protocol::Image;
+use tenrec::registry::Registry;
+use tenrec::session::{Envelope, SessionHandle};
 use tempfile::TempDir;
 use tokio::sync::broadcast::Receiver;
 

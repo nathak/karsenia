@@ -1,4 +1,6 @@
-# SmartWorkbench App
+# Tenrec
+
+Started as a companion app to the SmartWorkbench Claude Code plugin; now a separate project.
 
 A desktop-style host for [Claude Code](https://claude.com/claude-code): a Rust core runs `claude` headless
 (`--input-format stream-json --output-format stream-json`) and serves a custom chat UI on this machine only.
@@ -16,10 +18,10 @@ cargo run -- --port 4311 --data ./data --claude /path/to/claude
 ```
 
 The token is in the address fragment (never sent over HTTP); the page moves it to `sessionStorage` and clears the address.
-Sessions are kept in `~/.local/share/smart-workbench-app` (`SWB_APP_DATA` or `--data` to change): a meta file and an event log each,
+Sessions are kept in `~/.local/share/tenrec` (`TENREC_DATA` or `--data` to change; a folder an older build made as `~/.local/share/smart-workbench-app`, or named by `SWB_APP_DATA`, is still used where it is): a meta file and an event log each,
 so a chat can be reopened and replayed, and continues with `claude --resume` after a restart.
 
-`SWB_UI_DIR=./ui cargo run` serves the UI from disk, so editing it needs no rebuild.
+`TENREC_UI_DIR=./ui cargo run` serves the UI from disk, so editing it needs no rebuild.
 
 ### Building on a machine without a C compiler
 
@@ -66,7 +68,7 @@ export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=~/.cache/swb-tools/bin/cc CC
   brought up to date at start, is rebuilt when it is old or damaged, and drops chats that are gone.
 - **Sidebar search** (Korean and English, any part of a word; a two-letter Korean word works too): the match is marked, a click opens the chat
   and scrolls to the message.
-- **`search_history` for Claude**: each chat's `claude` is started with an MCP server (`smart-workbench-app mcp`, stdio) that asks the host over
+- **`search_history` for Claude**: each chat's `claude` is started with an MCP server (`tenrec mcp`, stdio) that asks the host over
   a `0600` Unix socket. It searches this chat's **project folder** only (there is deliberately no wider scope for Claude: a session allow rule covers the tool whatever its arguments, and searching every chat is for the person, in the sidebar), returns at most
   six short excerpts, and frames them as untrusted data quoted from the past (old tool outputs can carry instructions). The chat is
   identified by a per-process secret in a `0600` config file, never by an argument the model passes; the secret and the file go when the process ends.
@@ -86,7 +88,7 @@ rebuilt: a file that cannot be read is renamed `.broken` and you are told). A no
   waits for a click and is not given to chats until you approve it. Notes you write or edit yourself are trusted and used.
 - **The Memory tab** (sidebar): waiting notes (approve / reject), this project's notes, notes about you, recent auto-saves with a link
   back to the message they came from, other projects, deleted notes (undo for 7 days), add / edit / pin / delete, export as JSON.
-- **Claude's tools** (`mcp__swb_app__...`): `memory_search` (read-only, this project and your notes) and `memory_save` (at most five a
+- **Claude's tools** (`mcp__tenrec__...`): `memory_search` (read-only, this project and your notes) and `memory_save` (at most five a
   minute). A save is **active only if you allowed that exact input in the permission dialog**; otherwise, and always for a note about you,
   it is saved as waiting. "Allow this tool in this chat" is offered for the read-only tools only, never for `memory_save`.
 - **Recall**: a new (or resumed) chat is started with `--append-system-prompt-file` naming a `0600` file with up to 20 notes / 2 KB
@@ -126,8 +128,8 @@ with broad Bash permission can write the data folder, and a skill planted there 
   `allowed-tools`, hooks, model, context), whatever was proposed. Up to 30 skills, 20 waiting, the newest 5 versions kept.
 - **Improvements** are proposals against a skill (a diff against the active version is shown); approving makes a new version, a stale one is
   refused, and rollback copies an old version forward, so the history only grows.
-- **How Claude gets them**: each chat is started with `--plugin-dir` naming a one-off folder (`0700`/`0600`, plugin name `swb`, so the
-  skills are `swb:<name>`) with the enabled skills of the user and of that project. It is rebuilt at every start and removed when the
+- **How Claude gets them**: each chat is started with `--plugin-dir` naming a one-off folder (`0700`/`0600`, plugin name `tenrec`, so the
+  skills are `tenrec:<name>`) with the enabled skills of the user and of that project. It is rebuilt at every start and removed when the
   process ends, so a skill turned off or deleted is simply not in the next chat, and a running chat is never changed. The chat shows which
   skills it was given, and the tab shows when each was last used.
 
@@ -207,7 +209,7 @@ an account sends the account's own OAuth token to that address (tested against a
 - loses every inherited variable that could carry or redirect a credential (`ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `CLAUDE_CODE_OAUTH*`, `AWS_BEARER_TOKEN_BEDROCK`, `CLAUDE_CONFIG_DIR`, …; prefixes, so a variable a later version adds is covered);
 - does not read the project's `.claude/settings.json` (`--setting-sources user`) and has its address pinned on the command line. Measured: a project's `env.ANTHROPIC_BASE_URL` replaces the one the host sets, and the key would follow it; a project hook ran next to the key. A normal chat has that same exposure (see Known limits).
 
-Each of these is held by a test; the live test (`SWB_LIVE=1`) starts the real `claude` in a hostile project folder (its settings redirect
+Each of these is held by a test; the live test (`TENREC_LIVE=1`) starts the real `claude` in a hostile project folder (its settings redirect
 the address, bring a token and a key helper, and run a hook) and checks that the provider's address gets exactly its own key, a second
 server gets nothing, and the hook does not run.
 
@@ -273,7 +275,7 @@ cargo test                       # protocol, process, session, server (a fake cl
 cargo clippy --all-targets -- -D warnings
 node --test tests/ui.test.mjs    # the UI's pure helpers
 PLAYWRIGHT=/path/to/playwright/index.mjs tests/smoke/run.sh   # headless-Chromium run of the UI against the fake
-SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude, eight tests (costs a few cents)
+TENREC_LIVE=1 cargo test --test live -- --ignored                # the real claude, eight tests (costs a few cents)
 ```
 
 `fake-claude` replays a scenario file: lines are printed as they are, or are directives (`{"$wait":"user"|"control_response"|"interrupt"}`,
@@ -288,7 +290,7 @@ SWB_LIVE=1 cargo test --test live -- --ignored                # the real claude,
 
 Multi-turn over one process, `--resume <session id>` (remembers), image input, `can_use_tool` allow and deny, `interrupt`
 (`control_response` then `result/error_during_execution` within 0.1 s), and the whole permission round trip through this host
-with the real `claude` (the live test). Also checked: a stdio MCP server (tool name `mcp__swb_app__search_history`, env passed to it, connected before the first turn, a session allow rule through `updatedPermissions`, the CLI's `server/discover` probe answered with -32601) and the real tool call in the live test. Not yet checked: how SmartWorkbench's guard questions (`$.ui.ask`) behave in a headless
+with the real `claude` (the live test). Also checked: a stdio MCP server (tool name `mcp__tenrec__search_history`, env passed to it, connected before the first turn, a session allow rule through `updatedPermissions`, the CLI's `server/discover` probe answered with -32601) and the real tool call in the live test. Not yet checked: how SmartWorkbench's guard questions (`$.ui.ask`) behave in a headless
 host, the IDE connection protocol, and Windows/macOS.
 
 ## Next

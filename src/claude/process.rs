@@ -20,7 +20,7 @@ const STDERR_KEEP: usize = 64 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct SpawnOpts {
-    /// The `claude` program; the SWB_CLAUDE variable overrides it (tests point it at the fake).
+    /// The `claude` program; the TENREC_CLAUDE variable overrides it (tests point it at the fake).
     pub bin: String,
     pub cwd: PathBuf,
     pub model: Option<String>,
@@ -58,7 +58,7 @@ pub struct ClaudeProcess {
 }
 
 pub fn claude_bin() -> String {
-    std::env::var("SWB_CLAUDE").unwrap_or_else(|_| "claude".to_owned())
+    std::env::var("TENREC_CLAUDE").unwrap_or_else(|_| "claude".to_owned())
 }
 
 pub fn args(opts: &SpawnOpts) -> Vec<String> {

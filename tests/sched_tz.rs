@@ -1,5 +1,5 @@
 //! The system clock across summer-time changes. One test in its own binary: it sets the process's time zone.
-use swb_app::schedule::{next_due, Clock, Schedule, SystemClock, ALL_DAYS};
+use tenrec::schedule::{next_due, Clock, Schedule, SystemClock, ALL_DAYS};
 
 /// Every due time of a daily task from `from` to `to`, found the way the scheduler does: asked a little after each one.
 fn dues(schedule: &Schedule, from: i64, to: i64) -> Vec<i64> {

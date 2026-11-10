@@ -7,14 +7,14 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use swb_app::extract::ExtractConfig;
-use swb_app::index::SearchQuery;
-use swb_app::memory::NewMem;
-use swb_app::propose::ProposeConfig;
-use swb_app::providers::Form;
-use swb_app::server::{start, Config, Running};
-use swb_app::session::SessionHandle;
-use swb_app::settings::Auto;
+use tenrec::extract::ExtractConfig;
+use tenrec::index::SearchQuery;
+use tenrec::memory::NewMem;
+use tenrec::propose::ProposeConfig;
+use tenrec::providers::Form;
+use tenrec::server::{start, Config, Running};
+use tenrec::session::SessionHandle;
+use tenrec::settings::Auto;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
@@ -49,7 +49,7 @@ async fn fixture() -> Fx {
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
     let extract = ExtractConfig { debounce: Duration::from_millis(150), batch_turns: 1, daily_cap: 40, retries: 0 };
     let propose = ProposeConfig { debounce: Duration::from_millis(150), min_tools: 3, daily_cap: 5 };
-    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: Some(PathBuf::from(env!("CARGO_BIN_EXE_smart-workbench-app"))), extract, propose, sched: Default::default() }).await.unwrap();
+    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: Some(PathBuf::from(env!("CARGO_BIN_EXE_tenrec"))), extract, propose, sched: Default::default() }).await.unwrap();
     Fx { _dir: dir, root, server, log, env_log }
 }
 
@@ -102,7 +102,7 @@ fn tree_text(dir: &Path, skip: &str) -> String {
 
 fn note(fx: &Fx, cwd: &Path) {
     let added = fx.server.registry.memory().unwrap().add(NewMem { scope: "project", cwd: Some(cwd.display().to_string()), kind: "fact".into(), text: "The release script is scripts/ship.sh".into(), source: "manual", sid: None, seq: None, status: "active", instr: false, allow_secret: false });
-    assert!(matches!(added, swb_app::memory::Added::Saved(_)), "{added:?}");
+    assert!(matches!(added, tenrec::memory::Added::Saved(_)), "{added:?}");
 }
 
 async fn wait_for(what: &str, mut ready: impl FnMut() -> bool) {
@@ -328,7 +328,7 @@ async fn a_chat_keeps_its_provider_after_a_restart_and_is_still_not_in_the_histo
     turn(&normal, "RESTARTNORMALWORD").await;
 
     let wrapper = fx.root.join("claude").display().to_string();
-    let reopened = swb_app::registry::Registry::open(fx.root.join("data"), Some(wrapper)).unwrap();
+    let reopened = tenrec::registry::Registry::open(fx.root.join("data"), Some(wrapper)).unwrap();
     let info = reopened.get(&sid).unwrap().info().await.unwrap();
     assert_eq!(info.meta.provider.unwrap().host, "gw.example.com");
     // The chat goes on after the restart: what it says now stays out of the index too (its session was given no index).

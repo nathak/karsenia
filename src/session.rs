@@ -37,7 +37,7 @@ pub struct ProposalInput {
 /// A tool call through which text from outside the person's own files and words can enter the chat: the web, a tool of another MCP
 /// server, a subagent (it may have read the web), or a shell command that fetches (curl, wget, a URL).
 pub fn is_external_tool(name: &str, input: &Value) -> bool {
-    if matches!(name, "WebFetch" | "WebSearch" | "Task" | "Agent") || (name.starts_with("mcp__") && !name.starts_with("mcp__swb_app__")) {
+    if matches!(name, "WebFetch" | "WebSearch" | "Task" | "Agent") || (name.starts_with("mcp__") && !name.starts_with(crate::mcp::TOOL_PREFIX)) {
         return true;
     }
     if name == "Bash" {
@@ -611,7 +611,7 @@ impl Actor {
         }
     }
 
-    /// A chat that calls one of this app's skills (the `Skill` tool with a `swb:` name) marks it as used.
+    /// A chat that calls one of this app's skills (the `Skill` tool with a `tenrec:` name) marks it as used.
     fn note_skill_use(&self, raw: &Value) {
         let Some(store) = &self.skills else { return };
         if raw["type"] != "assistant" || !raw["parent_tool_use_id"].is_null() {
@@ -619,7 +619,7 @@ impl Actor {
         }
         for block in raw["message"]["content"].as_array().into_iter().flatten() {
             if block["type"] == "tool_use" && block["name"] == "Skill" {
-                if let Some(name) = block["input"]["skill"].as_str().and_then(|s| s.strip_prefix("swb:")) {
+                if let Some(name) = block["input"]["skill"].as_str().and_then(|s| s.strip_prefix("tenrec:")) {
                     store.touch(name);
                 }
             }
@@ -667,7 +667,7 @@ impl Actor {
                             for block in blocks.into_iter().flatten().filter(|b| b["type"] == "tool_use") {
                                 let name = block["name"].as_str().unwrap_or_default();
                                 turn_tools += 1;
-                                if !name.starts_with("mcp__swb_app__") {
+                                if !name.starts_with(crate::mcp::TOOL_PREFIX) {
                                     calls.push((block["id"].as_str().unwrap_or_default().to_owned(), format!("{name}: {}", crate::index::summary(&block["input"]))));
                                 }
                             }

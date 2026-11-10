@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use swb_app::providers::Form;
-use swb_app::server::{start, Config};
+use tenrec::providers::Form;
+use tenrec::server::{start, Config};
 
 const FAKE: &str = env!("CARGO_BIN_EXE_fake-claude");
 

@@ -1,4 +1,4 @@
-//! SmartWorkbench App: runs `claude` headless and serves a chat UI for it on this machine only.
+//! Tenrec: runs `claude` headless and serves a chat UI for it on this machine only.
 pub mod claude;
 pub mod extract;
 pub mod index;

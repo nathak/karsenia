@@ -22,7 +22,7 @@ fn log(path: &Option<String>, text: &str) {
 fn log_env(path: &Option<String>) {
     let Some(path) = path else { return };
     let env: serde_json::Map<String, serde_json::Value> = std::env::vars()
-        .filter(|(k, _)| ["ANTHROPIC_", "CLAUDE_", "AWS_BEARER", "SWB_MCP_"].iter().any(|p| k.starts_with(p)))
+        .filter(|(k, _)| ["ANTHROPIC_", "CLAUDE_", "AWS_BEARER", "TENREC_MCP_", "SWB_MCP_"].iter().any(|p| k.starts_with(p)))
         .map(|(k, v)| (k, serde_json::Value::String(v)))
         .collect();
     let line = serde_json::json!({"argv": std::env::args().skip(1).collect::<Vec<_>>(), "env": env, "cwd": std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default()});

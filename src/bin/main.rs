@@ -15,7 +15,7 @@ mod clap_free {
                 "--port" => args.port = it.next().and_then(|v| v.parse().ok()).ok_or("--port needs a number")?,
                 "--data" => args.data = Some(it.next().ok_or("--data needs a folder")?.into()),
                 "--claude" => args.claude = Some(it.next().ok_or("--claude needs a program")?),
-                "-h" | "--help" => return Err("usage: smart-workbench-app [--port N] [--data FOLDER] [--claude PROGRAM]".into()),
+                "-h" | "--help" => return Err("usage: tenrec [--port N] [--data FOLDER] [--claude PROGRAM]".into()),
                 other => return Err(format!("unknown option {other}")),
             }
         }
@@ -25,9 +25,9 @@ mod clap_free {
 
 #[tokio::main]
 async fn main() {
-    // `smart-workbench-app mcp`: the MCP server that claude starts for a chat (stdio), not the app itself.
+    // `tenrec mcp`: the MCP server that claude starts for a chat (stdio), not the app itself.
     if std::env::args().nth(1).as_deref() == Some("mcp") {
-        std::process::exit(swb_app::mcp::run_stdio().await);
+        std::process::exit(tenrec::mcp::run_stdio().await);
     }
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
     let args = match parse() {
@@ -37,11 +37,11 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    let config = swb_app::server::Config { port: args.port, data_dir: args.data.unwrap_or_else(swb_app::registry::data_dir), bin: args.claude, mcp_bin: std::env::current_exe().ok(), extract: Default::default(), propose: Default::default(), sched: Default::default() };
-    match swb_app::server::start(config).await {
+    let config = tenrec::server::Config { port: args.port, data_dir: args.data.unwrap_or_else(tenrec::registry::data_dir), bin: args.claude, mcp_bin: std::env::current_exe().ok(), extract: Default::default(), propose: Default::default(), sched: Default::default() };
+    match tenrec::server::start(config).await {
         Ok(running) => {
-            println!("SmartWorkbench App is running. Open:\n  {}", running.url());
-            let swb_app::server::Running { registry, task, .. } = running;
+            println!("Tenrec is running. Open:\n  {}", running.url());
+            let tenrec::server::Running { registry, task, .. } = running;
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("could not listen for SIGTERM");
             tokio::select! {
                 _ = task => {}

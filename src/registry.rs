@@ -47,11 +47,22 @@ pub struct Registry {
 }
 
 pub fn data_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("SWB_APP_DATA") {
-        return PathBuf::from(dir);
-    }
+    let named = std::env::var_os("TENREC_DATA").or_else(|| std::env::var_os("SWB_APP_DATA")).map(PathBuf::from);
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-    home.join(".local").join("share").join("smart-workbench-app")
+    data_dir_in(named, &home)
+}
+
+fn data_dir_in(named: Option<PathBuf>, home: &Path) -> PathBuf {
+    if let Some(dir) = named {
+        return dir;
+    }
+    let share = home.join(".local").join("share");
+    let (new, old) = (share.join("tenrec"), share.join("smart-workbench-app"));
+    // A folder the app kept under its first name is used where it is: moving it would change the hashes made from its path.
+    if !new.exists() && old.is_dir() {
+        return old;
+    }
+    new
 }
 
 impl Registry {
@@ -280,11 +291,28 @@ fn socket_path(dir: &Path) -> Option<PathBuf> {
     let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?);
     // The same data folder always gets the same name, so runs do not leave a socket each.
     let hash = dir.to_string_lossy().bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
-    let there = runtime.join(format!("swb-app-{hash:016x}.sock"));
+    let there = runtime.join(format!("tenrec-{hash:016x}.sock"));
     (there.as_os_str().len() <= 100).then_some(there)
 }
 
 fn read_log(path: &Path) -> Vec<Envelope> {
     let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
     text.lines().filter_map(|line| serde_json::from_str::<Envelope>(line).ok()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_data_folder_is_named_tenrec_and_a_folder_of_the_first_name_is_kept_where_it_is() {
+        let home = tempfile::tempdir().unwrap();
+        let share = home.path().join(".local").join("share");
+        assert_eq!(data_dir_in(None, home.path()), share.join("tenrec"), "nothing exists yet: the new name");
+        std::fs::create_dir_all(share.join("smart-workbench-app")).unwrap();
+        assert_eq!(data_dir_in(None, home.path()), share.join("smart-workbench-app"), "a folder of the first name is used, not moved");
+        std::fs::create_dir_all(share.join("tenrec")).unwrap();
+        assert_eq!(data_dir_in(None, home.path()), share.join("tenrec"), "once the new one exists it wins");
+        assert_eq!(data_dir_in(Some(PathBuf::from("/chosen")), home.path()), PathBuf::from("/chosen"), "a folder named by the person always wins");
+    }
 }

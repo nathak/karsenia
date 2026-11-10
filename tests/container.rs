@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use swb_app::providers::Form;
-use swb_app::server::{start, Config, Running};
-use swb_app::session::SessionHandle;
+use tenrec::providers::Form;
+use tenrec::server::{start, Config, Running};
+use tenrec::session::SessionHandle;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
@@ -131,13 +131,13 @@ async fn a_container_chat_runs_through_the_runtime_with_only_its_folders_and_no_
     for flag in ["[--rm]", "[-i]", "[--init]", "[--pull=never]", "[--cap-drop=ALL]", "[--security-opt=no-new-privileges]", "[--read-only]"] {
         assert!(run.contains(flag), "{flag} missing: {run}");
     }
-    assert!(run.contains(&format!("[--name] [swb-{}-", chat.sid)) && run.contains("[swb.app=1]") && run.contains("[swb.data="));
+    assert!(run.contains(&format!("[--name] [tenrec-{}-", chat.sid)) && run.contains("[tenrec.app=1]") && run.contains("[tenrec.data="));
     let config = fx.root.join("data").join("chatcfg").join(&chat.sid);
     assert!(run.contains(&format!("[{0}:{0}:rw]", folder.display())), "the project is mounted at its own path: {run}");
-    assert!(run.contains(&format!("[{}:/swb/config:rw]", config.display())));
+    assert!(run.contains(&format!("[{}:/tenrec/config:rw]", config.display())));
     assert_eq!(run.matches("[-v]").count(), 2, "two mounts and no more: {run}");
     assert!(!run.contains(&format!("[{}]", fx.root.join("data").display())), "the data folder is not mounted");
-    assert!(run.contains("[-e] [ANTHROPIC_AUTH_TOKEN]") && run.contains("[-e] [CLAUDE_CONFIG_DIR=/swb/config]"));
+    assert!(run.contains("[-e] [ANTHROPIC_AUTH_TOKEN]") && run.contains("[-e] [CLAUDE_CONFIG_DIR=/tenrec/config]"));
     assert!(run.contains(&format!("[{IMAGE}] [claude] [-p]")) && run.contains("[--setting-sources] [user]"), "claude runs after the image with the provider arguments: {run}");
 
     // What the process inside would be given: the key by name from the client's environment, and not the host's settings path.
@@ -159,7 +159,7 @@ async fn the_container_is_removed_by_name_when_the_chat_is_stopped_or_killed_and
     let chat = fx.server.registry.create_in(project(&fx).to_str().unwrap(), None, Some(&id), true).unwrap();
     turn(&chat).await;
     let name = calls(&fx).iter().find_map(|c| c.split("[--name] [").nth(1).map(|r| r.split(']').next().unwrap().to_owned())).unwrap();
-    assert!(name.starts_with(&format!("swb-{}-", chat.sid)));
+    assert!(name.starts_with(&format!("tenrec-{}-", chat.sid)));
 
     chat.kill();
     wait_for("the kill to remove the container", || calls(&fx).iter().any(|c| *c == format!("CALL [rm] [-f] [{name}]"))).await;
@@ -173,11 +173,11 @@ async fn the_container_is_removed_by_name_when_the_chat_is_stopped_or_killed_and
     wait_for("stop to remove the container", || calls(&fx).iter().any(|c| *c == format!("CALL [rm] [-f] [{second_name}]"))).await;
 
     // A later start of the app removes what a crash left, found by the label of its own data folder.
-    std::fs::write(fx.root.join("ps.txt"), "abc123 swb-old-aaaaaa-111\nzz9 swb-old2-aaaaaa-222\n$(touch pwned) swb-x-aaaaaa-333\n").unwrap();
-    let _again = swb_app::registry::Registry::open(fx.root.join("data"), None).unwrap();
+    std::fs::write(fx.root.join("ps.txt"), "abc123 tenrec-old-aaaaaa-111\nzz9 tenrec-old2-aaaaaa-222\n$(touch pwned) tenrec-x-aaaaaa-333\n").unwrap();
+    let _again = tenrec::registry::Registry::open(fx.root.join("data"), None).unwrap();
     wait_for("the sweep", || calls(&fx).iter().any(|c| *c == "CALL [rm] [-f] [zz9]")).await;
     let all = calls(&fx);
-    assert!(all.iter().any(|c| c.starts_with("CALL [ps] [-a] [--filter] [label=swb.data=")), "{all:?}");
+    assert!(all.iter().any(|c| c.starts_with("CALL [ps] [-a] [--filter] [label=tenrec.data=")), "{all:?}");
     assert!(all.iter().any(|c| *c == "CALL [rm] [-f] [abc123]"));
     assert!(!all.iter().any(|c| c.contains("pwned")), "an id that is not plain letters and digits is never passed on");
     assert!(!fx.root.join("pwned").exists());

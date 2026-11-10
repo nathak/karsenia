@@ -1,16 +1,16 @@
-//! The history search end to end: the real `smart-workbench-app mcp` binary speaking MCP over stdio to the real host socket,
+//! The history search end to end: the real `tenrec mcp` binary speaking MCP over stdio to the real host socket,
 //! with the fake claude producing the chats that get indexed.
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use swb_app::server::{start, Config, Running};
+use tenrec::server::{start, Config, Running};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
 const FAKE: &str = env!("CARGO_BIN_EXE_fake-claude");
-const APP: &str = env!("CARGO_BIN_EXE_smart-workbench-app");
+const APP: &str = env!("CARGO_BIN_EXE_tenrec");
 
 const SCENARIO: &str = r#"{"$wait":"user"}
 {"type":"system","subtype":"init","session_id":"M1"}
@@ -40,7 +40,7 @@ async fn fixture(mcp: bool) -> Fx {
     Fx { _dir: dir, root, server, log }
 }
 
-async fn chat(fx: &Fx, project: &str, text: &str) -> swb_app::session::SessionHandle {
+async fn chat(fx: &Fx, project: &str, text: &str) -> tenrec::session::SessionHandle {
     let path = fx.root.join(project);
     std::fs::create_dir_all(&path).unwrap();
     let session = fx.server.registry.create(path.to_str().unwrap(), None, None).unwrap();
@@ -68,7 +68,7 @@ struct Mcp {
 
 impl Mcp {
     async fn start(sock: &str, secret: &str) -> Self {
-        let mut child = Command::new(APP).arg("mcp").env("SWB_MCP_SOCK", sock).env("SWB_MCP_SECRET", secret).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+        let mut child = Command::new(APP).arg("mcp").env("TENREC_MCP_SOCK", sock).env("TENREC_MCP_SECRET", secret).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
         let lines = BufReader::new(child.stdout.take().unwrap()).lines();
         Self { child, lines, next: 1 }
     }
@@ -95,8 +95,8 @@ impl Mcp {
 }
 
 fn sock_and_secret(config: &Value) -> (String, String) {
-    let server = &config["mcpServers"]["swb_app"];
-    (server["env"]["SWB_MCP_SOCK"].as_str().unwrap().to_owned(), server["env"]["SWB_MCP_SECRET"].as_str().unwrap().to_owned())
+    let server = &config["mcpServers"]["tenrec"];
+    (server["env"]["TENREC_MCP_SOCK"].as_str().unwrap().to_owned(), server["env"]["TENREC_MCP_SECRET"].as_str().unwrap().to_owned())
 }
 
 fn text(reply: &Value) -> String {
@@ -110,7 +110,7 @@ async fn claude_is_started_with_a_private_mcp_config_that_goes_when_it_ends() {
     let argv = std::fs::read_to_string(&fx.log).unwrap();
     let line = argv.lines().find(|l| l.starts_with("ARGV")).unwrap();
     assert!(line.contains("--mcp-config"), "{line}");
-    assert!(!line.contains("SWB_MCP_SECRET"), "the secret is in the file, never in argv");
+    assert!(!line.contains("TENREC_MCP_SECRET"), "the secret is in the file, never in argv");
     let config_path = fx.root.join("data").join("run").join(format!("{}.mcp.json", session.sid));
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(std::fs::metadata(&config_path).unwrap().permissions().mode() & 0o777, 0o600);
@@ -143,7 +143,7 @@ async fn the_tool_finds_this_projects_history_framed_as_untrusted() {
     let mut mcp = Mcp::start(&sock, &secret).await;
 
     let init = mcp.call("initialize", json!({"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}})).await;
-    assert_eq!(init["result"]["serverInfo"]["name"], "swb_app");
+    assert_eq!(init["result"]["serverInfo"]["name"], "tenrec");
     mcp.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).await;
     let probe = mcp.call("server/discover", json!({})).await;
     assert_eq!(probe["error"]["code"], -32601, "an unknown request is refused, not fatal");

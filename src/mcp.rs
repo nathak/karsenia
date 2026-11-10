@@ -1,4 +1,4 @@
-//! The MCP server `claude` is started with: `smart-workbench-app mcp` speaks MCP over stdio and asks this app's host, over a
+//! The MCP server `claude` is started with: `tenrec mcp` speaks MCP over stdio and asks this app's host, over a
 //! Unix socket, to do the work. The host knows which chat a secret belongs to, so what a chat may read is fixed by the host
 //! (its project), never by an argument the model passes.
 use std::collections::HashMap;
@@ -14,7 +14,9 @@ use tokio::net::UnixStream;
 use crate::index::{Hit, MARK_CLOSE, MARK_OPEN};
 use crate::random_hex;
 
-pub const SERVER_NAME: &str = "swb_app";
+pub const SERVER_NAME: &str = "tenrec";
+/// What every tool of this server is named to the model: `mcp__<server>__<tool>`. Checked against `SERVER_NAME` in the tests below.
+pub const TOOL_PREFIX: &str = "mcp__tenrec__";
 pub const TOOL_NAME: &str = "search_history";
 pub const MEMORY_SEARCH: &str = "memory_search";
 pub const MEMORY_SAVE: &str = "memory_save";
@@ -70,7 +72,7 @@ impl McpGate {
             "type": "stdio",
             "command": self.exe,
             "args": ["mcp"],
-            "env": {"SWB_MCP_SOCK": self.sock, "SWB_MCP_SECRET": secret},
+            "env": {"TENREC_MCP_SOCK": self.sock, "TENREC_MCP_SECRET": secret},
         }}});
         let path = self.config_path(sid);
         crate::private::write(&path, &config.to_string()).context("could not write the MCP config")?;
@@ -299,8 +301,8 @@ async fn ask_host(sock: &str, secret: &str, name: &str, args: &Value) -> std::re
 
 /// Runs the stdio server until stdin ends. stdout carries JSON-RPC only; anything else goes to stderr.
 pub async fn run_stdio() -> i32 {
-    let (Ok(sock), Ok(secret)) = (std::env::var("SWB_MCP_SOCK"), std::env::var("SWB_MCP_SECRET")) else {
-        eprintln!("swb mcp: SWB_MCP_SOCK and SWB_MCP_SECRET are required");
+    let (Ok(sock), Ok(secret)) = (std::env::var("TENREC_MCP_SOCK"), std::env::var("TENREC_MCP_SECRET")) else {
+        eprintln!("tenrec mcp: TENREC_MCP_SOCK and TENREC_MCP_SECRET are required");
         return 2;
     };
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -352,6 +354,12 @@ mod tests {
     }
 
     #[test]
+    fn the_tool_prefixes_kept_as_text_follow_the_server_name() {
+        assert_eq!(TOOL_PREFIX, format!("mcp__{SERVER_NAME}__"));
+        assert_eq!(crate::index::OWN_TOOL, format!("{TOOL_PREFIX}{TOOL_NAME}"));
+    }
+
+    #[test]
     fn tools_are_listed_read_only_and_unknown_requests_are_refused() {
         let Reply::Json(v) = handle(&json!({"id": 1, "method": "tools/list"})) else { panic!() };
         assert_eq!(v["result"]["tools"][0]["name"], TOOL_NAME);
@@ -359,8 +367,8 @@ mod tests {
         let names: Vec<&str> = v["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(names, [TOOL_NAME, MEMORY_SEARCH, MEMORY_SAVE]);
         assert!(v["result"]["tools"][2].get("annotations").is_none(), "the write tool is not marked read-only");
-        assert!(is_read_only("mcp__swb_app__search_history") && is_read_only("mcp__swb_app__memory_search"));
-        assert!(!is_read_only("mcp__swb_app__memory_save") && !is_read_only("mcp__other__search_history"));
+        assert!(is_read_only("mcp__tenrec__search_history") && is_read_only("mcp__tenrec__memory_search"));
+        assert!(!is_read_only("mcp__tenrec__memory_save") && !is_read_only("mcp__other__search_history"));
         assert!(v["result"]["tools"][0]["description"].as_str().unwrap().contains("untrusted"));
         let Reply::Json(v) = handle(&json!({"id": "server-discover-probe-1", "method": "server/discover", "params": {}})) else { panic!() };
         assert_eq!(v["error"]["code"], -32601);
@@ -396,7 +404,7 @@ mod tests {
         let config: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let server = &config["mcpServers"][SERVER_NAME];
         assert_eq!(server["args"][0], "mcp");
-        let secret = server["env"]["SWB_MCP_SECRET"].as_str().unwrap().to_owned();
+        let secret = server["env"]["TENREC_MCP_SECRET"].as_str().unwrap().to_owned();
         assert_eq!(gate.sid_of(&secret).as_deref(), Some("s1"));
         assert_eq!(gate.sid_of("guess"), None);
         let again = gate.grant("s1").unwrap();

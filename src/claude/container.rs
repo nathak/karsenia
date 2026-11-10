@@ -11,8 +11,12 @@
 use std::path::{Path, PathBuf};
 
 /// Where the config folder of a chat is inside the container.
-pub const CONFIG_IN: &str = "/swb/config";
-const NAME_PREFIX: &str = "swb-";
+pub const CONFIG_IN: &str = "/tenrec/config";
+const NAME_PREFIX: &str = "tenrec-";
+/// The label of the data folder a container carries, and the one a build of the first name put on its containers: a sweep looks
+/// for both, so one that outlived the rename (a SIGKILL) is still found.
+const DATA_LABEL: &str = "tenrec.data";
+const OLD_DATA_LABEL: &str = "swb.data";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Runtime {
@@ -24,7 +28,7 @@ pub struct Runtime {
 #[derive(Debug, Clone)]
 pub struct Spec {
     pub runtime: Runtime,
-    /// `swb-<chat id>-<random>`: the name `rm -f` is given when the client that started it cannot stop it (a SIGKILL).
+    /// `tenrec-<chat id>-<random>`: the name `rm -f` is given when the client that started it cannot stop it (a SIGKILL).
     pub name: String,
     /// The same for every container of one data folder, so a later start can find the ones a crash left.
     pub data_hash: String,
@@ -61,7 +65,7 @@ fn mountable(path: &Path) -> Result<String, &'static str> {
     Ok(text.to_owned())
 }
 
-/// `swb-<chat id>-<instance>-<random>`: `instance` is one random tag per run of this app, so a sweep at start can tell the
+/// `tenrec-<chat id>-<instance>-<random>`: `instance` is one random tag per run of this app, so a sweep at start can tell the
 /// containers it must leave alone (this run's) from those an earlier run left.
 pub fn container_name(sid: &str, instance: &str, random: &str) -> String {
     format!("{NAME_PREFIX}{sid}-{instance}-{random}")
@@ -131,7 +135,7 @@ pub fn run_args(spec: &Spec, cwd: &Path, env_names: &[String], claude_args: &[St
     .iter()
     .map(|a| (*a).to_owned())
     .collect();
-    args.extend(["--name".into(), spec.name.clone(), "--label".into(), "swb.app=1".into(), "--label".into(), format!("swb.data={}", spec.data_hash)]);
+    args.extend(["--name".into(), spec.name.clone(), "--label".into(), "tenrec.app=1".into(), "--label".into(), format!("{DATA_LABEL}={}", spec.data_hash)]);
     if podman {
         args.push("--userns=keep-id".into());
     }
@@ -171,13 +175,15 @@ pub fn remove(program: &Path, name: &str, wait: std::time::Duration) {
 /// Removes the containers an earlier run of this app left (found by the label of this data folder). The ones of this run
 /// (`instance`) are not touched, so a sweep that is late cannot remove a chat that has just started.
 pub fn sweep(program: &Path, data_hash: &str, instance: &str) {
-    let Ok(listing) = std::process::Command::new(program).args(["ps", "-a", "--filter", &format!("label=swb.data={data_hash}"), "--format", "{{.ID}} {{.Names}}"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output() else { return };
     let own = format!("-{instance}-");
-    for line in String::from_utf8_lossy(&listing.stdout).lines() {
-        let mut parts = line.split_whitespace();
-        let (Some(id), name) = (parts.next(), parts.next().unwrap_or_default()) else { continue };
-        if id.chars().all(|c| c.is_ascii_alphanumeric()) && !name.contains(&own) {
-            remove(program, id, std::time::Duration::from_secs(5));
+    for label in [DATA_LABEL, OLD_DATA_LABEL] {
+        let Ok(listing) = std::process::Command::new(program).args(["ps", "-a", "--filter", &format!("label={label}={data_hash}"), "--format", "{{.ID}} {{.Names}}"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output() else { continue };
+        for line in String::from_utf8_lossy(&listing.stdout).lines() {
+            let mut parts = line.split_whitespace();
+            let (Some(id), name) = (parts.next(), parts.next().unwrap_or_default()) else { continue };
+            if id.chars().all(|c| c.is_ascii_alphanumeric()) && !name.contains(&own) {
+                remove(program, id, std::time::Duration::from_secs(5));
+            }
         }
     }
 }
@@ -187,7 +193,7 @@ mod tests {
     use super::*;
 
     fn spec(program: &str) -> Spec {
-        Spec { runtime: Runtime { program: PathBuf::from(program), image: "my-claude:latest".into() }, name: "swb-ab12-cd34".into(), data_hash: "00ff".into(), config_dir: PathBuf::from("/data/chatcfg/ab12") }
+        Spec { runtime: Runtime { program: PathBuf::from(program), image: "my-claude:latest".into() }, name: "tenrec-ab12-cd34".into(), data_hash: "00ff".into(), config_dir: PathBuf::from("/data/chatcfg/ab12") }
     }
 
     fn has(args: &[String], pair: &[&str]) -> bool {
@@ -202,19 +208,19 @@ mod tests {
         for flag in ["--init", "--pull=never", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only", "--pids-limit=512", "--memory=4g"] {
             assert!(args.iter().any(|a| a == flag), "{flag} missing: {args:?}");
         }
-        assert!(has(&args, &["--name", "swb-ab12-cd34"]) && has(&args, &["--label", "swb.app=1"]) && has(&args, &["--label", "swb.data=00ff"]));
+        assert!(has(&args, &["--name", "tenrec-ab12-cd34"]) && has(&args, &["--label", "tenrec.app=1"]) && has(&args, &["--label", "tenrec.data=00ff"]));
         assert!(has(&args, &["--user", "1000:1000"]));
         assert!(!args.iter().any(|a| a.starts_with("--userns")), "docker has no keep-id");
         // Exactly two mounts: the project at its own path, and the chat's own settings folder.
         let mounts: Vec<&String> = args.iter().enumerate().filter(|(i, a)| *i > 0 && args[*i - 1] == "-v" && !a.is_empty()).map(|(_, a)| a).collect();
-        assert_eq!(mounts, ["/home/me/proj:/home/me/proj:rw", "/data/chatcfg/ab12:/swb/config:rw"]);
+        assert_eq!(mounts, ["/home/me/proj:/home/me/proj:rw", "/data/chatcfg/ab12:/tenrec/config:rw"]);
         assert!(has(&args, &["-w", "/home/me/proj"]));
         for banned in ["--network=host", "--network", "--privileged", "--volumes-from", "--device"] {
             assert!(!args.iter().any(|a| a.starts_with(banned)), "{banned}");
         }
         assert!(!args.iter().any(|a| a == "/data" || a.starts_with("/data:") || a == "/home/me" || a.contains(".claude")), "the data folder and the home folder are not mounted: {args:?}");
         // Variables go by name only, and the image comes right before claude and its arguments.
-        assert!(has(&args, &["-e", "ANTHROPIC_AUTH_TOKEN"]) && has(&args, &["-e", "CLAUDE_CONFIG_DIR=/swb/config"]) && has(&args, &["-e", "HOME=/tmp"]));
+        assert!(has(&args, &["-e", "ANTHROPIC_AUTH_TOKEN"]) && has(&args, &["-e", "CLAUDE_CONFIG_DIR=/tenrec/config"]) && has(&args, &["-e", "HOME=/tmp"]));
         let image = args.iter().position(|a| a == "my-claude:latest").unwrap();
         assert_eq!(&args[image + 1..], ["claude", "-p", "--settings", "{}"]);
         assert!(args[..image].iter().filter(|a| a.contains('=') && a.starts_with("ANTHROPIC")).count() == 0, "no value of a credential variable in the arguments");
@@ -284,12 +290,28 @@ mod tests {
         std::fs::write(&docker, format!("#!/bin/sh\necho \"$*\" >> '{}'\nif [ \"$1\" = ps ]; then cat '{}'; fi\n", log.display(), ps.display())).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::write(&ps, "old1 swb-a-111111-aaa\nmine1 swb-b-222222-bbb\nold2 swb-c-333333-ccc\n$(touch x) swb-d-111111-ddd\n").unwrap();
+        std::fs::write(&ps, "old1 tenrec-a-111111-aaa\nmine1 tenrec-b-222222-bbb\nold2 tenrec-c-333333-ccc\n$(touch x) tenrec-d-111111-ddd\n").unwrap();
         sweep(&docker, "00ff", "222222");
         let calls = std::fs::read_to_string(&log).unwrap();
         assert!(calls.contains("rm -f old1") && calls.contains("rm -f old2"));
         assert!(!calls.contains("mine1"), "a container of this run was removed: {calls}");
         assert!(!calls.contains("touch"), "{calls}");
+    }
+
+    #[test]
+    fn a_container_labelled_by_the_first_name_of_the_app_is_swept_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, ps) = (dir.path().join("calls.log"), dir.path().join("ps-old.txt"));
+        let docker = dir.path().join("docker");
+        // `ps` answers only for the old label: the new one finds nothing.
+        std::fs::write(&docker, format!("#!/bin/sh\necho \"$*\" >> '{}'\nif [ \"$1\" = ps ]; then case \"$*\" in *label=swb.data=00ff*) cat '{}';; esac; fi\n", log.display(), ps.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(&ps, "left1 swb-a-111111-aaa\n").unwrap();
+        sweep(&docker, "00ff", "222222");
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(calls.contains("label=tenrec.data=00ff") && calls.contains("label=swb.data=00ff"), "{calls}");
+        assert!(calls.contains("rm -f left1"), "{calls}");
     }
 
     #[test]

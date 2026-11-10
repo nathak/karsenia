@@ -1,4 +1,4 @@
-//! The host's end of the MCP socket: a stdio server (`smart-workbench-app mcp`) of one chat asks here, with that chat's secret.
+//! The host's end of the MCP socket: a stdio server (`tenrec mcp`) of one chat asks here, with that chat's secret.
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;

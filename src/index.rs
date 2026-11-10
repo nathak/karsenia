@@ -20,7 +20,14 @@ use crate::session::Envelope;
 /// Bump when the schema or what is indexed changes: an index of another version is rebuilt from the logs.
 pub const SCHEMA_VERSION: i64 = 1;
 /// The tool whose own results are never indexed (they would be indexed again by every search).
-pub const OWN_TOOL: &str = "mcp__swb_app__search_history";
+pub const OWN_TOOL: &str = "mcp__tenrec__search_history";
+/// The same tool under the first name of the app, as it stands in logs written then. Only the index leaves it out; nothing that
+/// decides what to trust recognises it.
+const LEGACY_OWN_TOOL: &str = "mcp__swb_app__search_history";
+
+fn is_own_tool(name: &str) -> bool {
+    name == OWN_TOOL || name == LEGACY_OWN_TOOL
+}
 
 const MAX_TEXT: usize = 32 * 1024;
 const MAX_RESULT: usize = 2 * 1024;
@@ -85,7 +92,7 @@ pub fn extract(envelope: &Envelope, own_calls: &mut HashSet<String>) -> Vec<Piec
                             }
                             Some("tool_use") => {
                                 let name = block["name"].as_str().unwrap_or_default();
-                                if name == OWN_TOOL {
+                                if is_own_tool(name) {
                                     if let Some(id) = block["id"].as_str() {
                                         own_calls.insert(id.to_owned());
                                     }
@@ -291,7 +298,7 @@ impl Index {
         };
         let reader = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).context("could not open the index for reading")?;
         let (jobs, rx) = mpsc::channel::<Job>();
-        let handle = std::thread::Builder::new().name("swb-index".into()).spawn(move || writer_loop(writer_conn, rx))?;
+        let handle = std::thread::Builder::new().name("tenrec-index".into()).spawn(move || writer_loop(writer_conn, rx))?;
 
         Ok(Arc::new(Self { jobs, reader: Mutex::new(reader), writer: Mutex::new(Some(handle)) }))
     }
@@ -471,7 +478,7 @@ fn catch_up(tx: &rusqlite::Transaction, sid: &str, cwd: &str, fallback_ts: u64, 
 fn extract_own(envelope: &Envelope, own_calls: &mut HashSet<String>) {
     if envelope.kind == "claude" && envelope.data["type"] == "assistant" {
         for block in envelope.data["message"]["content"].as_array().into_iter().flatten() {
-            if block["type"] == "tool_use" && block["name"] == OWN_TOOL {
+            if block["type"] == "tool_use" && block["name"].as_str().is_some_and(is_own_tool) {
                 if let Some(id) = block["id"].as_str() {
                     own_calls.insert(id.to_owned());
                 }
@@ -555,6 +562,16 @@ mod tests {
             assert!(search(&index, hidden).is_empty(), "{hidden} must not be indexed");
         }
         assert_eq!(search(&index, "see image").len(), 1);
+    }
+
+    #[test]
+    fn a_search_made_under_the_first_name_of_the_app_is_left_out_too() {
+        let (_dir, index) = fixture();
+        index.add("/p", 0, &assistant("s1", 1, json!([{"type": "tool_use", "id": "old", "name": LEGACY_OWN_TOOL, "input": {"query": "needle"}}])));
+        index.add("/p", 0, &env("s1", 2, "claude", json!({"type": "user", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_result", "tool_use_id": "old", "content": "LEGACYRESULT excerpt text"}]}})));
+        index.add("/p", 0, &user("s1", 3, "a plain word afterwards"));
+        assert!(search(&index, "LEGACYRESULT").is_empty());
+        assert_eq!(search(&index, "plain word").len(), 1);
     }
 
     #[test]

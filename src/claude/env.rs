@@ -9,7 +9,7 @@ use std::path::Path;
 use crate::providers::{Auth, Provider};
 
 /// Used when the endpoint wants no key: the CLI needs some token, or it falls back to the account's own.
-pub const PLACEHOLDER_TOKEN: &str = "swb-no-key";
+pub const PLACEHOLDER_TOKEN: &str = "tenrec-no-key";
 
 #[derive(Clone, Default)]
 pub struct EnvPlan {
@@ -27,7 +27,7 @@ impl std::fmt::Debug for EnvPlan {
 /// Variables that carry a credential, choose where requests go, or pick another cloud: prefixes, so a variable added by a later
 /// CLI version is covered too.
 pub fn is_credential_var(name: &str) -> bool {
-    ["ANTHROPIC_", "CLAUDE_CODE_USE_", "CLAUDE_CODE_SKIP_", "CLAUDE_CODE_OAUTH", "CLAUDE_CODE_API_KEY", "CLAUDE_CONFIG_DIR", "AWS_BEARER_TOKEN_BEDROCK", "SWB_MCP_"].iter().any(|prefix| name.starts_with(prefix))
+    ["ANTHROPIC_", "CLAUDE_CODE_USE_", "CLAUDE_CODE_SKIP_", "CLAUDE_CODE_OAUTH", "CLAUDE_CODE_API_KEY", "CLAUDE_CONFIG_DIR", "AWS_BEARER_TOKEN_BEDROCK", "TENREC_MCP_", "SWB_MCP_"].iter().any(|prefix| name.starts_with(prefix))
 }
 
 /// `inherited` are the names of this process's variables.
@@ -96,13 +96,14 @@ mod tests {
             "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
             "CLAUDE_CONFIG_DIR",
             "AWS_BEARER_TOKEN_BEDROCK",
+            "TENREC_MCP_SECRET",
             "SWB_MCP_SECRET",
             "HOME",
             "PATH",
             "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
         ]);
         let plan = plan(&inherited, Some(&provider(Auth::Bearer, Some("tok-123"))), Path::new("/cfg"));
-        for gone in ["ANTHROPIC_API_KEY", "ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_SOMETHING_NEW", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_SKIP_BEDROCK_AUTH", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS", "AWS_BEARER_TOKEN_BEDROCK", "SWB_MCP_SECRET"] {
+        for gone in ["ANTHROPIC_API_KEY", "ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_SOMETHING_NEW", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_SKIP_BEDROCK_AUTH", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS", "AWS_BEARER_TOKEN_BEDROCK", "TENREC_MCP_SECRET", "SWB_MCP_SECRET"] {
             assert!(plan.remove.iter().any(|n| n == gone), "{gone} must be removed");
         }
         assert!(!plan.remove.iter().any(|n| n == "HOME" || n == "PATH" || n == "CLAUDE_CODE_MAX_OUTPUT_TOKENS"), "harmless variables stay");

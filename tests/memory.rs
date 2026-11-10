@@ -5,16 +5,16 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use swb_app::extract::ExtractConfig;
-use swb_app::memory::Added;
-use swb_app::server::{start, Config, Running};
-use swb_app::session::SessionHandle;
-use swb_app::settings::Auto;
+use tenrec::extract::ExtractConfig;
+use tenrec::memory::Added;
+use tenrec::server::{start, Config, Running};
+use tenrec::session::SessionHandle;
+use tenrec::settings::Auto;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
 const FAKE: &str = env!("CARGO_BIN_EXE_fake-claude");
-const APP: &str = env!("CARGO_BIN_EXE_smart-workbench-app");
+const APP: &str = env!("CARGO_BIN_EXE_tenrec");
 
 const CHAT: &str = r#"{"$wait":"user"}
 {"type":"system","subtype":"init","session_id":"X1"}
@@ -104,11 +104,11 @@ impl Mcp {
     async fn for_chat(fx: &Fx, sid: &str) -> Self {
         let path = fx.root.join("data").join("run").join(format!("{sid}.mcp.json"));
         let config: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let env = &config["mcpServers"]["swb_app"]["env"];
+        let env = &config["mcpServers"]["tenrec"]["env"];
         let mut child = Command::new(APP)
             .arg("mcp")
-            .env("SWB_MCP_SOCK", env["SWB_MCP_SOCK"].as_str().unwrap())
-            .env("SWB_MCP_SECRET", env["SWB_MCP_SECRET"].as_str().unwrap())
+            .env("TENREC_MCP_SOCK", env["TENREC_MCP_SOCK"].as_str().unwrap())
+            .env("TENREC_MCP_SECRET", env["TENREC_MCP_SECRET"].as_str().unwrap())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -197,7 +197,7 @@ async fn saves_are_checked_rate_limited_and_search_sees_this_project_and_the_use
     assert!(store.overview(Some(&cwd)).pending.iter().any(|m| m.instr), "an order-like note is flagged");
 
     // Notes to find: this project's, the user's, and another project's.
-    let manual = |scope: &'static str, cwd: Option<&str>, text: &str| match store.add(swb_app::memory::NewMem { scope, cwd: cwd.map(Into::into), kind: "fact".into(), text: text.into(), source: "manual", sid: None, seq: None, status: "active", instr: false, allow_secret: false }) {
+    let manual = |scope: &'static str, cwd: Option<&str>, text: &str| match store.add(tenrec::memory::NewMem { scope, cwd: cwd.map(Into::into), kind: "fact".into(), text: text.into(), source: "manual", sid: None, seq: None, status: "active", instr: false, allow_secret: false }) {
         Added::Saved(_) => {}
         other => panic!("{other:?}"),
     };
@@ -226,9 +226,9 @@ async fn saves_are_checked_rate_limited_and_search_sees_this_project_and_the_use
 async fn the_chat_wide_allow_covers_read_only_tools_and_never_the_save_tool() {
     let scenario = r#"{"$wait":"user"}
 {"type":"system","subtype":"init","session_id":"R1"}
-{"type":"control_request","request_id":"w1","request":{"subtype":"can_use_tool","tool_name":"mcp__swb_app__memory_save","input":{"text":"a note"}}}
+{"type":"control_request","request_id":"w1","request":{"subtype":"can_use_tool","tool_name":"mcp__tenrec__memory_save","input":{"text":"a note"}}}
 {"$wait":"control_response"}
-{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"mcp__swb_app__memory_search","input":{"query":"x"}}}
+{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"mcp__tenrec__memory_search","input":{"query":"x"}}}
 {"$wait":"control_response"}
 {"type":"result","subtype":"success","is_error":false}
 {"$wait":"user"}
@@ -267,7 +267,7 @@ async fn a_new_chat_gets_the_notes_through_a_private_file_and_not_through_argv()
     let store = fx.server.registry.memory().unwrap();
     let cwd = folder.to_string_lossy().into_owned();
     let note = |scope: &'static str, cwd: Option<&str>, text: &str, status: &'static str| {
-        store.add(swb_app::memory::NewMem { scope, cwd: cwd.map(Into::into), kind: "fact".into(), text: text.into(), source: "manual", sid: None, seq: None, status, instr: false, allow_secret: false })
+        store.add(tenrec::memory::NewMem { scope, cwd: cwd.map(Into::into), kind: "fact".into(), text: text.into(), source: "manual", sid: None, seq: None, status, instr: false, allow_secret: false })
     };
     note("project", Some(&cwd), "SECRETNOTE project uses pnpm <b>", "active");
     note("user", None, "SECRETNOTE prefers Korean", "active");

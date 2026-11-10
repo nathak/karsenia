@@ -118,18 +118,18 @@ const store = {
 }
 let token = new URLSearchParams(location.hash.slice(1)).get('t')
 try {
-  if (token) sessionStorage.setItem('swb-token', token)
-  else token = sessionStorage.getItem('swb-token')
+  if (token) sessionStorage.setItem('tenrec-token', token)
+  else token = sessionStorage.getItem('tenrec-token')
 } catch { /* no storage: the token stays in memory */ }
 history.replaceState(null, '', location.pathname)
 
 // ---- theme ----
 const applyTheme = mode => { if (mode === 'light' || mode === 'dark') document.documentElement.dataset.theme = mode; else delete document.documentElement.dataset.theme }
-applyTheme(store.get('swb-theme'))
+applyTheme(store.get('tenrec-theme'))
 $('theme').addEventListener('click', () => {
   const now = document.documentElement.dataset.theme
   const next = now === 'dark' ? 'light' : now === 'light' ? '' : 'dark'
-  store.set('swb-theme', next)
+  store.set('tenrec-theme', next)
   applyTheme(next)
 })
 
@@ -286,7 +286,7 @@ $('new-toggle').addEventListener('click', () => {
   // A form opened again starts on the Claude account: a chat is never put on a third party by what was chosen last time.
   if (!$('new-form').hidden) $('new-provider').value = ''
   updateNewChat()
-  $('new-cwd').value = store.get('swb-cwd') || ''
+  $('new-cwd').value = store.get('tenrec-cwd') || ''
   $('new-cwd').focus()
 })
 $('new-cancel').addEventListener('click', () => { $('new-form').hidden = true })
@@ -294,7 +294,7 @@ $('new-form').addEventListener('submit', event => {
   event.preventDefault()
   const cwd = $('new-cwd').value.trim()
   if (!cwd) return
-  store.set('swb-cwd', cwd)
+  store.set('tenrec-cwd', cwd)
   wsSend({ op: 'new', cwd, model: $('new-model').value || undefined, provider: $('new-provider').value || undefined, container: $('new-container').checked || undefined })
   $('new-form').hidden = true
 })
@@ -538,7 +538,7 @@ function showPerm() {
   const actions = el('div', 'actions')
   actions.append(reason, deny)
   // Offered for this app's own read-only search tool only; Claude Code keeps the rule for this chat's process.
-  if (first.tool_name === 'mcp__swb_app__search_history') {
+  if (first.tool_name === 'mcp__tenrec__search_history') {
     const always = el('button', '', t('allowChat'))
     always.type = 'button'
     always.addEventListener('click', () => answer(true, true))

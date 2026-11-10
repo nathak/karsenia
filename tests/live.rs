@@ -1,9 +1,9 @@
 //! Against the real `claude` (costs a few cents, needs a login). Run on purpose:
-//!   SWB_LIVE=1 cargo test --test live -- --ignored
+//!   TENREC_LIVE=1 cargo test --test live -- --ignored
 use std::time::Duration;
 
-use swb_app::registry::Registry;
-use swb_app::session::Envelope;
+use tenrec::registry::Registry;
+use tenrec::session::Envelope;
 use tokio::sync::broadcast::Receiver;
 
 async fn until(rx: &mut Receiver<Envelope>, what: impl Fn(&Envelope) -> bool) -> Envelope {
@@ -16,9 +16,9 @@ async fn until(rx: &mut Receiver<Envelope>, what: impl Fn(&Envelope) -> bool) ->
 }
 
 #[tokio::test]
-#[ignore = "uses the real claude; run with SWB_LIVE=1 and --ignored"]
+#[ignore = "uses the real claude; run with TENREC_LIVE=1 and --ignored"]
 async fn live_a_permission_is_asked_and_an_approved_command_runs() {
-    if std::env::var_os("SWB_LIVE").is_none() {
+    if std::env::var_os("TENREC_LIVE").is_none() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -38,19 +38,19 @@ async fn live_a_permission_is_asked_and_an_approved_command_runs() {
 }
 
 #[tokio::test]
-#[ignore = "uses the real claude; run with SWB_LIVE=1 and --ignored"]
+#[ignore = "uses the real claude; run with TENREC_LIVE=1 and --ignored"]
 async fn live_claude_calls_the_history_search_tool_after_a_click() {
-    if std::env::var_os("SWB_LIVE").is_none() {
+    if std::env::var_os("TENREC_LIVE").is_none() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
-    let server = swb_app::server::start(swb_app::server::Config {
+    let server = tenrec::server::start(tenrec::server::Config {
         port: 0,
         data_dir: dir.path().join("data"),
         bin: None,
-        mcp_bin: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_smart-workbench-app"))),
+        mcp_bin: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_tenrec"))),
         extract: Default::default(),
         propose: Default::default(),
         sched: Default::default(),
@@ -68,7 +68,7 @@ async fn live_claude_calls_the_history_search_tool_after_a_click() {
     let (_, mut rx) = session.subscribe(0).await.unwrap();
     session.send("Use the search_history tool to look for PELICAN-NONCE and tell me, in one sentence, what the excerpt says the codeword is.".into(), vec![]).await.unwrap();
     let ask = until(&mut rx, |e| e.kind == "permission").await;
-    assert_eq!(ask.data["tool_name"], "mcp__swb_app__search_history");
+    assert_eq!(ask.data["tool_name"], "mcp__tenrec__search_history");
     session.permission(ask.data["request_id"].as_str().unwrap().to_owned(), true, None, true).await.unwrap();
 
     let mut said = String::new();
@@ -89,26 +89,26 @@ async fn live_claude_calls_the_history_search_tool_after_a_click() {
 }
 
 #[tokio::test]
-#[ignore = "uses the real claude; run with SWB_LIVE=1 and --ignored"]
+#[ignore = "uses the real claude; run with TENREC_LIVE=1 and --ignored"]
 async fn live_memory_a_stated_preference_is_auto_saved_and_a_new_chat_knows_it() {
-    if std::env::var_os("SWB_LIVE").is_none() {
+    if std::env::var_os("TENREC_LIVE").is_none() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
-    let server = swb_app::server::start(swb_app::server::Config {
+    let server = tenrec::server::start(tenrec::server::Config {
         port: 0,
         data_dir: dir.path().join("data"),
         bin: None,
-        mcp_bin: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_smart-workbench-app"))),
-        extract: swb_app::extract::ExtractConfig { debounce: Duration::from_millis(500), batch_turns: 3, daily_cap: 40, retries: 1 },
+        mcp_bin: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_tenrec"))),
+        extract: tenrec::extract::ExtractConfig { debounce: Duration::from_millis(500), batch_turns: 3, daily_cap: 40, retries: 1 },
         propose: Default::default(),
         sched: Default::default(),
     })
     .await
     .unwrap();
-    server.registry.settings().update(|s| s.memory_auto = swb_app::settings::Auto::Project);
+    server.registry.settings().update(|s| s.memory_auto = tenrec::settings::Auto::Project);
 
     let first = server.registry.create(project.to_str().unwrap(), Some("haiku".into()), None).unwrap();
     let (_, mut rx) = first.subscribe(0).await.unwrap();
@@ -151,19 +151,19 @@ async fn live_memory_a_stated_preference_is_auto_saved_and_a_new_chat_knows_it()
 }
 
 #[tokio::test]
-#[ignore = "uses the real claude; run with SWB_LIVE=1 and --ignored"]
+#[ignore = "uses the real claude; run with TENREC_LIVE=1 and --ignored"]
 async fn live_memory_save_is_active_after_the_person_approves_that_exact_note() {
-    if std::env::var_os("SWB_LIVE").is_none() {
+    if std::env::var_os("TENREC_LIVE").is_none() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
-    let server = swb_app::server::start(swb_app::server::Config {
+    let server = tenrec::server::start(tenrec::server::Config {
         port: 0,
         data_dir: dir.path().join("data"),
         bin: None,
-        mcp_bin: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_smart-workbench-app"))),
+        mcp_bin: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_tenrec"))),
         extract: Default::default(),
         propose: Default::default(),
         sched: Default::default(),
@@ -174,7 +174,7 @@ async fn live_memory_save_is_active_after_the_person_approves_that_exact_note() 
     let (_, mut rx) = session.subscribe(0).await.unwrap();
     session.send("Use the memory_save tool to save exactly this note for the project: The release branch is main".into(), vec![]).await.unwrap();
     let ask = until(&mut rx, |e| e.kind == "permission").await;
-    assert_eq!(ask.data["tool_name"], "mcp__swb_app__memory_save");
+    assert_eq!(ask.data["tool_name"], "mcp__tenrec__memory_save");
     session.permission(ask.data["request_id"].as_str().unwrap().to_owned(), true, None, false).await.unwrap();
     until(&mut rx, |e| e.kind == "state" && e.data["state"] == "idle").await;
 
@@ -186,19 +186,19 @@ async fn live_memory_save_is_active_after_the_person_approves_that_exact_note() 
 }
 
 #[tokio::test]
-#[ignore = "uses the real claude; run with SWB_LIVE=1 and --ignored"]
+#[ignore = "uses the real claude; run with TENREC_LIVE=1 and --ignored"]
 async fn live_skills_a_proposal_is_made_and_an_approved_skill_is_listed_and_used() {
-    if std::env::var_os("SWB_LIVE").is_none() {
+    if std::env::var_os("TENREC_LIVE").is_none() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
-    let server = swb_app::server::start(swb_app::server::Config {
+    let server = tenrec::server::start(tenrec::server::Config {
         port: 0,
         data_dir: dir.path().join("data"),
         bin: None,
-        mcp_bin: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_smart-workbench-app"))),
+        mcp_bin: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_tenrec"))),
         extract: Default::default(),
         propose: Default::default(),
         sched: Default::default(),
@@ -214,12 +214,12 @@ async fn live_skills_a_proposal_is_made_and_an_approved_skill_is_listed_and_used
         .manual(&chat, Some("a skill for running this project's release checklist: run cargo test, then cargo clippy, then report both results".into()), None, "project")
         .await
         .unwrap_or_else(|e| panic!("the proposal should be made: {e}"));
-    assert!(!swb_app::skills::blocked(&proposal.risks), "a proposal from the real model passes the block checks: {:?}", proposal.risks);
+    assert!(!tenrec::skills::blocked(&proposal.risks), "a proposal from the real model passes the block checks: {:?}", proposal.risks);
     assert!(store.active_for(&project.canonicalize().unwrap().to_string_lossy()).is_empty(), "nothing is active before approval");
 
     // 2. A skill written by hand (the proposer's wording is not what is tested here) is approved, listed and used.
     let hand = store
-        .propose(swb_app::skills::NewProposal {
+        .propose(tenrec::skills::NewProposal {
             target: None,
             name: "pelican-codeword".into(),
             scope: "user",
@@ -239,11 +239,11 @@ async fn live_skills_a_proposal_is_made_and_an_approved_skill_is_listed_and_used
     loop {
         let e = until(&mut rx, |_| true).await;
         if e.kind == "claude" && e.data["subtype"] == "init" {
-            listed = e.data["skills"].as_array().into_iter().flatten().any(|s| s == "swb:pelican-codeword");
+            listed = e.data["skills"].as_array().into_iter().flatten().any(|s| s == "tenrec:pelican-codeword");
         }
         if e.kind == "claude" && e.data["type"] == "assistant" {
             for block in e.data["message"]["content"].as_array().into_iter().flatten() {
-                used |= block["type"] == "tool_use" && block["name"] == "Skill" && block["input"]["skill"] == "swb:pelican-codeword";
+                used |= block["type"] == "tool_use" && block["name"] == "Skill" && block["input"]["skill"] == "tenrec:pelican-codeword";
                 if let Some(t) = block["text"].as_str() {
                     said.push_str(t);
                 }
@@ -256,7 +256,7 @@ async fn live_skills_a_proposal_is_made_and_an_approved_skill_is_listed_and_used
             break;
         }
     }
-    assert!(listed, "the approved skill is in the start event as swb:pelican-codeword");
+    assert!(listed, "the approved skill is in the start event as tenrec:pelican-codeword");
     assert!(used, "Claude called the skill");
     assert!(said.contains("PELICAN-SKILL-5512"), "and answered from it: {said}");
     assert!(store.overview().active.iter().any(|s| s.name == "pelican-codeword" && s.last_used.is_some()), "the use is noted");
@@ -264,14 +264,14 @@ async fn live_skills_a_proposal_is_made_and_an_approved_skill_is_listed_and_used
 
 /// A scheduled run with the real claude: the flags are accepted, the allowed tool works, and a command it is asked to run does not.
 #[tokio::test]
-#[ignore = "uses the real claude; run with SWB_LIVE=1 and --ignored"]
+#[ignore = "uses the real claude; run with TENREC_LIVE=1 and --ignored"]
 async fn live_a_scheduled_run_can_read_but_cannot_run_a_command_or_leave_the_folder() {
     use std::sync::Arc;
-    use swb_app::sched_store::{Profile, SchedStore, TaskDef};
-    use swb_app::schedule::{Schedule, SystemClock};
-    use swb_app::scheduler::{SchedConfig, Scheduler};
-    use swb_app::settings::SettingsStore;
-    if std::env::var_os("SWB_LIVE").is_none() {
+    use tenrec::sched_store::{Profile, SchedStore, TaskDef};
+    use tenrec::schedule::{Schedule, SystemClock};
+    use tenrec::scheduler::{SchedConfig, Scheduler};
+    use tenrec::settings::SettingsStore;
+    if std::env::var_os("TENREC_LIVE").is_none() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -295,7 +295,7 @@ async fn live_a_scheduled_run_can_read_but_cannot_run_a_command_or_leave_the_fol
     let store = Arc::new(store);
     let settings = Arc::new(SettingsStore::open(data.join("settings.json")));
     let (events, _) = tokio::sync::broadcast::channel(16);
-    let scheduler = Scheduler::new(store.clone(), settings, events, swb_app::claude::process::claude_bin(), data, Arc::new(SystemClock), SchedConfig::default());
+    let scheduler = Scheduler::new(store.clone(), settings, events, tenrec::claude::process::claude_bin(), data, Arc::new(SystemClock), SchedConfig::default());
     let def = TaskDef {
         name: "live".into(),
         prompt: format!("1. Read README.md and tell me its first line. 2. Run the shell command `touch {}/ran-bash.txt` with the Bash tool. 3. Read the file {}/outside.txt and tell me what it says. 4. Read link.txt and tell me what it says. Report each step, saying plainly if you could not do one.", project.display(), root.display()),
@@ -330,15 +330,15 @@ async fn live_a_scheduled_run_can_read_but_cannot_run_a_command_or_leave_the_fol
 /// can be tested without leaving it: the server below counts connections (WebFetch raises http to https, so what arrives is a TLS hello).
 /// Measured by hand besides: a listed public site is read, and a redirect to another host is not followed (the repeat fetch is refused).
 #[tokio::test]
-#[ignore = "uses the real claude; run with SWB_LIVE=1 and --ignored"]
+#[ignore = "uses the real claude; run with TENREC_LIVE=1 and --ignored"]
 async fn live_a_web_run_opens_only_the_listed_sites() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use swb_app::sched_store::{Profile, SchedStore, TaskDef};
-    use swb_app::schedule::{Schedule, SystemClock};
-    use swb_app::scheduler::{SchedConfig, Scheduler};
-    use swb_app::settings::SettingsStore;
-    if std::env::var_os("SWB_LIVE").is_none() {
+    use tenrec::sched_store::{Profile, SchedStore, TaskDef};
+    use tenrec::schedule::{Schedule, SystemClock};
+    use tenrec::scheduler::{SchedConfig, Scheduler};
+    use tenrec::settings::SettingsStore;
+    if std::env::var_os("TENREC_LIVE").is_none() {
         return;
     }
     if tokio::net::lookup_host("a.localtest.me:80").await.map(|mut a| a.next().is_none()).unwrap_or(true) {
@@ -363,7 +363,7 @@ async fn live_a_web_run_opens_only_the_listed_sites() {
     let store = Arc::new(store);
     let settings = Arc::new(SettingsStore::open(data.join("settings.json")));
     let (events, _) = tokio::sync::broadcast::channel(16);
-    let scheduler = Scheduler::new(store.clone(), settings, events, swb_app::claude::process::claude_bin(), data, Arc::new(SystemClock), SchedConfig::default());
+    let scheduler = Scheduler::new(store.clone(), settings, events, tenrec::claude::process::claude_bin(), data, Arc::new(SystemClock), SchedConfig::default());
     let def_for = |host: &str| TaskDef {
         name: "live web".into(),
         prompt: format!("Fetch http://{host}:{port}/x with the WebFetch tool and tell me what it says. If you cannot, say so plainly."),
@@ -442,9 +442,9 @@ async fn capture_server() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<(String, 
 }
 
 #[tokio::test]
-#[ignore = "uses the real claude; run with SWB_LIVE=1 and --ignored"]
+#[ignore = "uses the real claude; run with TENREC_LIVE=1 and --ignored"]
 async fn live_a_provider_chat_sends_only_its_own_key_to_its_own_address_whatever_the_project_settings_say() {
-    if std::env::var_os("SWB_LIVE").is_none() {
+    if std::env::var_os("TENREC_LIVE").is_none() {
         return;
     }
     let (port_a, seen_a) = capture_server().await;
@@ -466,7 +466,7 @@ async fn live_a_provider_chat_sends_only_its_own_key_to_its_own_address_whatever
     let registry = Registry::open(dir.path().join("data"), None).unwrap();
     let id = registry
         .providers()
-        .save(swb_app::providers::Form { name: "Local".into(), base_url: format!("http://127.0.0.1:{port_a}"), token: Some("live-key-12345678".into()), ..Default::default() }, 1)
+        .save(tenrec::providers::Form { name: "Local".into(), base_url: format!("http://127.0.0.1:{port_a}"), token: Some("live-key-12345678".into()), ..Default::default() }, 1)
         .unwrap();
     let session = registry.create(project.to_str().unwrap(), None, Some(&id)).unwrap();
     let (_, mut rx) = session.subscribe(0).await.unwrap();

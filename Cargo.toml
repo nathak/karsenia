@@ -1,17 +1,17 @@
 [package]
-name = "smart-workbench-app"
+name = "tenrec"
 version = "0.1.0"
 edition = "2021"
 description = "A desktop-style host for Claude Code: a Rust core that runs `claude` headless and serves a custom chat UI"
 license = "MIT"
-default-run = "smart-workbench-app"
+default-run = "tenrec"
 
 [lib]
-name = "swb_app"
+name = "tenrec"
 path = "src/lib.rs"
 
 [[bin]]
-name = "smart-workbench-app"
+name = "tenrec"
 path = "src/bin/main.rs"
 
 [[bin]]
