@@ -3,6 +3,8 @@
 //! nesting what a sub-agent did under its card. Nothing a model or a tool wrote is ever read as markup: text goes out as text,
 //! and an answer's markdown goes through `markdown::blocks`, which escapes it.
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use serde_json::Value;
@@ -11,6 +13,28 @@ use super::i18n::{fill, tr, Lang};
 use super::markdown::{blocks, Block};
 use super::team::{self, Seen, TeamLine, TeamSeen};
 use crate::schedule::{Clock, SystemClock};
+
+/// The image types the desktop can draw as a thumbnail (the rest is told in the message text).
+pub const THUMB_TYPES: [&str; 2] = ["image/png", "image/jpeg"];
+static NEXT_SHOTS: AtomicU32 = AtomicU32::new(1);
+
+/// The images a user message carried. Cheap to clone (one counter), equal when it is the same message's set, and its debug form
+/// never prints the data. `id` is unique in the process, so a view can key its decoded copies by it.
+#[derive(Clone)]
+pub struct Shots {
+    pub id: u32,
+    pub list: Arc<[crate::claude::protocol::Image]>,
+}
+impl PartialEq for Shots {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl std::fmt::Debug for Shots {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Shots#{}x{}", self.id, self.list.len())
+    }
+}
 
 /// One row of the transcript list.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -38,13 +62,15 @@ pub struct Row {
     pub del: i32,
     /// A list item's indent level.
     pub indent: i32,
+    /// The images of a user message.
+    pub images: Option<Shots>,
 }
 
 #[derive(Debug, Clone)]
 enum Item {
     Day(String),
     UserMeta(String),
-    User(String),
+    User { text: String, images: Option<Shots> },
     AsstMeta { who: String, time: String },
     Text { src: String, blocks: Vec<Block>, live: bool },
     Think { text: String, label: String, live: bool, open: bool },
@@ -452,11 +478,18 @@ impl Transcript {
                 if self.first_text.is_none() && !text.is_empty() && !crate::session::is_slash(&text) {
                     self.first_text = Some(text.chars().take(60).collect());
                 }
-                let n = data.get("images").and_then(Value::as_array).map_or(0, Vec::len);
-                if n > 0 {
-                    text = format!("{}\n{}", fill(&self.t("images"), &[("n", n.to_string())]), text).trim().to_owned();
+                let list: Vec<crate::claude::protocol::Image> = data
+                    .get("images")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(|i| Some(crate::claude::protocol::Image { media_type: i["media_type"].as_str()?.to_owned(), data: i["data"].as_str().filter(|d| !d.is_empty())?.to_owned() })).collect())
+                    .unwrap_or_default();
+                // What cannot be drawn as a thumbnail is still told in the text.
+                let plain = data.get("images").and_then(Value::as_array).map_or(0, Vec::len) - list.iter().filter(|i| THUMB_TYPES.contains(&i.media_type.as_str())).count();
+                if plain > 0 {
+                    text = format!("{}\n{}", fill(&self.t("images"), &[("n", plain.to_string())]), text).trim().to_owned();
                 }
-                self.push(Item::User(text), None);
+                let images = (!list.is_empty()).then(|| Shots { id: NEXT_SHOTS.fetch_add(1, Ordering::Relaxed), list: list.into() });
+                self.push(Item::User { text, images }, None);
             }
             "claude" => self.claude(data),
             // A conversation copied from a session of the `claude` command line program: said once, above what was copied.
@@ -786,7 +819,7 @@ impl Transcript {
         match &self.nodes[i].item {
             Item::Day(text) => out.push(Row { text: text.clone(), ..row("day") }),
             Item::UserMeta(time) => out.push(Row { text: self.t("you"), extra: time.clone(), ..row("meta-user") }),
-            Item::User(text) => out.push(Row { text: text.clone(), ..row("user") }),
+            Item::User { text, images } => out.push(Row { text: text.clone(), images: images.clone(), ..row("user") }),
             Item::AsstMeta { who, time } => out.push(Row { text: who.clone(), extra: time.clone(), ..row("meta-asst") }),
             Item::Text { blocks, live, src } => {
                 let start = out.len();
@@ -857,6 +890,51 @@ impl Transcript {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn user_with(images: Value) -> Transcript {
+        let mut t = chat();
+        t.apply("user", &json!({"text": "hi", "images": images}), 1000);
+        t
+    }
+    fn user_row(t: &Transcript) -> Row {
+        t.rows().into_iter().find(|r| r.kind == "user").unwrap()
+    }
+
+    #[test]
+    fn user_images_ride_on_the_row_without_a_text_note() {
+        let row = user_row(&user_with(json!([{"media_type": "image/png", "data": "AAAA"}, {"media_type": "image/jpeg", "data": "BBBB"}])));
+        assert_eq!(row.images.as_ref().unwrap().list.len(), 2);
+        assert_eq!(row.text, "hi");
+    }
+
+    #[test]
+    fn an_undecodable_image_keeps_the_text_note() {
+        let row = user_row(&user_with(json!([{"media_type": "image/png", "data": "AAAA"}, {"media_type": "image/gif", "data": "BBBB"}])));
+        assert!(row.text.contains('1') && row.text.ends_with("hi") && row.text != "hi", "{}", row.text);
+        assert_eq!(row.images.as_ref().unwrap().list.len(), 2);
+    }
+
+    #[test]
+    fn no_images_means_none() {
+        assert!(user_row(&user_with(json!([]))).images.is_none());
+        assert_eq!(user_row(&user_with(json!([]))).text, "hi");
+    }
+
+    #[test]
+    fn user_row_stays_equal_while_a_turn_streams() {
+        let mut t = user_with(json!([{"media_type": "image/png", "data": "AAAA"}]));
+        let before = user_row(&t);
+        t.apply("claude", &json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}}), 2000);
+        assert_eq!(before, user_row(&t));
+    }
+
+    #[test]
+    fn two_messages_with_the_same_image_get_distinct_ids_and_debug_hides_data() {
+        let a = user_row(&user_with(json!([{"media_type": "image/png", "data": "SECRETDATA"}])));
+        let b = user_row(&user_with(json!([{"media_type": "image/png", "data": "SECRETDATA"}])));
+        assert_ne!(a.images, b.images);
+        assert!(!format!("{a:?}").contains("SECRETDATA"));
+    }
 
     fn chat() -> Transcript {
         let mut t = Transcript::new(Lang::Ko);

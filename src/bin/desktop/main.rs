@@ -14,6 +14,7 @@ mod bus;
 mod panels;
 mod prov;
 mod sched;
+mod shots;
 mod team;
 mod usage;
 mod notify;
@@ -131,6 +132,7 @@ fn main() {
     sched::wire(&ui, &app);
     prov::wire(&ui, &app);
     attach::wire(&ui, &app);
+    shots::wire(&ui, &app);
     files::wire(&ui, &app);
     wt::wire(&ui, &app);
     term::wire(&ui, &app);
@@ -727,6 +729,9 @@ fn close_chat(ui: &AppWindow, app: &Arc<App>, sid: &str) {
         cur.transcript = Transcript::new(app.lang);
     }
     SHOWN.with(|s| s.borrow_mut().clear());
+    if let Some(ui) = app.weak.upgrade() {
+        shots::reset(&ui);
+    }
     ROWS.with(|r| {
         if let Some(rows) = r.borrow().as_ref() {
             rows.set_vec(Vec::new());
@@ -894,7 +899,7 @@ fn push(app: &Arc<App>) {
             return;
         }
         let follow = ui.get_at_bottom() || STICK.with(|s| s.get()) || SHOWN.with(|s| s.borrow().is_empty());
-        apply_rows(rows);
+        apply_rows(rows, &a);
         let state = if head.state.is_empty() { "idle".to_owned() } else { head.state.clone() };
         ui.set_state(state.clone().into());
         ui.set_state_label(tr(lang, &state).into());
@@ -1044,6 +1049,7 @@ fn plain_of(md: &str) -> String {
 
 fn to_slint(row: &Row) -> ChatRow {
     let rich = if row.md.is_empty() { StyledText::default() } else { StyledText::from_markdown(&row.md).unwrap_or_else(|_| StyledText::from_plain_text(&unescape(&row.md))) };
+    let (img_id, imgs) = shots::tiles(row);
     ChatRow {
         kind: row.kind.into(),
         depth: row.depth,
@@ -1061,11 +1067,13 @@ fn to_slint(row: &Row) -> ChatRow {
         add: row.add,
         del: row.del,
         indent: row.indent,
+        img_id,
+        imgs,
     }
 }
 
 /// Changes only the rows that differ from what is on screen (a stream changes the last few).
-fn apply_rows(new: Vec<Row>) {
+fn apply_rows(new: Vec<Row>, app: &Arc<App>) {
     ROWS.with(|r| {
         let rows = r.borrow();
         let Some(model) = rows.as_ref() else { return };
@@ -1086,6 +1094,22 @@ fn apply_rows(new: Vec<Row>) {
                 }
             }
             *shown = new;
+        });
+    });
+    SHOWN.with(|s| shots::sync(&s.borrow(), app));
+}
+
+/// The thumbnails of a message were decoded: its rows are drawn again (the rows themselves did not change, so the diff would not).
+fn refresh_rows_of(id: u32) {
+    ROWS.with(|r| {
+        let rows = r.borrow();
+        let Some(model) = rows.as_ref() else { return };
+        SHOWN.with(|s| {
+            for (i, row) in s.borrow().iter().enumerate() {
+                if row.images.as_ref().is_some_and(|x| x.id == id) {
+                    model.set_row_data(i, to_slint(row));
+                }
+            }
         });
     });
 }
