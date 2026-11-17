@@ -54,6 +54,9 @@ pub struct Settings {
     /// Where chats that start in their own git worktree are made (an absolute path; default `~/tenrec-worktrees`). Only the person sets it.
     #[serde(default)]
     pub worktree_root: Option<PathBuf>,
+    /// The app's own workbench (contract, pins, guard) does the SmartWorkbench plug-in's work: the plug-in is switched off in the app's chats.
+    #[serde(default)]
+    pub workbench_native: bool,
 }
 
 pub struct SettingsStore {

@@ -32,6 +32,7 @@ desktop = ["dep:slint", "dep:slint-build", "dep:arboard", "dep:rfd", "dep:image"
 anyhow = "1"
 axum = { version = "0.7", features = ["ws"] }
 base64 = "0.22"
+fancy-regex = "0.20"
 futures-util = "0.3"
 getrandom = "0.2"
 libc = "0.2"
@@ -64,4 +65,12 @@ reqwest = { version = "0.12", default-features = false }
 
 # SQLite is C compiled by cc-rs: without this a debug build is unoptimised and the index tests crawl.
 [profile.dev.package.libsqlite3-sys]
+opt-level = 3
+
+# The guard's patterns run on every tool call and its tests feed them 5000-character inputs: unoptimised, a debug build is ten times slower.
+[profile.dev.package.fancy-regex]
+opt-level = 3
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.regex-syntax]
 opt-level = 3

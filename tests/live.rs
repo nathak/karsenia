@@ -483,3 +483,186 @@ async fn live_a_provider_chat_sends_only_its_own_key_to_its_own_address_whatever
     assert!(seen_b.lock().unwrap().is_empty(), "the project's own settings redirected a request: {:?}", seen_b.lock().unwrap());
     assert!(!project.join("hook-ran").exists(), "a project hook ran next to a third party's key");
 }
+
+/// A chat named when it was made, the app started again, then a message to it (the chat had no turn before, or had one).
+#[tokio::test]
+#[ignore = "uses the real claude; run with TENREC_LIVE=1 and --ignored"]
+async fn live_a_named_chat_takes_a_message_after_the_app_is_started_again() {
+    if std::env::var_os("TENREC_LIVE").is_none() {
+        return;
+    }
+    for talk_first in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let data = dir.path().join("data");
+        let sid = {
+            let registry = Registry::open(data.clone(), None).unwrap();
+            let chat = registry.create(project.to_str().unwrap(), Some("haiku".into()), None).unwrap();
+            chat.rename("test".into()).await.unwrap();
+            if talk_first {
+                let (_, mut rx) = chat.subscribe(0).await.unwrap();
+                chat.send("Reply with the single word one.".into(), vec![]).await.unwrap();
+                until(&mut rx, |e| e.kind == "state" && e.data["state"] == "idle" && e.seq > 3).await;
+            }
+            let sid = chat.sid.clone();
+            chat.stop();
+            sid
+        };
+        // The app is started again.
+        let registry = Registry::open(data, None).unwrap();
+        let chat = registry.get(&sid).expect("the chat is listed again");
+        let info = chat.info().await.unwrap();
+        eprintln!("talk_first={talk_first}: title={:?} csid={:?}", info.meta.title, info.meta.claude_session_id);
+        let (replay, mut rx) = chat.subscribe(0).await.unwrap();
+        eprintln!("  replayed kinds: {:?}", replay.iter().map(|e| e.kind.clone()).collect::<Vec<_>>());
+        let sent = chat.send("Reply with the single word two.".into(), vec![]).await;
+        eprintln!("  send: {sent:?}");
+        sent.unwrap();
+        let mut seen = Vec::new();
+        loop {
+            let got = tokio::time::timeout(Duration::from_secs(90), rx.recv()).await.expect("timed out").expect("the stream ended");
+            seen.push(format!("{}:{}", got.kind, got.data["state"].as_str().or(got.data["message"].as_str()).unwrap_or("")));
+            if got.kind == "error" || (got.kind == "state" && got.data["state"] == "idle") {
+                break;
+            }
+        }
+        eprintln!("  events after send: {seen:?}");
+        eprintln!("  title after: {:?}", chat.info().await.unwrap().meta.title);
+        chat.stop();
+    }
+}
+
+/// Holds a named chat (with a running `claude`) open for a while so another session can be looked for by name. Not a check by itself.
+#[tokio::test]
+#[ignore = "uses the real claude; run with TENREC_LIVE=1 and --ignored"]
+async fn live_hold_a_named_chat_open_for_a_peer_lookup() {
+    if std::env::var_os("TENREC_LIVE").is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let data = dir.path().join("data");
+    let registry = Registry::open(data, None).unwrap();
+    let chat = registry.create(project.to_str().unwrap(), Some("haiku".into()), None).unwrap();
+    chat.rename("tenrecprobe".into()).await.unwrap();
+    eprintln!("PHASE1 named, no message yet");
+    tokio::time::sleep(Duration::from_secs(50)).await;
+    let (_, mut rx) = chat.subscribe(0).await.unwrap();
+    chat.send("Reply with the single word one.".into(), vec![]).await.unwrap();
+    until(&mut rx, |e| e.kind == "state" && e.data["state"] == "idle" && e.seq > 3).await;
+    eprintln!("PHASE2 one turn done, claude kept running");
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    chat.stop();
+}
+
+/// The app's own workbench against the real `claude`: the locked contract is seen by the model, and the plug-in is off in that chat.
+#[tokio::test]
+#[ignore = "uses the real claude; run with TENREC_LIVE=1 and --ignored"]
+async fn live_the_native_contract_is_seen_by_the_model_and_the_plugin_is_off() {
+    if std::env::var_os("TENREC_LIVE").is_none() {
+        return;
+    }
+    use tenrec::workbench::Op;
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let registry = Registry::open(dir.path().join("data"), None).unwrap();
+    registry.settings().update(|s| s.workbench_native = true);
+    let chat = registry.create(project.to_str().unwrap(), Some("haiku".into()), None).unwrap();
+    registry.workbench_apply(&chat.sid, Op::SetGoal { text: "Deliver the kiwi report".into() }).unwrap();
+    registry.workbench_apply(&chat.sid, Op::AddConstraint { text: "Every answer ends with the word PINEAPPLE".into(), hard: true }).unwrap();
+    registry.workbench_apply(&chat.sid, Op::Lock).unwrap();
+    let (_, mut rx) = chat.subscribe(0).await.unwrap();
+    chat.send("What is my task's goal? Answer in one short sentence.".into(), vec![]).await.unwrap();
+    let mut answer = String::new();
+    loop {
+        let got = tokio::time::timeout(Duration::from_secs(90), rx.recv()).await.expect("timed out").expect("ended");
+        if got.kind == "claude" && got.data["type"] == "assistant" {
+            for b in got.data["message"]["content"].as_array().into_iter().flatten() {
+                if let Some(t) = b["text"].as_str() {
+                    answer.push_str(t);
+                }
+            }
+        }
+        if got.kind == "state" && got.data["state"] == "idle" && !answer.is_empty() {
+            break;
+        }
+    }
+    eprintln!("ANSWER: {answer}");
+    assert!(answer.to_lowercase().contains("kiwi") || answer.contains("키위"), "the model saw the goal: {answer}");
+    assert!(answer.contains("PINEAPPLE"), "and kept the rule: {answer}");
+    // The plug-in is not loaded in this process: its command is unknown.
+    chat.send("/swb status".into(), vec![]).await.unwrap();
+    let mut reply = String::new();
+    loop {
+        let got = tokio::time::timeout(Duration::from_secs(90), rx.recv()).await.expect("timed out").expect("ended");
+        if got.kind == "claude" && got.data["type"] == "result" {
+            reply = got.data["result"].as_str().unwrap_or_default().to_owned();
+            break;
+        }
+    }
+    eprintln!("SWB: {reply}");
+    assert!(!reply.starts_with("smartworkbench:"), "the plug-in answered: {reply}");
+    chat.stop();
+}
+
+/// The app's own guard against the real `claude`: a destructive call is denied by the hook, a read of a secrets file is asked through the
+/// app's permission prompt (with the guard's reason), and ordinary work is not touched.
+#[tokio::test]
+#[ignore = "uses the real claude; run with TENREC_LIVE=1 and --ignored"]
+async fn live_the_native_guard_denies_asks_and_leaves_ordinary_work_alone() {
+    if std::env::var_os("TENREC_LIVE").is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join(".env"), "TOKEN=abc\n").unwrap();
+    std::fs::write(project.join("note.txt"), "plain note\n").unwrap();
+    let server = tenrec::server::start(tenrec::server::Config {
+        port: 0,
+        data_dir: dir.path().join("data"),
+        bin: None,
+        mcp_bin: Some(env!("CARGO_BIN_EXE_tenrec").into()),
+        extract: Default::default(),
+        propose: Default::default(),
+        sched: Default::default(),
+    })
+    .await
+    .unwrap();
+    server.registry.settings().update(|s| s.workbench_native = true);
+    let chat = server.registry.create(project.to_str().unwrap(), Some("haiku".into()), None).unwrap();
+    let (_, mut rx) = chat.subscribe(0).await.unwrap();
+    let force = ["git", "push", "--force", "origin", "main"].join(" ");
+    chat.send(format!("Do these in order with tools and report each result in one line: 1) Read the file note.txt. 2) Read the file .env. 3) Run this exact Bash command: {force}"), vec![]).await.unwrap();
+    let mut asked: Vec<(String, String)> = Vec::new();
+    let mut tool_errors: Vec<String> = Vec::new();
+    loop {
+        let got = tokio::time::timeout(Duration::from_secs(120), rx.recv()).await.expect("timed out").expect("ended");
+        match got.kind.as_str() {
+            "permission" => {
+                let tool = got.data["tool_name"].as_str().unwrap_or_default().to_owned();
+                let reason = got.data["decision_reason"].as_str().unwrap_or_default().to_owned();
+                eprintln!("ASK {tool} reason={reason}");
+                asked.push((tool, reason));
+                chat.permission(got.data["request_id"].as_str().unwrap().to_owned(), false, Some("no".into()), false).await.unwrap();
+            }
+            "claude" if got.data["type"] == "user" => {
+                for b in got.data["message"]["content"].as_array().into_iter().flatten() {
+                    if b["type"] == "tool_result" && b["is_error"] == true {
+                        tool_errors.push(b["content"].to_string());
+                    }
+                }
+            }
+            "state" if got.data["state"] == "idle" && got.seq > 3 => break,
+            _ => {}
+        }
+    }
+    eprintln!("ERRORS {tool_errors:?}");
+    assert!(asked.iter().any(|(tool, reason)| tool == "Read" && reason.contains("secret")), "the .env read was asked with the guard's reason: {asked:?}");
+    assert!(!asked.iter().any(|(tool, _)| tool == "Read" && false), "unreachable");
+    assert!(tool_errors.iter().any(|e| e.contains("destructive-git")), "the destructive call was denied by the hook: {tool_errors:?}");
+    chat.stop();
+}

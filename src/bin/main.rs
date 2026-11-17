@@ -31,6 +31,11 @@ async fn main() {
     if std::env::args().nth(1).as_deref() == Some("mcp") {
         std::process::exit(tenrec::mcp::run_stdio().await);
     }
+    // `tenrec guard --data <folder> --sid <chat>`: the PreToolUse hook of a chat's claude (the app's own guard), not the app itself.
+    if std::env::args_os().nth(1).is_some_and(|a| a == "guard") {
+        let rest: Vec<String> = std::env::args_os().skip(2).map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(tenrec::workbench::hook::run(&rest));
+    }
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
     let args = match parse() {
         Ok(args) => args,

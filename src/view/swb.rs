@@ -100,6 +100,8 @@ pub struct SwbTeam {
     /// `lead`, `explorer`, `advisor`, each with its model and effort.
     pub roles: [(&'static str, Option<String>, Option<String>); 3],
     pub codex: bool,
+    pub codex_review: bool,
+    pub codex_rescue: bool,
 }
 
 fn role_word(v: &Value, cap: usize, ok: fn(char) -> bool) -> Option<String> {
@@ -117,7 +119,7 @@ fn parse_team(v: &Value) -> Option<SwbTeam> {
     };
     let get = |group: &str, role: &str| team.get(group).and_then(|g| g.get(role)).unwrap_or(&Value::Null).clone();
     let role = |name: &'static str| (name, role_word(&get("roles", name), 40, super::team::is_model_char), role_word(&get("efforts", name), 16, |c| c.is_ascii_lowercase()));
-    Some(SwbTeam { enabled, roles: [role("lead"), role("explorer"), role("advisor")], codex: team.get("codex") == Some(&Value::Bool(true)) })
+    Some(SwbTeam { enabled, roles: [role("lead"), role("explorer"), role("advisor")], codex: team.get("codex") == Some(&Value::Bool(true)), codex_review: team.get("codexReview") == Some(&Value::Bool(true)), codex_rescue: team.get("codexRescue") == Some(&Value::Bool(true)) })
 }
 
 /// What a snapshot says. Only `parse` makes one.
@@ -138,6 +140,12 @@ pub struct Swb {
     /// Only counted: what a question or a proposal says is not shown.
     pub open_asks: usize,
     pub open_proposals: usize,
+    /// Only how many are pinned (the snapshot has no list), and how much changed (counts, no paths).
+    /// None when the snapshot has no such key (an older plug-in): it is shown as not reported, never as zero.
+    pub pins: Option<u32>,
+    pub changed: Option<(u32, u32, u32)>,
+    /// Whether the Codex program was found (the snapshot's own top-level flag).
+    pub codex_found: Option<bool>,
     /// The session's team settings, when the snapshot has them.
     pub team: Option<SwbTeam>,
 }
@@ -254,6 +262,12 @@ pub fn parse(bytes: &[u8], id: &str) -> Result<Swb, Refusal> {
         evidence,
         open_asks: v["asks"].as_array().map_or(0, |a| a.len().min(1000)),
         open_proposals: v["proposals"].as_array().map_or(0, |a| a.len().min(1000)),
+        pins: v["pins"].as_u64().map(|n| n.min(100_000) as u32),
+        codex_found: v["codexFound"].as_bool(),
+        changed: v["changed"].as_object().map(|c| {
+            let n = |k: &str| c.get(k).and_then(Value::as_u64).unwrap_or(0).min(10_000_000) as u32;
+            (n("files"), n("added"), n("removed"))
+        }),
         team: parse_team(&v["team"]),
     })
 }
@@ -420,6 +434,21 @@ mod tests {
             other => panic!("{other:?}"),
         }
     }
+    #[test]
+    fn pins_and_changes_are_counts_and_codex_switches_are_read() {
+        let team = |body: &str| parse(SNAP.replace(r#""team":{"enabled":true}"#, &format!(r#""team":{body}"#)).as_bytes(), "abc-1").expect("parse").team.expect("team");
+        let t = team(r#"{"enabled":true,"codex":true,"codexReview":true,"codexRescue":false}"#);
+        assert!(t.codex && t.codex_review && !t.codex_rescue);
+        assert!(!team(r#"{"enabled":true}"#).codex_review);
+        let with = SNAP.replacen('{', r#"{"pins":3,"changed":{"files":2,"added":10,"removed":4},"#, 1);
+        let s = parse(with.as_bytes(), "abc-1").expect("parse");
+        assert_eq!((s.pins, s.changed), (Some(3), Some((2, 10, 4))));
+        let none = parse(SNAP.as_bytes(), "abc-1").expect("parse");
+        assert_eq!((none.pins, none.changed, none.codex_found), (None, None, None));
+        let found = parse(SNAP.replacen('{', r#"{"codexFound":true,"#, 1).as_bytes(), "abc-1").expect("parse");
+        assert_eq!(found.codex_found, Some(true));
+    }
+
     #[test]
     fn the_team_settings_come_from_the_snapshot_and_a_missing_value_stays_missing() {
         let team = |body: &str| parse(SNAP.replace(r#""team":{"enabled":true}"#, &format!(r#""team":{body}"#)).as_bytes(), "abc-1").expect("parse").team;

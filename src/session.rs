@@ -134,6 +134,7 @@ enum Cmd {
     SetModel { model: Option<String>, reply: oneshot::Sender<Result<(), String>> },
     Rename { title: String, reply: oneshot::Sender<Result<(), String>> },
     Remove { reply: oneshot::Sender<Result<(), String>> },
+    Warm { reply: oneshot::Sender<Result<(), String>> },
     Stop,
     Kill,
     UserTexts { after: u64, since: u64, reply: oneshot::Sender<Vec<(u64, String)>> },
@@ -184,6 +185,20 @@ impl SessionHandle {
             }
         }
         ask(&self.tx, |reply| Cmd::Send { text, images, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
+    /// Starts the chat's `claude` now (a chat the person named only: see `Actor::warm`), so that another Claude Code session can find
+    /// it by its name before any message is sent. Nothing is sent to the model.
+    pub async fn warm(&self) -> Result<(), String> {
+        if let Some(login) = ask(&self.tx, |reply| Cmd::Preflight { reply }).await.unwrap_or_else(|| Err("the session is gone".into()))? {
+            match crate::accounts::status(&login.bin, &login.dir, &login.env, Some(&login.dir)).await {
+                Ok(status) if !status.logged_in => return Err("this account is not logged in".into()),
+                Ok(_) => {}
+                Err(error @ crate::accounts::StatusError::Redirected) => return Err(error.message()),
+                Err(error) => tracing::warn!("could not read the login status of an account: {}", error.message()),
+            }
+        }
+        ask(&self.tx, |reply| Cmd::Warm { reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
     }
 
     /// `remember` asks Claude Code to allow this one read-only tool for the rest of this process; only the person's click sets it.
@@ -297,7 +312,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secret: None, seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, retire_reply: None };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secret: None, seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, retire_reply: None };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -324,6 +339,8 @@ struct Actor {
     retiring: bool,
     /// The chat was deleted: the loop ends and nothing more is written for it.
     gone: bool,
+    /// Whether the running process was started with the built-in workbench on (its plug-in switched off, its guard hook set).
+    native_spawned: bool,
     /// Who waits for the process to end before the worktree is removed.
     retire_reply: Option<oneshot::Sender<Result<(), String>>>,
 }
@@ -524,9 +541,10 @@ impl Actor {
                 let (result, restarted) = self.set_model(model);
                 let _ = reply.send(result);
                 if restarted {
-                    // The old process is gone: what it still had to say is not heard (a closed stream replaces its stream).
-                    let (_tx, rx) = mpsc::unbounded_channel();
-                    return Some(rx);
+                    // The old process is gone: what it still had to say is not heard (a closed stream replaces its stream). A named chat
+                    // gets its new process at once (see `warm`).
+                    let (_result, events) = self.warm();
+                    return Some(events.unwrap_or_else(|| mpsc::unbounded_channel().1));
                 }
             }
             Cmd::Rename { title, reply } => {
@@ -550,12 +568,23 @@ impl Actor {
                         let _ = std::fs::remove_dir_all(self.skills_path());
                         self.set_state(State::Idle);
                         let _ = reply.send(Ok(()));
-                        let (_tx, rx) = mpsc::unbounded_channel();
-                        return Some(rx);
+                        // The new name is the process's own: it starts again at once, so the name keeps pointing at a live chat.
+                        let (_result, events) = self.warm();
+                        return Some(events.unwrap_or_else(|| mpsc::unbounded_channel().1));
                     }
                     Ok(())
                 };
+                let named = result.is_ok();
                 let _ = reply.send(result);
+                if named {
+                    let (_result, events) = self.warm();
+                    return events;
+                }
+            }
+            Cmd::Warm { reply } => {
+                let (result, events) = self.warm();
+                let _ = reply.send(result);
+                return events;
             }
             Cmd::Remove { reply } => {
                 let result = self.remove();
@@ -644,6 +673,113 @@ impl Actor {
         None
     }
 
+    /// A chat the person named keeps a `claude` running between messages, so its name is a live address: another Claude Code session
+    /// finds it (and can message it) without a message having been sent first. No provider or container chat, nothing while a turn
+    /// runs, and no cost: the process waits for its first message.
+    fn warm(&mut self) -> (Result<(), String>, Option<mpsc::UnboundedReceiver<ProcEvent>>) {
+        let held = self.process.is_some() || self.state == State::Running || self.gone || self.retiring || !self.pending.is_empty();
+        let gone = self.realm.as_ref().is_some_and(|r| r.is_retired()) || self.meta.worktree.as_ref().is_some_and(|w| w.removed) || !self.meta.cwd.is_dir();
+        if !self.meta.named || self.meta.provider.is_some() || self.meta.container || held || gone {
+            return (Ok(()), None);
+        }
+        match self.ensure_process() {
+            Ok(events) => (Ok(()), events),
+            Err(message) => (Err(message), None),
+        }
+    }
+
+    /// Starts this chat's `claude` when none is running (resuming its session when it has one); Ok(Some) is the new process's event
+    /// stream, Ok(None) means one was running already.
+    fn ensure_process(&mut self) -> Result<Option<mpsc::UnboundedReceiver<ProcEvent>>, String> {
+        let mut events = None;
+        if self.process.is_none() {
+            let provider = match self.current_provider() {
+                Ok(provider) => provider,
+                Err(message) => {
+                    self.emit("error", json!({"message": message}));
+                    return Err(message);
+                }
+            };
+            // A provider chat gets nothing of the account's side of the app: no notes, no skills, no history search. What the
+            // account's chats know must not reach a third party, and what the third party writes must not reach them.
+            let mut container = None;
+            let (mcp_config, system_file, plugin_dir, env, pinned_url, model) = match &provider {
+                Some(provider) => {
+                    let config_dir = self.dir.join("chatcfg").join(&self.meta.sid);
+                    if let Err(error) = crate::private::create_dir(&self.dir.join("chatcfg")).and_then(|()| crate::private::create_dir(&config_dir)) {
+                        let message = format!("could not make this chat's own settings folder: {error}");
+                        self.emit("error", json!({"message": message}));
+                        return Err(message);
+                    }
+                    container = match self.container_spec(provider, &config_dir) {
+                        Ok(spec) => spec,
+                        Err(message) => {
+                            self.emit("error", json!({"message": message}));
+                            return Err(message);
+                        }
+                    };
+                    let inherited: Vec<String> = std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()).collect();
+                    self.secret = provider.token.clone().filter(|token| token.len() >= 8);
+                    (None, None, None, crate::claude::env::plan(&inherited, Some(provider), &config_dir), Some(provider.base_url.clone()), self.meta.model.clone().or_else(|| provider.model.clone()))
+                }
+                None if self.meta.container => {
+                    let message = "a container chat needs a provider".to_owned();
+                    self.emit("error", json!({"message": message}));
+                    return Err(message);
+                }
+                None => {
+                    let env = match self.account_env() {
+                        Ok(found) => found.map(|(_, env)| env).unwrap_or_default(),
+                        Err(message) => {
+                            self.emit("error", json!({"message": message}));
+                            return Err(message);
+                        }
+                    };
+                    let account = self.meta.account.as_ref().map(|a| a.id.clone());
+                    let mcp_config = match &self.mcp {
+                        Some(gate) => match gate.grant(&self.meta.sid, account.as_deref()) {
+                            Ok(path) => Some(path),
+                            Err(error) => {
+                                self.emit("error", json!({"message": format!("history search is off for this chat: {error:#}")}));
+                                None
+                            }
+                        },
+                        None => None,
+                    };
+                    let system_file = self.write_recall();
+                    let plugin_dir = self.write_skills();
+                    (mcp_config, system_file, plugin_dir, env, None, self.meta.model.clone())
+                }
+            };
+            // A chat whose guard cannot be set up does not start: running without it would be silent.
+            let guard_hook = match self.guard_hook() {
+                Ok(hook) => hook,
+                Err(message) => {
+                    self.emit("error", json!({"message": message}));
+                    return Err(message);
+                }
+            };
+            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.named.then(|| self.meta.title.clone()), plugins_off: self.workbench_native(), guard_hook };
+            match ClaudeProcess::spawn(&opts) {
+                Ok((process, rx)) => {
+                    self.process = Some(process);
+                    self.native_spawned = opts.plugins_off;
+                    events = Some(rx);
+                }
+                Err(error) => {
+                    if let Some(gate) = &self.mcp {
+                        gate.revoke(&self.meta.sid);
+                    }
+                    let _ = std::fs::remove_file(self.recall_path());
+                    let _ = std::fs::remove_dir_all(self.skills_path());
+                    self.emit("error", json!({"message": format!("{error:#}")}));
+                    return Err(format!("{error:#}"));
+                }
+            }
+        }
+        Ok(events)
+    }
+
     fn send(&mut self, text: String, images: Vec<Image>) -> (Result<(), String>, Option<mpsc::UnboundedReceiver<ProcEvent>>) {
         // Also with a process that is already running: the account was deleted, and a turn must not start under the deletion.
         if self.realm.as_ref().is_some_and(|r| r.is_retired()) {
@@ -675,83 +811,22 @@ impl Actor {
             }
         }
 
-        let mut events = None;
-        if self.process.is_none() {
-            let provider = match self.current_provider() {
-                Ok(provider) => provider,
-                Err(message) => {
-                    self.emit("error", json!({"message": message}));
-                    return (Err(message), None);
-                }
-            };
-            // A provider chat gets nothing of the account's side of the app: no notes, no skills, no history search. What the
-            // account's chats know must not reach a third party, and what the third party writes must not reach them.
-            let mut container = None;
-            let (mcp_config, system_file, plugin_dir, env, pinned_url, model) = match &provider {
-                Some(provider) => {
-                    let config_dir = self.dir.join("chatcfg").join(&self.meta.sid);
-                    if let Err(error) = crate::private::create_dir(&self.dir.join("chatcfg")).and_then(|()| crate::private::create_dir(&config_dir)) {
-                        let message = format!("could not make this chat's own settings folder: {error}");
-                        self.emit("error", json!({"message": message}));
-                        return (Err(message), None);
-                    }
-                    container = match self.container_spec(provider, &config_dir) {
-                        Ok(spec) => spec,
-                        Err(message) => {
-                            self.emit("error", json!({"message": message}));
-                            return (Err(message), None);
-                        }
-                    };
-                    let inherited: Vec<String> = std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()).collect();
-                    self.secret = provider.token.clone().filter(|token| token.len() >= 8);
-                    (None, None, None, crate::claude::env::plan(&inherited, Some(provider), &config_dir), Some(provider.base_url.clone()), self.meta.model.clone().or_else(|| provider.model.clone()))
-                }
-                None if self.meta.container => {
-                    let message = "a container chat needs a provider".to_owned();
-                    self.emit("error", json!({"message": message}));
-                    return (Err(message), None);
-                }
-                None => {
-                    let env = match self.account_env() {
-                        Ok(found) => found.map(|(_, env)| env).unwrap_or_default(),
-                        Err(message) => {
-                            self.emit("error", json!({"message": message}));
-                            return (Err(message), None);
-                        }
-                    };
-                    let account = self.meta.account.as_ref().map(|a| a.id.clone());
-                    let mcp_config = match &self.mcp {
-                        Some(gate) => match gate.grant(&self.meta.sid, account.as_deref()) {
-                            Ok(path) => Some(path),
-                            Err(error) => {
-                                self.emit("error", json!({"message": format!("history search is off for this chat: {error:#}")}));
-                                None
-                            }
-                        },
-                        None => None,
-                    };
-                    let system_file = self.write_recall();
-                    let plugin_dir = self.write_skills();
-                    (mcp_config, system_file, plugin_dir, env, None, self.meta.model.clone())
-                }
-            };
-            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.named.then(|| self.meta.title.clone()) };
-            match ClaudeProcess::spawn(&opts) {
-                Ok((process, rx)) => {
-                    self.process = Some(process);
-                    events = Some(rx);
-                }
-                Err(error) => {
-                    if let Some(gate) = &self.mcp {
-                        gate.revoke(&self.meta.sid);
-                    }
-                    let _ = std::fs::remove_file(self.recall_path());
-                    let _ = std::fs::remove_dir_all(self.skills_path());
-                    self.emit("error", json!({"message": format!("{error:#}")}));
-                    return (Err(format!("{error:#}")), None);
-                }
+        // The switch of the built-in workbench changed since this process started: it still has the old plug-in settings and no (or a stale)
+        // guard hook, so it is ended and the message starts a new one.
+        if self.process.is_some() && self.native_spawned != self.workbench_native() {
+            if let Some(process) = self.process.take() {
+                process.stop();
             }
+            if let Some(gate) = &self.mcp {
+                gate.revoke(&self.meta.sid);
+            }
+            let _ = std::fs::remove_file(self.recall_path());
+            let _ = std::fs::remove_dir_all(self.skills_path());
         }
+        let events = match self.ensure_process() {
+            Ok(events) => events,
+            Err(message) => return (Err(message), None),
+        };
 
         // A command (`/swb team on`) is not what the chat is about: the next message names it.
         if self.meta.title.is_empty() && !is_slash(&text) {
@@ -760,7 +835,9 @@ impl Actor {
         }
         let shown: Vec<Value> = images.iter().map(|i| json!({"media_type": i.media_type, "data": i.data})).collect();
         self.emit("user", json!({"text": text, "images": shown}));
-        let sent = self.process.as_ref().map(|p| p.send_line(protocol::user_message(&text, &images))).unwrap_or(false);
+        // What the person has set in the chat's workbench is added for the model; the transcript above shows only the person's words.
+        let context = if self.workbench_native() { crate::workbench::inject::blocks(&self.dir, &self.meta.sid, &self.meta.cwd) } else { Vec::new() };
+        let sent = self.process.as_ref().map(|p| p.send_line(protocol::user_message(&text, &images, &context))).unwrap_or(false);
         if !sent {
             self.emit("error", json!({"message": "the claude process is gone; try again"}));
             self.process = None;
@@ -771,6 +848,23 @@ impl Actor {
     }
 
     /// What a request may be remembered as, for this chat: the rules come from the request's own suggestion only (see `protocol::grants`).
+    /// The command of the guard hook for this chat's process: the app's own binary with `guard`, the data folder and the chat. None when
+    /// the workbench is off, when no binary is known (no MCP gate), or for a container chat (the binary is not in the container).
+    fn guard_hook(&self) -> Result<Option<String>, String> {
+        if !self.workbench_native() || self.meta.container {
+            return Ok(None);
+        }
+        let Some(gate) = &self.mcp else { return Ok(None) };
+        crate::workbench::hook_command(&gate.exe, &self.dir, &self.meta.cwd, &self.meta.sid).map(Some)
+    }
+
+    /// Whether this app's own workbench is on for this chat: the switch is on and the chat can have its guard hook (a container chat has no
+    /// program of the app inside it, and without the app's own binary there is no hook). Otherwise the plug-in is left as it is, so a chat
+    /// never ends up with neither.
+    fn workbench_native(&self) -> bool {
+        self.settings.as_ref().is_some_and(|s| s.get().workbench_native) && !self.meta.container && self.mcp.is_some()
+    }
+
     /// A provider chat's or a container chat's rules are not written into the project (what such a chat wrote there outlives it and is
     /// read later by chats of the account), and a request that carries the undocumented `server_policy_ask_only` gets no rule at all.
     fn grants_for(&self, ask: &protocol::CanUseTool) -> protocol::Grants {

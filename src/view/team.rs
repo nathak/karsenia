@@ -101,6 +101,16 @@ pub fn swb_command(key: &str) -> Option<&'static str> {
         "guard_high" => "/swb guard high",
         "guard_medium" => "/swb guard medium",
         "guard_low" => "/swb guard low",
+        // Switches the guard off: the plug-in asks the person to confirm in a session that has a terminal.
+        "guard_off" => "/swb guard off",
+        // The optional Codex second opinion (`/swb team codex ...`); turning it on is asked in the session first.
+        "codex_on" => "/swb team codex on",
+        "codex_off" => "/swb team codex off",
+        "codex_check" => "/swb team codex check",
+        "codex_review_on" => "/swb team codex review on",
+        "codex_review_off" => "/swb team codex review off",
+        "codex_rescue_on" => "/swb team codex rescue on",
+        "codex_rescue_off" => "/swb team codex rescue off",
         _ => return None,
     })
 }
@@ -230,10 +240,10 @@ mod tests {
 
     #[test]
     fn only_the_documented_fixed_commands_can_be_sent_from_a_button() {
-        for key in ["new", "lock", "unlock", "suggest", "suggest_add", "suggest_undo", "status", "preview", "guard_high", "guard_medium", "guard_low"] {
+        for key in ["new", "lock", "unlock", "suggest", "suggest_add", "suggest_undo", "status", "preview", "guard_high", "guard_medium", "guard_low", "guard_off", "codex_on", "codex_off", "codex_check", "codex_review_on", "codex_review_off", "codex_rescue_on", "codex_rescue_off"] {
             assert!(swb_command(key).is_some_and(|c| c.starts_with("/swb ") && is_swb_command(c)), "{key}");
         }
-        for bad in ["", "guard_off", "off", "goal", "pin", "clear", "/swb clear", "new; x", "guard"] {
+        for bad in ["", "off", "codex", "codex_write", "codex_transfer", "goal", "pin", "clear", "/swb clear", "new; x", "guard"] {
             assert!(swb_command(bad).is_none(), "{bad}");
         }
     }

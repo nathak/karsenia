@@ -1,8 +1,8 @@
 // The Team mode page (SmartWorkbench plug-in). What the plug-in reports in the chat is shown (the on/off state, the roles with their
 // models, the review count, when it was seen); the parts of the design that need more than that are drawn empty, with the reason.
-import { ScrollView, ComboBox } from "std-widgets.slint";
+import { ScrollView, ComboBox, LineEdit } from "std-widgets.slint";
 import { Theme, T, Label, Badge, Toggle, IconBtn, EmptyState, WText, Btn } from "base.slint";
-import { Team, TeamRole } from "panels.slint";
+import { Team, TeamRole, GfRule, WbItem } from "panels.slint";
 
 component RoleCard inherits Rectangle {
     in property <TeamRole> r;
@@ -32,7 +32,98 @@ component RoleCard inherits Rectangle {
             spacing: 8px;
             model-box := ComboBox { horizontal-stretch: 1; model: [r.model, "sonnet", "opus", "haiku", "fable", "opus[1m]", "sonnet[1m]"]; current-index: 0; enabled: Team.can-send && !Team.busy; }
             effort-box := ComboBox { horizontal-stretch: 1; model: r.role == "lead" ? [T.tr("team_effort_keep"), "default", "low", "medium", "high", "xhigh", "max"] : [T.tr("team_effort_keep"), "low", "medium", "high", "xhigh", "max"]; current-index: 0; enabled: Team.can-send && !Team.busy; }
+        }
+        HorizontalLayout { alignment: end;
             Btn { text: T.tr("team_role_apply"); height: 32px; enabled: Team.can-send && !Team.busy && (model-box.current-index > 0 || effort-box.current-index > 0); clicked => { Team.set-role(r.role, model-box.current-value, effort-box.current-index == 0 ? "" : effort-box.current-value); } }
+        }
+    }
+}
+
+// The right-hand panel of a chat while team mode is on: the plug-in's own tabs (Intent, Context, Run, Evidence, Team), read-only, drawn from
+// its snapshot. What the snapshot does not hold (pinned files, suggested files, recent tool calls) is said to be not reported.
+export component SwbPanel inherits Rectangle {
+    background: Theme.lowest;
+    Rectangle { x: 0px; width: 1px; background: Theme.hairline; }
+    VerticalLayout {
+        padding: 12px; spacing: 8px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: "SmartWorkbench"; color: Theme.on-surface; font-size: 13px; font-weight: 700; font-family: Theme.mono; vertical-alignment: center; }
+            Text { text: Team.swb-age; color: Team.swb-stale ? Theme.primary-soft : Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            Btn { text: T.tr("swbp_refresh"); height: 24px; clicked => { Team.swb-refresh(); } }
+            Btn { text: "×"; height: 24px; clicked => { Team.panel = false; } }
+        }
+        HorizontalLayout {
+            spacing: 10px; alignment: start;
+            for name[i] in ["Intent", "Context", "Run", "Evidence", "Team"]: Rectangle {
+                height: 22px; width: tl.preferred-width;
+                tl := Text { text: Team.panel-tab == i ? "[ " + name + " ]" : name; color: Team.panel-tab == i ? Theme.primary-soft : Theme.outline; font-size: 12px; font-weight: Team.panel-tab == i ? 700 : 400; font-family: Theme.mono; vertical-alignment: center; }
+                TouchArea { mouse-cursor: pointer; clicked => { Team.panel-tab = i; } }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.hairline; }
+        if Team.swb-state != "found": Text { text: Team.swb-note != "" ? Team.swb-note : T.tr("tm_swb_missing_short"); color: Theme.on-var; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+        if Team.swb-state != "found": HorizontalLayout { spacing: 8px; Btn { text: T.tr("swbp_get_status"); height: 26px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("status"); } } }
+        if Team.swb-state != "found" && Team.status-text != "": ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 6px;
+                Text { text: T.tr("swbp_status_from") + " " + Team.status-age; color: Theme.outline; font-size: 11px; font-family: Theme.mono; wrap: word-wrap; }
+                Text { text: Team.status-text; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+            }
+        }
+        if Team.swb-state == "found": ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 6px;
+                if Team.panel-tab == 0: VerticalLayout {
+                    spacing: 6px;
+                    Text { text: "STATUS ● " + Team.task-status + (Team.task-locked ? " · locked" : ""); color: Theme.on-surface; font-size: 12px; font-weight: 700; font-family: Theme.mono; wrap: word-wrap; }
+                    Text { text: T.tr("tm_dod_goal").to-uppercase(); color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+                    Text { text: Team.task-goal == "" ? "—" : Team.task-goal; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                    Text { text: T.tr("tm_dod_constraints").to-uppercase(); color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+                    if Team.constraints.length == 0: Text { text: "—"; color: Theme.on-var; font-size: 12px; font-family: Theme.mono; }
+                    for c in Team.constraints: Text { text: "✓ " + c; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                    Text { text: T.tr("tm_dod_nongoals").to-uppercase(); color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+                    if Team.non-goals.length == 0: Text { text: "—"; color: Theme.on-var; font-size: 12px; font-family: Theme.mono; }
+                    for c in Team.non-goals: Text { text: "• " + c; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                    Text { text: "DONE CONDITIONS"; color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+                    if Team.done.length == 0: Text { text: "none"; color: Theme.on-var; font-size: 12px; font-family: Theme.mono; }
+                    for d in Team.done: Text { text: (d.met ? "✓ " : "○ ") + d.text + "  [" + d.label + "]"; color: d.met ? Theme.ok : Theme.on-surface; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                }
+                if Team.panel-tab == 1: VerticalLayout {
+                    spacing: 6px;
+                    Text { text: "PINNED"; color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+                    Text { text: Team.pins; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                    Text { text: "CHANGED"; color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+                    Text { text: Team.changed; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                    Text { text: T.tr("swbp_not_exported_ctx"); color: Theme.on-var; font-size: 11px; font-family: Theme.mono; wrap: word-wrap; }
+                }
+                if Team.panel-tab == 2: VerticalLayout {
+                    spacing: 6px;
+                    Text { text: "GUARD  " + Team.guard-profile-label + (Team.guard-paused ? "  ‖ PAUSED" : ""); color: Team.guard-paused ? Theme.primary-soft : Theme.on-surface; font-size: 12px; font-weight: 700; font-family: Theme.mono; wrap: word-wrap; }
+                    Text { text: Team.guard-rules; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                    Text { text: Team.guard-open; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                    Text { text: T.tr("swbp_pause_note"); color: Theme.on-var; font-size: 11px; font-family: Theme.mono; wrap: word-wrap; }
+                    Text { text: "RECENT"; color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+                    Text { text: T.tr("swbp_not_exported_run"); color: Theme.on-var; font-size: 11px; font-family: Theme.mono; wrap: word-wrap; }
+                }
+                if Team.panel-tab == 3: VerticalLayout {
+                    spacing: 6px;
+                    Text { text: Team.done-met; color: Theme.on-surface; font-size: 12px; font-weight: 700; font-family: Theme.mono; wrap: word-wrap; }
+                    if Team.evidence.length == 0: Text { text: T.tr("tm_ev_none"); color: Theme.on-var; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                    for e in Team.evidence: Text { text: (e.ok ? "✓ " : "✗ ") + e.label + (e.when != "" ? "  " + e.when : ""); color: e.ok ? Theme.ok : Theme.error; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                    Text { text: "CHANGED  " + Team.changed; color: Theme.on-var; font-size: 11px; font-family: Theme.mono; wrap: word-wrap; }
+                }
+                if Team.panel-tab == 4: VerticalLayout {
+                    spacing: 6px;
+                    Text { text: "TEAM MODE  " + Team.chip-label; color: Theme.on-surface; font-size: 12px; font-weight: 700; font-family: Theme.mono; }
+                    for r in Team.roles: Text { text: r.role.to-uppercase() + "  " + r.model + (r.effort != "" ? " · " + r.effort : ""); color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                    Text { text: "CODEX  " + (Team.codex == "on" ? "ON" : Team.codex == "off" ? "OFF" : "—"); color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; }
+                    Text { text: "  review " + (Team.codex-review == "" ? "—" : Team.codex-review) + " · rescue " + (Team.codex-rescue == "" ? "—" : Team.codex-rescue); color: Theme.on-var; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                    if Team.reviews != "": Text { text: T.tr("tm_reviews") + "  " + Team.reviews; color: Theme.on-var; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                }
+            }
         }
     }
 }
@@ -94,6 +185,169 @@ export component TeamPage inherits Rectangle {
                         Btn { text: "high"; height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("guard_high"); } }
                         Btn { text: "medium"; height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("guard_medium"); } }
                         Btn { text: "low"; height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("guard_low"); } }
+                    }
+                    HorizontalLayout { spacing: 8px; alignment: start;
+                        Text { text: T.tr("tm_cmd_codex") + (Team.codex == "on" ? ": ON" : Team.codex == "off" ? ": OFF" : ""); color: Theme.on-var; font-size: 13px; vertical-alignment: center; }
+                        Btn { text: T.tr("tm_cmd_off"); height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("codex_off"); } }
+                        Btn { text: T.tr("tm_cmd_check"); height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("codex_check"); } }
+                    }
+                }
+            }
+            // The chat's own workbench: the contract this app keeps and adds to what the model is told (the plug-in is switched off then).
+            Rectangle {
+                background: Theme.low; border-radius: 12px; border-width: 1px; border-color: Theme.hairline; height: wbc.preferred-height;
+                wbc := VerticalLayout {
+                    padding: 16px; spacing: 10px;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text { text: T.tr("wb_title"); color: Theme.on-surface; font-size: 15px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: T.tr("wb_native"); color: Theme.on-var; font-size: 12px; vertical-alignment: center; }
+                        Toggle { checked: Team.wb-native; toggled(on) => { Team.wb-native-set(on); } }
+                    }
+                    WText { text: T.tr("wb_note"); size: 12px; fg: Theme.on-var; }
+                    if !Team.wb-ready: Text { text: T.tr("wb_no_chat"); color: Theme.outline; font-size: 12px; }
+                    if Team.wb-ready: VerticalLayout {
+                        spacing: 10px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            LineEdit { horizontal-stretch: 1; text <=> Team.wb-in-goal; placeholder-text: T.tr("wb_goal_ph"); enabled: !Team.wb-locked; accepted(t) => { Team.wb-goal-set(t); } }
+                            Btn { text: T.tr("wb_goal_set"); height: 34px; enabled: !Team.wb-locked && Team.wb-in-goal != ""; clicked => { Team.wb-goal-set(Team.wb-in-goal); } }
+                        }
+                        Text { text: T.tr("wb_goal") + ": " + (Team.wb-goal == "" ? "—" : Team.wb-goal); color: Theme.on-surface; font-size: 13px; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 8px; alignment: start;
+                            Btn { text: Team.wb-locked ? T.tr("wb_unlock") : T.tr("wb_lock"); height: 30px; primary: !Team.wb-locked; clicked => { Team.wb-lock(!Team.wb-locked); } }
+                            Btn { text: T.tr("wb_new"); height: 30px; danger: true; clicked => { Team.wb-new(); } }
+                            VerticalLayout { alignment: center; Text { text: Team.wb-locked ? T.tr("wb_locked_note") : T.tr("wb_open_note"); color: Theme.outline; font-size: 11px; } }
+                        }
+                        Rectangle { height: 1px; background: Theme.hairline; }
+                        HorizontalLayout {
+                            spacing: 8px; alignment: start;
+                            VerticalLayout { alignment: center; Text { text: T.tr("tm_cmd_guard"); color: Theme.on-var; font-size: 13px; } }
+                            Btn { text: "high"; height: 28px; primary: Team.wb-profile == "strict"; clicked => { Team.wb-profile-set("strict"); } }
+                            Btn { text: "medium"; height: 28px; primary: Team.wb-profile == "balanced"; clicked => { Team.wb-profile-set("balanced"); } }
+                            Btn { text: "low"; height: 28px; primary: Team.wb-profile == "permissive"; clicked => { Team.wb-profile-set("permissive"); } }
+                            Btn { text: "off"; height: 28px; danger: true; primary: Team.wb-profile == "off"; clicked => { Team.wb-profile-set("off"); } }
+                            Btn { text: Team.wb-paused ? T.tr("wb_resume") : T.tr("wb_pause"); height: 28px; primary: Team.wb-paused; clicked => { Team.wb-paused-set(!Team.wb-paused); } }
+                        }
+                        WText { text: T.tr("wb_guard_note"); size: 11px; fg: Theme.outline; }
+                        Rectangle { height: 1px; background: Theme.hairline; }
+                        Text { text: T.tr("tm_dod_constraints"); color: Theme.outline; font-size: 11px; }
+                        for it in Team.wb-c: HorizontalLayout {
+                            spacing: 8px;
+                            Btn { text: it.tag; height: 24px; enabled: !Team.wb-locked; clicked => { Team.wb-toggle("ch", it.id); } }
+                            Text { horizontal-stretch: 1; text: it.text; color: it.on ? Theme.on-surface : Theme.outline; font-size: 12px; wrap: word-wrap; vertical-alignment: center; }
+                            Btn { text: it.on ? "ON" : "OFF"; height: 24px; enabled: !Team.wb-locked; clicked => { Team.wb-toggle("c", it.id); } }
+                            Btn { text: "×"; height: 24px; danger: true; enabled: !Team.wb-locked; clicked => { Team.wb-remove("c", it.id); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            LineEdit { horizontal-stretch: 1; text <=> Team.wb-in-c; placeholder-text: T.tr("wb_c_ph"); enabled: !Team.wb-locked; accepted(t) => { Team.wb-add("c", t, Team.wb-in-hard ? "hard" : "soft"); } }
+                            Btn { text: Team.wb-in-hard ? "HARD" : "SOFT"; height: 34px; clicked => { Team.wb-in-hard = !Team.wb-in-hard; } }
+                            Btn { text: T.tr("gf_add_btn"); height: 34px; enabled: !Team.wb-locked && Team.wb-in-c != ""; clicked => { Team.wb-add("c", Team.wb-in-c, Team.wb-in-hard ? "hard" : "soft"); } }
+                        }
+                        Text { text: T.tr("tm_dod_nongoals"); color: Theme.outline; font-size: 11px; }
+                        for it in Team.wb-n: HorizontalLayout {
+                            spacing: 8px;
+                            Text { horizontal-stretch: 1; text: "• " + it.text; color: Theme.on-surface; font-size: 12px; wrap: word-wrap; vertical-alignment: center; }
+                            Btn { text: "×"; height: 24px; danger: true; enabled: !Team.wb-locked; clicked => { Team.wb-remove("n", it.id); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            LineEdit { horizontal-stretch: 1; text <=> Team.wb-in-n; placeholder-text: T.tr("wb_n_ph"); enabled: !Team.wb-locked; accepted(t) => { Team.wb-add("n", t, ""); } }
+                            Btn { text: T.tr("gf_add_btn"); height: 34px; enabled: !Team.wb-locked && Team.wb-in-n != ""; clicked => { Team.wb-add("n", Team.wb-in-n, ""); } }
+                        }
+                        Text { text: T.tr("wb_done"); color: Theme.outline; font-size: 11px; }
+                        for it in Team.wb-d: HorizontalLayout {
+                            spacing: 8px;
+                            Btn { text: it.on ? "✓" : "○"; height: 24px; clicked => { Team.wb-toggle("d", it.id); } }
+                            Text { horizontal-stretch: 1; text: it.text + (it.tag != "" ? "  [" + it.tag + "]" : ""); color: it.on ? Theme.ok : Theme.on-surface; font-size: 12px; wrap: word-wrap; vertical-alignment: center; }
+                            Btn { text: "×"; height: 24px; danger: true; enabled: !Team.wb-locked; clicked => { Team.wb-remove("d", it.id); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            LineEdit { horizontal-stretch: 1; text <=> Team.wb-in-d; placeholder-text: T.tr("wb_d_ph"); enabled: !Team.wb-locked; accepted(t) => { Team.wb-add("d", t, Team.wb-in-link); } }
+                            Btn { text: Team.wb-in-link == "" ? T.tr("wb_manual") : Team.wb-in-link; height: 34px; clicked => { Team.wb-in-link = Team.wb-in-link == "" ? "test" : Team.wb-in-link == "test" ? "build" : Team.wb-in-link == "build" ? "typecheck" : Team.wb-in-link == "typecheck" ? "lint" : Team.wb-in-link == "lint" ? "ci" : ""; } }
+                            Btn { text: T.tr("gf_add_btn"); height: 34px; enabled: !Team.wb-locked && Team.wb-in-d != ""; clicked => { Team.wb-add("d", Team.wb-in-d, Team.wb-in-link); } }
+                        }
+                        Rectangle { height: 1px; background: Theme.hairline; }
+                        Text { text: T.tr("wb_pins"); color: Theme.outline; font-size: 11px; }
+                        for it in Team.wb-p: HorizontalLayout {
+                            spacing: 8px;
+                            Text { horizontal-stretch: 1; text: it.tag + "  " + it.text; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; vertical-alignment: center; }
+                            Btn { text: "×"; height: 24px; danger: true; clicked => { Team.wb-remove("p", it.id); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            LineEdit { horizontal-stretch: 1; text <=> Team.wb-in-pn; placeholder-text: T.tr("wb_pn_ph"); accepted(t) => { Team.wb-add("pn", t, ""); } }
+                            Btn { text: T.tr("wb_pin_note"); height: 34px; enabled: Team.wb-in-pn != ""; clicked => { Team.wb-add("pn", Team.wb-in-pn, ""); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            LineEdit { horizontal-stretch: 1; text <=> Team.wb-in-pf; placeholder-text: T.tr("wb_pf_ph"); accepted(t) => { Team.wb-add("pf", t, Team.wb-in-range); } }
+                            LineEdit { width: 110px; text <=> Team.wb-in-range; placeholder-text: T.tr("wb_range_ph"); }
+                            Btn { text: T.tr("wb_pin_file"); height: 34px; enabled: Team.wb-in-pf != ""; clicked => { Team.wb-add("pf", Team.wb-in-pf, Team.wb-in-range); } }
+                        }
+                    }
+                }
+            }
+            // The project's guard rules: allow (the allow list), ask and block, edited in `.claude/smartworkbench.json`.
+            Rectangle {
+                background: Theme.low; border-radius: 12px; border-width: 1px; border-color: Theme.hairline; height: gf.preferred-height;
+                gf := VerticalLayout {
+                    padding: 16px; spacing: 10px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: T.tr("gf_title"); color: Theme.on-surface; font-size: 15px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                        Btn { text: T.tr("swbp_refresh"); height: 26px; clicked => { Team.gf-reload(); } }
+                    }
+                    WText { text: T.tr("gf_note"); size: 12px; fg: Theme.on-var; }
+                    if Team.gf-note != "": WText { text: Team.gf-note; size: 12px; fg: Theme.primary-soft; }
+                    for r[i] in Team.gf-rules: Rectangle {
+                        background: Theme.container; border-radius: 8px; height: rl.preferred-height + 16px;
+                        rl := HorizontalLayout {
+                            padding: 8px; spacing: 8px;
+                            VerticalLayout { alignment: center; Badge { text: r.policy == "allow" ? "ALLOW" : r.policy == "block" ? "BLOCK" : r.policy == "ask" ? "ASK" : "?"; tone: r.policy == "allow" ? "ok" : r.policy == "block" ? "err" : "neutral"; mono: true; } }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 2px; alignment: center;
+                                Text { text: r.tool + (r.command != "" ? "  ·  " + r.command : "") + (r.path != "" ? "  ·  " + r.path : ""); color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; wrap: word-wrap; }
+                                if r.reason != "": Text { text: r.reason; color: Theme.outline; font-size: 11px; wrap: word-wrap; }
+                            }
+                            VerticalLayout { alignment: center; Btn { text: T.tr("acct_delete"); height: 26px; danger: true; clicked => { Team.gf-remove(i); } } }
+                        }
+                    }
+                    if Team.gf-rules.length == 0: Text { text: T.tr("gf_none"); color: Theme.outline; font-size: 12px; }
+                    Rectangle { height: 1px; background: Theme.hairline; }
+                    Text { text: T.tr("gf_add"); color: Theme.on-surface; font-size: 13px; font-weight: 600; }
+                    HorizontalLayout { spacing: 8px; alignment: start;
+                        Btn { text: "ALLOW"; height: 28px; primary: Team.gf-policy == "allow"; clicked => { Team.gf-policy = "allow"; } }
+                        Btn { text: "ASK"; height: 28px; primary: Team.gf-policy == "ask"; clicked => { Team.gf-policy = "ask"; } }
+                        Btn { text: "BLOCK"; height: 28px; primary: Team.gf-policy == "block"; clicked => { Team.gf-policy = "block"; } }
+                    }
+                    LineEdit { text <=> Team.gf-tool; placeholder-text: T.tr("gf_ph_tool"); }
+                    LineEdit { text <=> Team.gf-command; placeholder-text: T.tr("gf_ph_command"); }
+                    LineEdit { text <=> Team.gf-path; placeholder-text: T.tr("gf_ph_path"); }
+                    LineEdit { text <=> Team.gf-reason; placeholder-text: T.tr("gf_ph_reason"); }
+                    HorizontalLayout { alignment: end; Btn { text: T.tr("gf_add_btn"); height: 32px; primary: true; enabled: Team.gf-tool != ""; clicked => { Team.gf-add(Team.gf-policy, Team.gf-tool, Team.gf-command, Team.gf-path, Team.gf-reason); } } }
+                }
+            }
+            // The contract has no command form: what is typed here goes to the chat as a request, and Claude applies it with the plug-in's tools.
+            Rectangle {
+                background: Theme.low; border-radius: 12px; border-width: 1px; border-color: Theme.hairline; height: rq.preferred-height;
+                rq := VerticalLayout {
+                    padding: 16px; spacing: 10px;
+                    Text { text: T.tr("tm_req"); color: Theme.on-surface; font-size: 15px; font-weight: 600; }
+                    WText { text: T.tr("tm_req_note"); size: 12px; fg: Theme.on-var; }
+                    HorizontalLayout { spacing: 8px; alignment: start;
+                        Btn { text: T.tr("tm_req_goal"); height: 30px; primary: Team.req-kind == "goal"; clicked => { Team.req-kind = "goal"; } }
+                        Btn { text: T.tr("tm_req_constraint"); height: 30px; primary: Team.req-kind == "constraint"; clicked => { Team.req-kind = "constraint"; } }
+                        Btn { text: T.tr("tm_req_done"); height: 30px; primary: Team.req-kind == "done"; clicked => { Team.req-kind = "done"; } }
+                        Btn { text: T.tr("tm_req_nongoal"); height: 30px; primary: Team.req-kind == "nongoal"; clicked => { Team.req-kind = "nongoal"; } }
+                        Btn { text: T.tr("tm_req_pin"); height: 30px; primary: Team.req-kind == "pin"; clicked => { Team.req-kind = "pin"; } }
+                    }
+                    HorizontalLayout { spacing: 8px;
+                        LineEdit { horizontal-stretch: 1; text <=> Team.req-text; placeholder-text: T.tr("tm_req_ph"); accepted(t) => { Team.contract-request(Team.req-kind, t); } }
+                        Btn { text: T.tr("tm_req_send"); height: 34px; primary: true; enabled: Team.can-send && !Team.busy && Team.req-text != ""; clicked => { Team.contract-request(Team.req-kind, Team.req-text); } }
                     }
                 }
             }

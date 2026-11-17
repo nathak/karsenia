@@ -23,6 +23,8 @@ pub struct Pending {
 }
 
 thread_local! {
+    // The images attached in each chat that was left, put back when it is opened again.
+    static STASH: RefCell<std::collections::HashMap<String, Vec<Pending>>> = RefCell::new(std::collections::HashMap::new());
     static HELD: RefCell<Vec<Pending>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -58,6 +60,29 @@ pub fn restore(ui: &AppWindow, held: Vec<Pending>) {
         HELD.with(|h| *h.borrow_mut() = held);
         render(ui);
     }
+}
+
+/// Another chat was opened: what is attached stays with the chat that was left, and the opened chat has its own.
+pub fn switch(ui: &AppWindow, left: Option<&str>, to: &str) {
+    let held: Vec<Pending> = HELD.with(|h| std::mem::take(&mut *h.borrow_mut()));
+    STASH.with(|s| {
+        let mut s = s.borrow_mut();
+        if let Some(old) = left {
+            if held.is_empty() {
+                s.remove(old);
+            } else {
+                s.insert(old.to_owned(), held);
+            }
+        }
+        HELD.with(|h| *h.borrow_mut() = s.remove(to).unwrap_or_default());
+    });
+    render(ui);
+}
+
+/// The chat is gone: so is what was attached to it.
+pub fn forget(ui: &AppWindow, sid: &str) {
+    STASH.with(|s| s.borrow_mut().remove(sid));
+    clear(ui);
 }
 
 pub fn clear(ui: &AppWindow) {

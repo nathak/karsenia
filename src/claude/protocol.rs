@@ -16,6 +16,9 @@ pub struct CanUseTool {
     pub permission_suggestions: Value,
     pub blocked_path: Option<String>,
     pub tool_use_id: Option<String>,
+    /// Why Claude Code asks, when a hook (the app's guard) or a rule is the reason (a text; measured with a PreToolUse `ask` hook).
+    #[serde(default)]
+    pub decision_reason: Value,
     /// A field Claude Code 2.1.325 sends on some requests (seen as `true` on a file write) and does not document: kept as it is, and a request
     /// that carries it is not offered a rule to remember (what it promises is not known).
     #[serde(default)]
@@ -65,6 +68,7 @@ pub fn parse_line(line: &str) -> Event {
                         permission_suggestions: request.get("permission_suggestions").cloned().unwrap_or(Value::Null),
                         blocked_path: text(request, "blocked_path"),
                         tool_use_id: text(request, "tool_use_id"),
+                        decision_reason: request.get("decision_reason").cloned().unwrap_or(Value::Null),
                         server_policy_ask_only: request.get("server_policy_ask_only").and_then(Value::as_bool) == Some(true),
                         tool_name,
                     });
@@ -102,13 +106,15 @@ fn one_line(value: &Value) -> String {
     value.to_string()
 }
 
-/// One user turn: the images first, then the text.
-pub fn user_message(text: &str, images: &[Image]) -> String {
+/// One user turn: the images first, then the text, then `context` (blocks the model is told besides what the person wrote; the
+/// transcript shows only the text).
+pub fn user_message(text: &str, images: &[Image], context: &[String]) -> String {
     let mut content: Vec<Value> = images
         .iter()
         .map(|image| json!({"type": "image", "source": {"type": "base64", "media_type": image.media_type, "data": image.data}}))
         .collect();
     content.push(json!({"type": "text", "text": text}));
+    content.extend(context.iter().map(|block| json!({"type": "text", "text": block})));
     one_line(&json!({"type": "user", "message": {"role": "user", "content": content}}))
 }
 
@@ -178,6 +184,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn context_blocks_follow_the_text_as_extra_text_parts() {
+        let v: Value = serde_json::from_str(&user_message("hi", &[], &["<workbench_contract/>".to_owned()])).unwrap();
+        let parts = v["message"]["content"].as_array().unwrap();
+        assert_eq!((parts.len(), parts[0]["text"].as_str(), parts[1]["text"].as_str()), (2, Some("hi"), Some("<workbench_contract/>")));
+    }
+
+    #[test]
     fn init_is_read_by_field_values() {
         let line = r#"{"type":"system","subtype":"init","session_id":"s1","cwd":"/p","model":"haiku","tools":[]}"#;
         assert!(matches!(parse_line(line), Event::Init { ref session_id, .. } if session_id == "s1"));
@@ -220,7 +233,7 @@ mod tests {
     #[test]
     fn outgoing_lines_have_the_shape_the_cli_reads() {
         let image = Image { media_type: "image/png".into(), data: "AAAA".into() };
-        let v: Value = serde_json::from_str(&user_message("hi", &[image])).unwrap();
+        let v: Value = serde_json::from_str(&user_message("hi", &[image], &[])).unwrap();
         assert_eq!(v["message"]["content"][0]["type"], "image");
         assert_eq!(v["message"]["content"][1]["text"], "hi");
         let v: Value = serde_json::from_str(&allow("r1", &json!({"command": "ls"}), None)).unwrap();

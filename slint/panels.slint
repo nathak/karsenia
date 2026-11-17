@@ -13,6 +13,8 @@ export struct SkVerV { n: int, meta: string, description: string, current: bool 
 export struct SkHead { available: bool, notice: string, auto: bool }
 export struct HitRow { sid: string, title: string, meta: string, rich: styled-text, plain: string }
 export struct TeamRole { role: string, model: string, effort: string }
+export struct WbItem { id: int, text: string, tag: string, on: bool }
+export struct GfRule { policy: string, tool: string, command: string, path: string, reason: string }
 export struct PlugRow { id: string, busy: bool }
 export struct AcctRow { id: string, name: string, sub: string, state: string, chats: int, open: bool, is-default: bool, usage: string, usage-level: string, login: string, dir: string, plug-open: bool, plug-note: string, plugs: [PlugRow] }
 export struct UsageWin { label: string, pct: string, frac: float, level: string, reset: string }
@@ -154,6 +156,64 @@ export global Team {
     // on | off | unknown
     in property <string> chip;
     in property <string> chip-label;
+    // The plug-in's Codex second opinion, from its snapshot: on | off | "" (not known).
+    in property <string> codex;
+    in property <string> codex-review;
+    in property <string> codex-rescue;
+    // The right-hand panel (team mode on): shown unless closed, and which tab.
+    in-out property <bool> panel: true;
+    in-out property <int> panel-tab: 0;
+    // What the last `/swb status` of the chat answered (the contract as text), and how long ago.
+    in property <string> status-text;
+    in property <string> status-age;
+    in property <string> pins;
+    in property <string> changed;
+    callback panel-visible(bool);
+    // The chat's own workbench (the contract, kept by this app): the switch, the goal, the lists, the fields of the forms.
+    in property <bool> wb-native;
+    in property <bool> wb-ready;
+    // The guard of the chat: off | permissive | balanced | strict, and the pause switch.
+    in property <string> wb-profile;
+    in property <bool> wb-paused;
+    callback wb-profile-set(string);
+    callback wb-paused-set(bool);
+    in property <string> wb-goal;
+    in property <bool> wb-locked;
+    in property <[WbItem]> wb-c;
+    in property <[WbItem]> wb-n;
+    in property <[WbItem]> wb-d;
+    in property <[WbItem]> wb-p;
+    in-out property <string> wb-in-goal;
+    in-out property <string> wb-in-c;
+    in-out property <bool> wb-in-hard: true;
+    in-out property <string> wb-in-n;
+    in-out property <string> wb-in-d;
+    in-out property <string> wb-in-link;
+    in-out property <string> wb-in-pn;
+    in-out property <string> wb-in-pf;
+    in-out property <string> wb-in-range;
+    callback wb-native-set(bool);
+    callback wb-goal-set(string);
+    callback wb-lock(bool);
+    callback wb-new();
+    // kind (c constraint, n non-goal, d done condition, pn note pin, pf file pin), text, extra (hard|soft, a check kind, a line range)
+    callback wb-add(string, string, string);
+    // kind (c, n, d, p), id
+    callback wb-remove(string, int);
+    // kind (c on/off, ch hard/soft, d met), id
+    callback wb-toggle(string, int);
+    // The project's guard rules (`.claude/smartworkbench.json`): the list, a line about the file, and the form for a new rule.
+    in property <[GfRule]> gf-rules;
+    in property <string> gf-note;
+    in-out property <string> gf-policy: "ask";
+    in-out property <string> gf-tool: "Bash";
+    in-out property <string> gf-command;
+    in-out property <string> gf-path;
+    in-out property <string> gf-reason;
+    // policy, tool, command, path, reason
+    callback gf-add(string, string, string, string, string);
+    callback gf-remove(int);
+    callback gf-reload();
     in-out property <bool> open;
     in property <[TeamRole]> roles;
     in property <string> reviews;
@@ -172,6 +232,10 @@ export global Team {
     callback set-role(string, string, string);
     // A button of the "SmartWorkbench commands" card: its key (the host maps it to the plug-in's fixed command text).
     callback swb-cmd(string);
+    // The contract (goal, rules, done conditions, pins) has no command: a request in words goes to the chat (kind, text).
+    in-out property <string> req-kind: "goal";
+    in-out property <string> req-text;
+    callback contract-request(string, string);
     // What the plug-in's snapshot says (src/view/swb.rs): "" | nochat | missing | refused | found, and the reason line otherwise.
     in property <string> swb-state;
     in property <string> swb-note;

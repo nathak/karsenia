@@ -11,7 +11,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
 use super::container::{self, Spec};
-use super::env::{pin_settings, EnvPlan};
+use super::env::EnvPlan;
 use super::protocol::{parse_line, Event};
 
 /// The longest stdout line read; a longer one ends the process (a stream that wrote it cannot be trusted to go on).
@@ -43,6 +43,10 @@ pub struct SpawnOpts {
     /// The name a person gave the chat: passed as `--name`, so it is the CLI's own display name of the session too (its `/resume` picker
     /// and terminal title; measured: it is written to the session file as a `custom-title`). None for a chat nobody named.
     pub name: Option<String>,
+    /// Run without the SmartWorkbench plug-in (this app's own workbench does its work): `--settings` switches it off for this process only.
+    pub plugins_off: bool,
+    /// The command of the PreToolUse hook that runs this app's guard (`<exe> guard --data <folder> --sid <chat>`), when it is on.
+    pub guard_hook: Option<String>,
 }
 
 #[derive(Debug)]
@@ -61,6 +65,9 @@ pub struct ClaudeProcess {
     /// The runtime and the container's name: killing the client of `docker run` does not stop the container, `rm -f` does.
     container: Option<(PathBuf, String)>,
 }
+
+/// The SmartWorkbench plug-in as Claude Code names it (`<plugin>@<marketplace>`).
+pub const SWB_PLUGIN: &str = "smartworkbench@smart-workbench";
 
 pub fn claude_bin() -> String {
     std::env::var("TENREC_CLAUDE").unwrap_or_else(|_| "claude".to_owned())
@@ -92,10 +99,24 @@ pub fn args(opts: &SpawnOpts) -> Vec<String> {
     if let Some(dir) = &opts.plugin_dir {
         args.extend(["--plugin-dir".to_owned(), dir.display().to_string()]);
     }
+    // One `--settings` value carries everything this app sets by value: the provider's address and the plug-ins it switches off.
+    let mut settings = serde_json::Map::new();
     if let Some(url) = &opts.pinned_url {
         // The project's own settings are not read: its `env` could point the address (and with it the token) somewhere else, and its
         // hooks and key helpers would run beside a third party's key. The address is also given by value, which wins over the rest.
-        args.extend(["--setting-sources".to_owned(), "user".to_owned(), "--settings".to_owned(), pin_settings(url)]);
+        args.extend(["--setting-sources".to_owned(), "user".to_owned()]);
+        settings.insert("env".into(), serde_json::json!({"ANTHROPIC_BASE_URL": url}));
+    }
+    if opts.plugins_off {
+        settings.insert("enabledPlugins".into(), serde_json::json!({ SWB_PLUGIN: false }));
+    }
+    if let Some(command) = &opts.guard_hook {
+        // A project's own `disableAllHooks` must not switch the guard off.
+        settings.insert("disableAllHooks".into(), serde_json::Value::Bool(false));
+        settings.insert("hooks".into(), serde_json::json!({"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": command, "timeout": 10}]}]}));
+    }
+    if !settings.is_empty() {
+        args.extend(["--settings".to_owned(), serde_json::Value::Object(settings).to_string()]);
     }
     args
 }
@@ -299,8 +320,23 @@ mod tests {
     use crate::claude::perm::PermMode;
 
     #[test]
+    fn one_settings_value_carries_the_provider_address_and_the_plugins_that_are_off() {
+        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None };
+        assert!(args(&base).iter().all(|a| a != "--settings"));
+        let off = args(&SpawnOpts { plugins_off: true, ..base.clone() });
+        let value: serde_json::Value = serde_json::from_str(&off[off.iter().position(|a| a == "--settings").unwrap() + 1]).unwrap();
+        assert_eq!(value["enabledPlugins"][SWB_PLUGIN], false);
+        assert!(off.iter().all(|a| a != "--setting-sources"), "the project's settings stay when no provider is pinned");
+        let both = args(&SpawnOpts { plugins_off: true, pinned_url: Some("https://gw.example.com/x".into()), ..base });
+        assert_eq!(both.iter().filter(|a| *a == "--settings").count(), 1, "one --settings only");
+        let value: serde_json::Value = serde_json::from_str(&both[both.iter().position(|a| a == "--settings").unwrap() + 1]).unwrap();
+        assert_eq!((value["env"]["ANTHROPIC_BASE_URL"].as_str(), value["enabledPlugins"][SWB_PLUGIN].as_bool()), (Some("https://gw.example.com/x"), Some(false)));
+        assert!(both.windows(2).any(|w| w == ["--setting-sources", "user"]));
+    }
+
+    #[test]
     fn the_arguments_include_the_permission_prompt_tool_and_resume() {
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()), env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()), env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
         assert!(a.windows(2).any(|w| w == ["--model", "haiku"]));
@@ -315,7 +351,7 @@ mod tests {
     #[test]
     fn a_provider_chat_pins_its_address_and_skips_project_settings_and_no_secret_is_in_the_arguments() {
         let env = EnvPlan { set: vec![("ANTHROPIC_AUTH_TOKEN".into(), "tok-secret-xyz".into())], remove: vec![] };
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env, pinned_url: Some("https://gw.example.com/x".into()), container: None, permission_mode: Default::default(), name: None };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env, pinned_url: Some("https://gw.example.com/x".into()), container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--setting-sources", "user"]));
         let settings = a.windows(2).find(|w| w[0] == "--settings").map(|w| w[1].clone()).unwrap();
@@ -336,7 +372,7 @@ mod tests {
 
     #[test]
     fn a_name_a_person_gave_is_passed_as_the_clis_own_session_name() {
-        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None };
+        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None, plugins_off: false, guard_hook: None };
         assert!(!args(&base).iter().any(|a| a == "--name"));
         assert!(args(&SpawnOpts { name: Some(String::new()), ..base.clone() }).iter().all(|a| a != "--name"), "a blank name is none");
         assert!(args(&SpawnOpts { name: Some("내 작업".into()), ..base }).windows(2).any(|w| w == ["--name", "내 작업"]));
@@ -344,7 +380,7 @@ mod tests {
 
     #[test]
     fn a_chosen_permission_mode_is_passed_and_the_default_adds_nothing() {
-        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None };
+        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None, plugins_off: false, guard_hook: None };
         assert!(!args(&base).iter().any(|x| x == "--permission-mode" || x == "--dangerously-skip-permissions"), "a chat that never chose has the arguments it always had");
         let accept = args(&SpawnOpts { permission_mode: PermMode::AcceptEdits, ..base.clone() });
         assert!(accept.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));

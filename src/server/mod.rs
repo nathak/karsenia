@@ -102,6 +102,9 @@ pub fn start_core(config: Config) -> anyhow::Result<Arc<Registry>> {
             Err(error) => tracing::warn!("the MCP socket is off: {error}"),
         }
     }
+    // A named chat's `claude` is started now, not at its first message: its name is how other sessions find it.
+    let warm = registry.clone();
+    tokio::spawn(async move { warm.warm_named().await });
     Ok(registry)
 }
 

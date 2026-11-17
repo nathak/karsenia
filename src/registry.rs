@@ -57,6 +57,17 @@ pub fn check_mode(mode: PermMode, provider: bool, container: bool) -> Result<(),
     }
 }
 
+/// The most named chats whose `claude` is started when the app starts.
+const MAX_WARM: usize = 8;
+
+/// What a chat carried to another account keeps of the old one.
+struct Carry {
+    model: Option<String>,
+    permission_mode: PermMode,
+    named: bool,
+    source: &'static str,
+}
+
 pub struct Registry {
     dir: PathBuf,
     bin: String,
@@ -243,6 +254,38 @@ impl Registry {
         check_mode(mode, provider, container)
     }
 
+    /// Starts the `claude` of every chat the person named (at most `MAX_WARM`, the newest first), one after the other: a chat's name is
+    /// the address other Claude Code sessions find it by, and that exists only while its process runs. Nothing is sent to a model.
+    pub async fn warm_named(&self) {
+        let mut named: Vec<Info> = self.list().await.into_iter().filter(|i| i.meta.named && i.meta.provider.is_none() && !i.meta.container).collect();
+        named.sort_by_key(|i| std::cmp::Reverse(i.meta.created));
+        for info in named.into_iter().take(MAX_WARM) {
+            if let Some(handle) = self.get(&info.meta.sid) {
+                if let Err(error) = handle.warm().await {
+                    tracing::warn!("could not start a named chat: {error}");
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    }
+
+    /// The chat's workbench (its contract, pins and guard settings): a new one when it has none.
+    pub fn workbench_get(&self, sid: &str) -> Result<crate::workbench::Workbench, &'static str> {
+        self.get(sid).ok_or("wb_err_gone")?;
+        crate::workbench::store::load(&self.dir, sid)
+    }
+
+    /// Changes the chat's workbench and saves it; the new state. One change at a time (a read and a write must not interleave).
+    pub fn workbench_apply(&self, sid: &str, op: crate::workbench::Op) -> Result<crate::workbench::Workbench, &'static str> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _held = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        self.get(sid).ok_or("wb_err_gone")?;
+        let mut wb = crate::workbench::store::load(&self.dir, sid)?;
+        wb.apply(op)?;
+        crate::workbench::store::save(&self.dir, sid, &wb)?;
+        Ok(wb)
+    }
+
     /// A new session in `cwd`; the folder must exist and must not be `/` or the home folder itself.
     pub fn create(&self, cwd: &str, model: Option<String>, provider: Option<&str>) -> Result<SessionHandle, String> {
         self.create_in(cwd, model, provider, false, None)
@@ -298,12 +341,17 @@ impl Registry {
     /// first, and `claude` is not started now: the first message resumes the session with `--resume`. The folder must be the one
     /// the CLI kept the session under, or the resume cannot find it.
     pub async fn import_cli(&self, cwd: &str, cli_id: &str, title: &str, account: Option<&str>, history: crate::cli_sessions::History) -> Result<SessionHandle, String> {
+        self.import_inner(cwd, cli_id, title, account, history, None).await
+    }
+
+    async fn import_inner(&self, cwd: &str, cli_id: &str, title: &str, account: Option<&str>, history: crate::cli_sessions::History, carry: Option<Carry>) -> Result<SessionHandle, String> {
         let uuid_like = cli_id.len() == 36 && cli_id.bytes().all(|b| b == b'-' || b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
         if !uuid_like {
             return Err("not a session id".into());
         }
         let real = import_folder(cwd)?;
-        for info in self.list().await {
+        // A session carried over to another account has the same id as the chat it came from; only an import is checked.
+        for info in self.list().await.into_iter().filter(|_| carry.is_none()) {
             if info.meta.claude_session_id.as_deref() == Some(cli_id) || info.meta.imported_from.as_deref() == Some(cli_id) {
                 return Err("that session is already imported".into());
             }
@@ -313,10 +361,16 @@ impl Registry {
         meta.claude_session_id = Some(cli_id.to_owned());
         meta.imported_from = Some(cli_id.to_owned());
         meta.title = title.chars().take(60).collect();
+        let source = carry.as_ref().map_or("claude-cli", |c| c.source);
+        if let Some(c) = carry {
+            meta.model = c.model;
+            meta.permission_mode = c.permission_mode;
+            meta.named = c.named;
+        }
         // The log is written first, then the meta: a chat has a meta only when its log is whole.
         let mut log: Vec<Envelope> = Vec::with_capacity(history.events.len() + 1);
         let first_ts = history.events.first().map_or(meta.created, |e| e.0);
-        log.push(Envelope { v: 1, sid: meta.sid.clone(), seq: 1, ts: first_ts, kind: "imported".into(), data: serde_json::json!({"source": "claude-cli", "total": history.total, "dropped": history.dropped}) });
+        log.push(Envelope { v: 1, sid: meta.sid.clone(), seq: 1, ts: first_ts, kind: "imported".into(), data: serde_json::json!({"source": source, "total": history.total, "dropped": history.dropped}) });
         for (n, (ts, kind, data)) in history.events.into_iter().enumerate() {
             log.push(Envelope { v: 1, sid: meta.sid.clone(), seq: n as u64 + 2, ts, kind: kind.to_owned(), data });
         }
@@ -337,6 +391,69 @@ impl Registry {
         let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log, realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), instance: self.instance.clone() });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok(handle)
+    }
+
+    /// A chat carried on under another account: the chat stays as it is (readable, under its own account) and a new chat of `account`
+    /// (None: the default account) is made that shows the same conversation and resumes the same Claude session, whose file is copied
+    /// to the other account's folder. Refused for a chat that has not had a turn, one that runs a turn, and provider, container and
+    /// worktree chats. Whether the other account can still work is its own matter (its limits and its login).
+    pub async fn continue_as(&self, sid: &str, account: Option<&str>) -> Result<SessionHandle, String> {
+        let handle = self.get(sid).ok_or("no such chat")?;
+        let info = handle.info().await.ok_or("no such chat")?;
+        if info.state == session::State::Running || info.pending > 0 {
+            return Err("a turn is running or a permission waits in this chat".into());
+        }
+        let meta = info.meta;
+        if meta.provider.is_some() || meta.container || meta.worktree.is_some() {
+            return Err("only a plain chat of a login account can be carried to another account".into());
+        }
+        let csid = meta.claude_session_id.clone().ok_or("this chat has not had a turn yet: make a new chat in the other account instead")?;
+        let target = account.filter(|a| !a.is_empty());
+        let current = meta.account.as_ref().map(|a| a.id.as_str());
+        if target == current {
+            return Err("the chat already runs in that account".into());
+        }
+        self.bind_account(target, false, false)?;
+        let home = crate::platform::home_dir();
+        let default = crate::accounts::default_config_dir(std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).as_deref(), home.as_deref());
+        let folder_of = |id: Option<&str>| -> Result<PathBuf, String> {
+            match id {
+                Some(id) => self.account_login(id).map(|found| found.0),
+                None => default.clone().ok_or_else(|| "the default account's folder is not known".to_owned()),
+            }
+        };
+        // The other account already carries this session (it was continued there before): its chat has its own newer turns, and a copy
+        // over its file would discard them. Open that chat instead.
+        for other in self.list().await {
+            if other.meta.sid != meta.sid && other.meta.claude_session_id.as_deref() == Some(csid.as_str()) && other.meta.account.as_ref().map(|a| a.id.as_str()) == target {
+                return Err("that account already has a chat of this session; open it instead".into());
+            }
+        }
+        let (from, to) = (folder_of(current)?, folder_of(target)?);
+        let cwd = meta.cwd.to_string_lossy().into_owned();
+        {
+            let (cwd, csid) = (cwd.clone(), csid.clone());
+            tokio::task::spawn_blocking(move || crate::handover::copy_session(&from, &to, &cwd, &csid)).await.map_err(|e| e.to_string())??;
+        }
+        // What the chat showed, taken from the app's own record of it (not from the session file: that one may be too big, and loses
+        // images and tool cards). Kept to the tail that fits.
+        let (log, _) = handle.subscribe(0).await.ok_or("no such chat")?;
+        let mut events: Vec<(u64, &'static str, serde_json::Value)> = Vec::new();
+        let mut bytes = 0usize;
+        for e in log.iter().rev().filter(|e| e.kind == "user" || e.kind == "claude") {
+            let mut data = e.data.clone();
+            bytes += data.to_string().len();
+            if bytes > (24 << 20) || events.len() >= 5000 {
+                break;
+            }
+            data["imported"] = serde_json::Value::Bool(true);
+            events.push((e.ts, if e.kind == "user" { "user" } else { "claude" }, data));
+        }
+        events.reverse();
+        let total = log.iter().filter(|e| e.kind == "user" || e.kind == "claude").count();
+        let history = crate::cli_sessions::History { total, dropped: total.saturating_sub(events.len()), events };
+        let carry = Carry { model: meta.model.clone(), permission_mode: meta.permission_mode, named: meta.named, source: "account" };
+        self.import_inner(&cwd, &csid, &meta.title, target, history, Some(carry)).await
     }
 
     /// A new session in its own git worktree: `cwd` must be a git project on a branch with a commit (not a worktree already). The chat's
@@ -595,6 +712,7 @@ impl Registry {
         let handle = self.get(sid).ok_or("no such session")?;
         let meta = handle.info().await.ok_or("the session is gone")?.meta;
         handle.remove().await?;
+        crate::workbench::store::remove(&self.dir, sid);
         self.sessions.lock().expect("registry lock").remove(sid);
         if let Some(index) = self.realm_of_meta(&meta).and_then(|r| r.index.clone()) {
             let account = meta.account.as_ref().map(|a| a.id.clone());

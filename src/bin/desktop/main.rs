@@ -63,9 +63,13 @@ thread_local! {
     // The UI thread's copy of the rows on screen, to change only what changed.
     static SHOWN: RefCell<Vec<Row>> = const { RefCell::new(Vec::new()) };
     // Every chat the host listed with what the account badges need; the list on screen is the part of it under the account shown.
+    // The project folders of the chat list that are closed.
+    static COLLAPSED: RefCell<std::collections::HashSet<String>> = RefCell::new(std::collections::HashSet::new());
     static ALL: RefCell<Vec<(SessionItem, Mark)>> = const { RefCell::new(Vec::new()) };
     static ROWS: RefCell<Option<Rc<VecModel<ChatRow>>>> = const { RefCell::new(None) };
     // Set when a chat is opened or a message is sent: the list follows the end until that turn is over.
+    // What was typed in the composer of each chat that was left, put back when the chat is opened again.
+    static DRAFTS: RefCell<std::collections::HashMap<String, String>> = RefCell::new(std::collections::HashMap::new());
     static STICK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     // Kept for the window's life: on Linux the copied text is served by this process and is lost when the clipboard is dropped.
     static CLIPBOARD: RefCell<Option<arboard::Clipboard>> = const { RefCell::new(None) };
@@ -76,6 +80,11 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("mcp") {
         let rt = tokio::runtime::Runtime::new().expect("no tokio runtime");
         std::process::exit(rt.block_on(tenrec::mcp::run_stdio()));
+    }
+    // `tenrec-desktop guard --data <folder> --sid <chat>`: the PreToolUse hook of a chat's claude (the app's own guard), not the window.
+    if std::env::args_os().nth(1).is_some_and(|a| a == "guard") {
+        let rest: Vec<String> = std::env::args_os().skip(2).map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(tenrec::workbench::hook::run(&rest));
     }
     let mut data: Option<PathBuf> = None;
     let mut claude: Option<String> = None;
@@ -103,6 +112,9 @@ fn main() {
             fatal("the data folder must be inside your user profile folder on Windows (use --data with a folder there)");
         }
     }
+    // One app per data folder: two of them would answer the same chats and sweep each other's containers. The lock is the system's,
+    // so it goes away with the process, however it ends.
+    let _single = single_instance(&data).unwrap_or_else(|| fatal(&tr(lang, "already_running")));
     let log = start_log(&data);
     let config = tenrec::server::Config { port: 0, data_dir: data.clone(), bin: claude, mcp_bin: std::env::current_exe().ok(), extract: Default::default(), propose: Default::default(), sched: Default::default() };
     let registry = match tenrec::server::start_core(config) {
@@ -252,6 +264,19 @@ impl std::io::Write for LogWriter {
 }
 
 /// Says why the app cannot run, and ends it: in a message box on Windows (a release build has no console), on stderr elsewhere.
+/// Takes the lock of this data folder: None when another app holds it. Any other trouble (no folder, no permission) is not a
+/// reason to refuse: the core reports it when it starts.
+fn single_instance(data: &std::path::Path) -> Option<std::fs::File> {
+    use std::fs::TryLockError;
+    let _ = std::fs::create_dir_all(data);
+    let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(data.join("desktop.lock")).ok()?;
+    match file.try_lock() {
+        Ok(()) => Some(file),
+        Err(TryLockError::WouldBlock) => None,
+        Err(TryLockError::Error(_)) => Some(file),
+    }
+}
+
 fn fatal(message: &str) -> ! {
     eprintln!("{message}");
     tracing::error!("{message}");
@@ -481,6 +506,43 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
     });
 
     // The open chat's name and deleting it.
+    let (a, weak) = (app.clone(), ui.as_weak());
+    ui.on_toggle_group(move |key| {
+        COLLAPSED.with(|c| {
+            let mut c = c.borrow_mut();
+            if !c.remove(key.as_str()) {
+                c.insert(key.to_string());
+            }
+        });
+        if let Some(ui) = weak.upgrade() {
+            show_sessions(&ui, &a);
+        }
+    });
+    let (a, weak) = (app.clone(), ui.as_weak());
+    ui.on_continue_chat(move |index, name| {
+        let Some(ui) = weak.upgrade() else { return };
+        let Ok(target) = accounts::chosen(index, name.as_str()) else { return };
+        let Some(sid) = a.current.lock().expect("current").sid.clone() else { return };
+        let body = fill(&tr(a.lang, "cont_confirm"), &[("name", name.to_string())]);
+        let b = a.clone();
+        panels::ask(&ui, body, tr(a.lang, "cont_go"), false, Box::new(move |ok| {
+            if !ok {
+                return;
+            }
+            let (c, sid, target) = (b.clone(), sid.clone(), target.clone());
+            tokio::spawn(async move {
+                match c.registry.continue_as(&sid, target.as_deref()).await {
+                    Ok(handle) => {
+                        let new_sid = handle.sid.clone();
+                        let d = c.clone();
+                        let _ = c.weak.clone().upgrade_in_event_loop(move |_| open_chat(&d, new_sid));
+                        refresh_sessions(&c).await;
+                    }
+                    Err(message) => toast_later(&c.weak, message),
+                }
+            });
+        }));
+    });
     let a = app.clone();
     ui.on_rename_chat(move |text| {
         let Some(sid) = a.current.lock().expect("current").sid.clone() else { return };
@@ -639,7 +701,7 @@ fn send_text(a: &Arc<App>, text: String, from_composer: bool) {
             ui.set_draft(SharedString::new());
         }
     }
-    STICK.with(|s| s.set(true));
+    stick_briefly();
     let a = a.clone();
     tokio::spawn(async move {
         let Some(handle) = a.registry.get(&sid) else { return };
@@ -728,6 +790,10 @@ fn close_chat(ui: &AppWindow, app: &Arc<App>, sid: &str) {
         cur.sid = None;
         cur.transcript = Transcript::new(app.lang);
     }
+    // The chat is gone: so is what was typed for it.
+    DRAFTS.with(|d| d.borrow_mut().remove(sid));
+    ui.set_draft(SharedString::new());
+    attach::forget(ui, sid);
     SHOWN.with(|s| s.borrow_mut().clear());
     if let Some(ui) = app.weak.upgrade() {
         shots::reset(&ui);
@@ -745,19 +811,42 @@ fn close_chat(ui: &AppWindow, app: &Arc<App>, sid: &str) {
     files::reset(ui);
 }
 
+/// The chat follows its end for the moment after a message is sent or a chat is opened (its rows are measured as they come into view);
+/// after that it follows only while the person is at the end, so scrolling up during a running turn is left alone.
+fn stick_briefly() {
+    STICK.with(|s| s.set(true));
+    slint::Timer::single_shot(Duration::from_millis(1500), || STICK.with(|s| s.set(false)));
+}
+
 fn open_chat(app: &Arc<App>, sid: String) {
-    let epoch = {
+    let (epoch, left) = {
         let mut cur = app.current.lock().expect("current");
         if let Some(task) = cur.follow.take() {
             task.abort();
         }
         cur.epoch += 1;
-        cur.sid = Some(sid.clone());
+        let left = cur.sid.replace(sid.clone());
         cur.transcript = Transcript::new(app.lang);
-        cur.epoch
+        (cur.epoch, left)
     };
+    let left_att = left.clone();
+    // The composer belongs to the chat: what was typed stays with the chat that was left, and the opened chat has its own.
+    if let Some(ui) = app.weak.upgrade() {
+        DRAFTS.with(|d| {
+            let mut d = d.borrow_mut();
+            if let Some(old) = left {
+                let text = ui.get_draft().to_string();
+                if text.is_empty() {
+                    d.remove(&old);
+                } else {
+                    d.insert(old, text);
+                }
+            }
+            ui.set_draft(d.remove(&sid).unwrap_or_default().into());
+        });
+    }
     SHOWN.with(|s| s.borrow_mut().clear());
-    STICK.with(|s| s.set(true));
+    stick_briefly();
     ROWS.with(|r| {
         if let Some(rows) = r.borrow().as_ref() {
             rows.set_vec(Vec::new());
@@ -777,7 +866,7 @@ fn open_chat(app: &Arc<App>, sid: String) {
         // Shell mode belongs to the chat it was turned on in.
         ui.set_shell_mode(false);
         team::reset(&ui, app.lang);
-        attach::clear(&ui);
+        attach::switch(&ui, left_att.as_deref(), &sid);
         files::reset(&ui);
         // The new chat's snapshot is read whichever page is on screen: the team chip in the header follows it too.
         team::swb_open(&ui, app);
@@ -914,11 +1003,9 @@ fn push(app: &Arc<App>) {
         if let Some(model) = &head.model {
             ui.set_model_name(model_label(model).into());
         }
-        if ui.get_chat_title().is_empty() {
-            if let Some(title) = title {
-                ui.set_chat_title(title.into());
-            }
-        }
+        // The header's name is the chat's own (kept in its meta, put on screen by the list refresh): not the first message's words, which
+        // would show for a moment as if the name had been reset.
+        let _ = title;
         let view = perm_view(perm, lang, &a.cwd.lock().expect("cwd").clone().unwrap_or_default(), &a.current.lock().expect("current").sid.clone().unwrap_or_default());
         // A new request starts with an empty reason.
         let closed = view.request_id.is_empty() && !ui.get_perm().request_id.is_empty();
@@ -967,7 +1054,16 @@ fn perm_view(perm: Option<(serde_json::Value, usize)>, lang: Lang, cwd: &str, si
         request_id: p["request_id"].as_str().unwrap_or_default().into(),
         title: title.into(),
         more: if count > 1 { format!("+{} {}", count - 1, tr(lang, "perm_more")).into() } else { SharedString::new() },
-        description: p["description"].as_str().unwrap_or_default().into(),
+        description: {
+            // Why Claude Code asks, when a hook (the guard) or a rule is the reason, goes under what the tool says it is for.
+            let purpose = p["description"].as_str().unwrap_or_default();
+            match p["decision_reason"].as_str().filter(|r| !r.is_empty()) {
+                Some(why) if purpose.is_empty() => why.to_owned(),
+                Some(why) => format!("{purpose}\n{why}"),
+                None => purpose.to_owned(),
+            }
+            .into()
+        },
         input: serde_json::to_string_pretty(input).unwrap_or_default().into(),
         blocked: p["blocked_path"].as_str().unwrap_or_default().into(),
         suggestions: suggestions.into(),
@@ -1069,6 +1165,7 @@ fn to_slint(row: &Row) -> ChatRow {
         indent: row.indent,
         img_id,
         imgs,
+        trows: ModelRc::from(Rc::new(VecModel::from(row.grid.iter().enumerate().map(|(i, cells)| TRow { cells: ModelRc::from(Rc::new(VecModel::from(cells.iter().map(|c| SharedString::from(c.as_str())).collect::<Vec<_>>()))), head: i == 0 }).collect::<Vec<_>>()))),
     }
 }
 
@@ -1167,16 +1264,16 @@ async fn refresh_sessions(app: &Arc<App>) {
         .map(|info| {
             let m = &info.meta;
             let state = serde_json::to_value(&info.state).ok().and_then(|v| v["state"].as_str().map(str::to_owned)).unwrap_or_else(|| "idle".into());
-            let folder = m.cwd.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| m.cwd.display().to_string());
+            // A chat in a worktree is listed under the project the worktree was made from.
+            let home_dir = m.worktree.as_ref().map(|w| w.repo.clone()).unwrap_or_else(|| m.cwd.clone());
+            let group = home_dir.display().to_string();
+            let folder = home_dir.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| group.clone());
             let mut tags = Vec::new();
             if let Some(p) = &m.provider {
                 tags.push(format!("→ {}", p.host));
             }
             if let Some(a) = &m.account {
                 tags.push(a.name.clone());
-            }
-            if m.worktree.is_some() {
-                tags.push("worktree".into());
             }
             if !m.permission_mode.is_default() {
                 tags.push(format!("{}: {}", tr(lang, "perm_tag"), m.permission_mode.name()));
@@ -1192,7 +1289,7 @@ async fn refresh_sessions(app: &Arc<App>) {
                 (title.clone(), m.cwd.display().to_string(), m.model.clone().unwrap_or_default(), prov)
             });
             let mark = Mark { account: m.account.as_ref().map(|a| a.id.clone()), running: state == "running", pending: info.pending };
-            let item = SessionItem { sid: m.sid.clone().into(), folder: folder.into(), title: title.into(), when: ago(m.created, now, lang).into(), state: state.into(), active, tags: tags.join(" · ").into(), pending: info.pending as i32 };
+            let item = SessionItem { sid: m.sid.clone().into(), folder: folder.into(), title: title.into(), when: ago(m.created, now, lang).into(), state: state.into(), active, tags: tags.join(" · ").into(), pending: info.pending as i32, head: false, group: group.into(), open: false, count: 0, wt: m.worktree.is_some(), sub: SharedString::new() };
             (item, head, mark)
         })
         .collect();
@@ -1251,11 +1348,49 @@ async fn refresh_sessions(app: &Arc<App>) {
 
 /// The chat list on screen: the chats under the account shown (see `in_context`), from the last list the host sent. Called when that
 /// list came and when the account shown changed, so a switch needs no round trip. It never switches the account itself.
+/// The chats as the list shows them: a row per project folder (in the order of its newest chat) with its chats under it unless it is closed.
+fn grouped(chats: &[SessionItem]) -> Vec<SessionItem> {
+    let mut order: Vec<String> = Vec::new();
+    for c in chats {
+        if !order.iter().any(|g| g.as_str() == c.group.as_str()) {
+            order.push(c.group.to_string());
+        }
+    }
+    let mut out = Vec::new();
+    for key in order {
+        let members: Vec<&SessionItem> = chats.iter().filter(|c| c.group.as_str() == key).collect();
+        let open = !COLLAPSED.with(|c| c.borrow().contains(&key));
+        let parent = std::path::Path::new(&key).parent().map(|p| tail_path(&p.display().to_string(), 28)).unwrap_or_default();
+        out.push(SessionItem {
+            sid: SharedString::new(),
+            folder: members[0].folder.clone(),
+            title: SharedString::new(),
+            when: SharedString::new(),
+            state: SharedString::new(),
+            active: false,
+            tags: SharedString::new(),
+            // What waits under a closed folder shows on its row.
+            pending: if open { 0 } else { members.iter().map(|m| m.pending).sum() },
+            head: true,
+            group: key.clone().into(),
+            open,
+            count: members.len() as i32,
+            wt: false,
+            sub: parent.into(),
+        });
+        if open {
+            out.extend(members.into_iter().cloned());
+        }
+    }
+    out
+}
+
 pub(crate) fn show_sessions(ui: &AppWindow, app: &App) {
     let view = app.bus.account();
     let known = accounts::known();
-    let list: Vec<SessionItem> = ALL.with(|all| all.borrow().iter().filter(|(_, m)| in_context(m.account.as_deref(), view.as_deref(), known.as_deref())).map(|(item, _)| item.clone()).collect());
-    ui.set_no_chats(list.is_empty() && known.as_ref().is_some_and(|k| !k.is_empty()));
+    let chats: Vec<SessionItem> = ALL.with(|all| all.borrow().iter().filter(|(_, m)| in_context(m.account.as_deref(), view.as_deref(), known.as_deref())).map(|(item, _)| item.clone()).collect());
+    let list = grouped(&chats);
+    ui.set_no_chats(chats.is_empty() && known.as_ref().is_some_and(|k| !k.is_empty()));
     if !ui.get_sessions().iter().eq(list.iter().cloned()) {
         ui.set_sessions(ModelRc::from(Rc::new(VecModel::from(list))));
     }
@@ -1273,4 +1408,28 @@ pub(crate) fn attention_now(view: Option<&str>, known: Option<&[String]>) -> std
 #[allow(dead_code)]
 fn words(lang: Lang, key: &str, n: usize) -> String {
     fill(&tr(lang, key), &[("n", n.to_string())])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chat(sid: &str, group: &str, wt: bool) -> SessionItem {
+        SessionItem { sid: sid.into(), folder: "proj".into(), title: sid.into(), when: SharedString::new(), state: "idle".into(), active: false, tags: SharedString::new(), pending: 1, head: false, group: group.into(), open: false, count: 0, wt, sub: SharedString::new() }
+    }
+
+    #[test]
+    fn chats_of_one_folder_sit_under_one_row_that_can_be_closed() {
+        let chats = vec![chat("a", "/w/proj", false), chat("b", "/w/other", false), chat("c", "/w/proj", true)];
+        let rows = grouped(&chats);
+        let kinds: Vec<(bool, String)> = rows.iter().map(|r| (r.head, r.sid.to_string())).collect();
+        assert_eq!(kinds, vec![(true, String::new()), (false, "a".into()), (false, "c".into()), (true, String::new()), (false, "b".into())]);
+        assert_eq!((rows[0].count, rows[0].open, rows[0].pending), (2, true, 0));
+        assert!(rows[2].wt, "a worktree chat keeps its flag");
+        COLLAPSED.with(|c| c.borrow_mut().insert("/w/proj".into()));
+        let rows = grouped(&chats);
+        assert_eq!(rows.len(), 3, "a closed folder lists no chats");
+        assert!(!rows[0].open && rows[0].pending == 2, "what waits under it shows on its row");
+        COLLAPSED.with(|c| c.borrow_mut().clear());
+    }
 }

@@ -62,7 +62,7 @@ fn is_uuid_name(name: &str) -> Option<&str> {
 fn prompt_text(content: &Value) -> Option<String> {
     let text = match content {
         Value::String(s) => s.clone(),
-        Value::Array(blocks) => blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        Value::Array(blocks) => blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).filter(|t| !crate::workbench::inject::is_block(t)).collect::<Vec<_>>().join("\n"),
         _ => return None,
     };
     let t = text.trim_start();

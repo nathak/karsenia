@@ -563,6 +563,8 @@ export function guardKind(content) {
   const text = resultBlocks(content).filter(p => p.type === 'text').map(p => p.text).join('\n').slice(0, 400)
   if (text.includes('SmartWorkbench team mode:')) return 'team'
   if (/VHDB guard/i.test(text)) return 'vhdb'
+  // The guard asked and, with no terminal to ask in, its question ended as a decline: nobody here refused it.
+  if (text.includes('The user declined this') && text.includes('in SmartWorkbench')) return 'swb_ask'
   return null
 }
 

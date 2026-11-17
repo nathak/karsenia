@@ -9,23 +9,25 @@ import "../ui/vendor/fonts/JetBrainsMono-SemiBold.ttf";
 import { Theme, T, Pill, Btn, Rich, SelText, WText, Label, Badge, KeyHint, Toggle, SegTabs, IconBtn, ProgressBar, EmptyState } from "base.slint";
 import { SchedPanel, Sched, SchedHeadV, SchedTask, SchedRun } from "sched.slint";
 import { FilesPanel, Files, FsRow, FsCrumb } from "files.slint";
-import { TeamPage } from "team.slint";
+import { TeamPage, SwbPanel } from "team.slint";
 import { NewChatCard, AccountsManage } from "newchat.slint";
 import { VhdbPage, Vh, VhDecision } from "vhdb.slint";
 import { ImportPanel, Imp, ImpRow } from "import.slint";
-import { MemPanel, SkillsPanel, SettingsPanel, TeamCard, WtCard, UsageCard, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, TeamRole } from "panels.slint";
+import { MemPanel, SkillsPanel, SettingsPanel, TeamCard, WtCard, UsageCard, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole } from "panels.slint";
 export { Sched, SchedHeadV, SchedTask, SchedRun, Files, FsRow, FsCrumb, Imp, ImpRow }
-export { Vh, VhDecision, Theme, T, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, TeamRole }
+export { Vh, VhDecision, Theme, T, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole }
 
 
+export struct TRow { cells: [string], head: bool }
 export struct ChatImg { thumb: image, label: string, has-thumb: bool }
 export struct ChatRow {
     kind: string, depth: int, key: string, text: string, rich: styled-text, plain: string, label: string, extra: string, status: string,
     state: string, detail: string, open: bool, badge: string, add: int, del: int, indent: int,
-    img-id: int, imgs: [ChatImg],
+    img-id: int, imgs: [ChatImg], trows: [TRow],
 }
 
-export struct SessionItem { sid: string, folder: string, title: string, when: string, state: string, active: bool, tags: string, pending: int }
+// One row of the chat list: a project folder (head) or a chat under it. A chat in a git worktree is listed under the project it came from.
+export struct SessionItem { sid: string, folder: string, title: string, when: string, state: string, active: bool, tags: string, pending: int, head: bool, group: string, open: bool, count: int, wt: bool, sub: string }
 
 export struct PermView {
     visible: bool, request-id: string, title: string, more: string, description: string, input: string, blocked: string, suggestions: string, can-remember: bool,
@@ -65,6 +67,7 @@ component RowView inherits Rectangle {
     callback copy(string);
     callback link(string);
     callback open-image(int, int);
+    in property <bool> select-mode: false;
     property <length> indent: r.depth * 24px;
     VerticalLayout {
         padding-left: root.indent;
@@ -113,26 +116,33 @@ component RowView inherits Rectangle {
             Text { text: r.extra; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
         }
         if r.kind == "para": VerticalLayout {
-            padding-left: 4px; padding-right: 24px; padding-bottom: 10px;
-            Rich { rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
+            padding-left: 4px; padding-right: 24px; padding-top: 2px; padding-bottom: 14px;
+            Rich { select: root.select-mode; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
         }
         if r.kind == "heading": VerticalLayout {
-            padding-left: 4px; padding-top: 6px; padding-bottom: 8px;
-            Rich { rich: r.rich; plain: r.plain; size: r.extra == "1" ? 20px : r.extra == "2" ? 18px : 16px; fg: Theme.on-surface; }
+            padding-left: 4px; padding-top: 14px; padding-bottom: 10px; spacing: 6px;
+            Rich { select: root.select-mode; rich: r.rich; plain: r.plain; size: r.extra == "1" ? 21px : r.extra == "2" ? 18px : 16px; fg: Theme.on-surface; }
+            if r.extra == "1" || r.extra == "2": Rectangle { height: 1px; background: Theme.hairline; }
         }
         if r.kind == "item": HorizontalLayout {
-            padding-left: 8px + r.indent * 18px; padding-bottom: 4px; spacing: 8px;
+            padding-left: 8px + r.indent * 18px; padding-top: 1px; padding-bottom: 8px; spacing: 8px;
             Text { text: r.label; color: Theme.primary-soft; font-size: 15px; min-width: 14px; vertical-alignment: top; }
-            Rich { horizontal-stretch: 1; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
+            Rich { select: root.select-mode; horizontal-stretch: 1; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
         }
-        if r.kind == "quote": HorizontalLayout {
-            padding-left: 4px; padding-bottom: 8px; spacing: 10px;
-            Rectangle { width: 3px; background: Theme.hairline; }
-            Rich { horizontal-stretch: 1; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.outline; }
+        if r.kind == "quote": VerticalLayout {
+            padding-left: 4px; padding-right: 24px; padding-bottom: 12px;
+            Rectangle {
+                background: Theme.low; border-radius: 6px; height: ql.preferred-height;
+                ql := HorizontalLayout {
+                    spacing: 12px;
+                    Rectangle { width: 3px; background: Theme.primary.with-alpha(0.7); }
+                    VerticalLayout { padding-top: 10px; padding-bottom: 10px; padding-right: 12px; horizontal-stretch: 1; Rich { select: root.select-mode; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-var; } }
+                }
+            }
         }
         if r.kind == "rule": VerticalLayout { padding-top: 8px; padding-bottom: 12px; Rectangle { height: 1px; background: Theme.hairline; } }
         if r.kind == "code" || r.kind == "table": VerticalLayout {
-            padding-bottom: 12px; padding-right: 24px;
+            padding-top: 2px; padding-bottom: 16px; padding-right: 24px;
             Rectangle {
                 background: Theme.lowest;
                 border-radius: 8px;
@@ -155,9 +165,20 @@ component RowView inherits Rectangle {
                             }
                         }
                     }
-                    VerticalLayout {
-                        padding: 12px;
+                    if r.kind == "code": VerticalLayout {
+                        padding: 14px;
                         SelText { text: r.text; size: 13px; mono: true; chars: true; }
+                    }
+                    if r.kind == "table": VerticalLayout {
+                        for tr[i] in r.trows: Rectangle {
+                            height: trl.preferred-height;
+                            background: tr.head ? Theme.high : (mod(i, 2) == 0 ? transparent : Theme.low);
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
+                            trl := HorizontalLayout {
+                                padding-left: 12px; padding-right: 12px; padding-top: 8px; padding-bottom: 8px; spacing: 16px;
+                                for c in tr.cells: Text { horizontal-stretch: 1; min-width: 0px; text: c; wrap: word-wrap; color: tr.head ? Theme.on-surface : Theme.on-var; font-size: 13px; font-weight: tr.head ? 700 : 400; line-height-factor: 1.35; }
+                            }
+                        }
                     }
                     if r.add == 1: Rectangle {
                         height: 30px;
@@ -309,11 +330,20 @@ export component AppWindow inherits Window {
     // The width of the header: what does not fit goes first (the connection chip, the cost, then the folder).
     // Set when the window is sized (a binding on the width would loop through the header's own size).
     property <length> hw: 1000px;
-    changed width => { root.hw = root.width - 280px; root.gutter = max(16px, (root.width - 280px - 1000px) / 2); }
+    // The plug-in's panel is a column at the right while the window is wide enough, else it lies over the page.
+    out property <bool> swb-shown: root.has-chat && root.side == 0 && !root.new-open && Team.show && Team.chip == "on" && Team.panel;
+    property <bool> swb-docked: false;
+    function relayout() {
+        root.hw = root.width - 280px;
+        root.swb-docked = root.swb-shown && root.width - 280px >= 880px;
+        root.gutter = max(16px, (root.width - 280px - (root.swb-docked ? 360px : 0px) - 1000px) / 2);
+    }
+    changed width => { root.relayout(); }
+    changed swb-shown => { root.relayout(); Team.panel-visible(root.swb-shown); }
     // The widgets of the toolkit (fields, lists) follow the look chosen above.
     property <bool> dk: Theme.dark;
     changed dk => { Palette.color-scheme = root.dk ? ColorScheme.dark : ColorScheme.light; }
-    init => { Theme.sys-dark = Palette.color-scheme != ColorScheme.light; Palette.color-scheme = root.dk ? ColorScheme.dark : ColorScheme.light; root.hw = root.width - 280px; root.gutter = max(16px, (root.width - 280px - 1000px) / 2); root.tall = root.height >= 760px; }
+    init => { Theme.sys-dark = Palette.color-scheme != ColorScheme.light; Palette.color-scheme = root.dk ? ColorScheme.dark : ColorScheme.light; root.relayout(); root.tall = root.height >= 760px; }
     in property <string> model-name;
     in property <string> foot-prov;
     in property <string> conn-host: "local";
@@ -371,6 +401,13 @@ export component AppWindow inherits Window {
     in property <bool> zoom-loading;
     callback open-image(int, int);
     callback zoom-close();
+    // Carry the chat on under another account (the index in Acct.names and its name).
+    in-out property <bool> cont-open;
+    callback continue-chat(int, string);
+    // Selectable text mode for the chat's own text (the header's toggle).
+    in-out property <bool> select-mode: false;
+    // A project folder of the chat list opened or closed.
+    callback toggle-group(string);
     callback stop();
     callback toggle(string);
     callback copy(string);
@@ -378,6 +415,8 @@ export component AppWindow inherits Window {
     callback answer-perm(string, bool, bool, string);
     // request id, "session" or "always": allow and ask Claude Code to remember the rule the host built from the request's own suggestion
     callback grant-perm(string, string);
+    // The whole text of a permission button that was cut short, while the pointer is over it.
+    property <string> perm-tip;
     in-out property <string> deny-text;
     // Whole-window zoom in percent (src/bin/desktop/zoom.rs); zoom(-1) smaller, zoom(1) larger, zoom(0) back to 100%.
     in property <int> zoom-pct: 100;
@@ -402,8 +441,9 @@ export component AppWindow inherits Window {
         init => { self.focus(); }
         capture-key-pressed(event) => {
             if (event.text == Key.Escape && root.zoom-open && !root.perm.visible && !Dialog.visible) { root.zoom-close(); return accept; }
+            if (event.text == Key.Escape && root.swb-shown && !root.swb-docked && !(Team.open || Usage.open) && !root.perm.visible && !Dialog.visible && !Pal.open) { Team.panel = false; return accept; }
             // Esc closes the team card; a dialog that waits for an answer keeps its own Esc.
-            if (event.text == Key.Escape && (Team.open || Usage.open) && !root.perm.visible && !Dialog.visible) { Team.open = false; Usage.open = false; return accept; }
+            if (event.text == Key.Escape && (Team.open || Usage.open || root.cont-open) && !root.perm.visible && !Dialog.visible) { Team.open = false; Usage.open = false; root.cont-open = false; return accept; }
             if ((event.modifiers.alt || event.modifiers.control) && !event.modifiers.shift && !event.modifiers.meta && !root.perm.visible && !Dialog.visible) {
                 if (event.text == "1") { root.side = 0; root.new-open = false; return accept; }
                 if (event.text == "2") { root.side = 1; root.new-open = false; return accept; }
@@ -501,8 +541,24 @@ export component AppWindow inherits Window {
                     if Search.text == "": ListView {
                         vertical-stretch: 1;
                         for s in root.sessions: Rectangle {
-                            height: card.preferred-height + 4px;
+                            height: s.head ? 34px : card.preferred-height + 4px;
+                            if s.head: Rectangle {
+                                y: 2px; height: parent.height - 4px; border-radius: 6px;
+                                background: head-area.has-hover ? Theme.high : transparent;
+                                HorizontalLayout {
+                                    padding-left: 8px; padding-right: 8px; spacing: 6px;
+                                    Image { source: s.open ? @image-url("icons/chevron-down.svg") : @image-url("icons/chevron-right.svg"); width: 12px; height: 12px; y: (parent.height - 12px) / 2; colorize: Theme.outline; }
+                                    Image { source: @image-url("icons/folder.svg"); width: 14px; height: 14px; y: (parent.height - 14px) / 2; colorize: Theme.primary-soft; }
+                                    Text { text: s.folder; color: Theme.on-surface; font-size: 13px; font-weight: 600; font-family: Theme.mono; overflow: elide; vertical-alignment: center; }
+                                    Text { horizontal-stretch: 1; text: s.sub; color: Theme.outline; font-size: 11px; font-family: Theme.mono; overflow: elide; vertical-alignment: center; }
+                                    if s.pending > 0: VerticalLayout { alignment: center; Pill { text: s.pending; fg: Theme.primary-soft; fill: Theme.primary.with-alpha(0.15); height: 18px; } }
+                                    Text { text: s.count; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+                                }
+                                head-area := TouchArea { mouse-cursor: pointer; clicked => { root.toggle-group(s.group); } }
+                            }
                             Rectangle {
+                                visible: !s.head;
+                                x: 14px; width: parent.width - 14px;
                                 y: 2px; height: parent.height - 4px;
                                 border-radius: 6px;
                                 border-width: 1px;
@@ -512,7 +568,8 @@ export component AppWindow inherits Window {
                                     padding-left: 12px; padding-right: 10px; padding-top: 9px; padding-bottom: 9px; spacing: 3px;
                                     HorizontalLayout {
                                         spacing: 6px;
-                                        Text { horizontal-stretch: 1; text: s.folder; color: s.active ? Theme.on-surface : Theme.on-var; font-size: 13px; font-family: Theme.mono; overflow: elide; vertical-alignment: center; }
+                                        if s.wt: Text { text: "⎇"; color: Theme.info; font-size: 13px; font-family: Theme.mono; vertical-alignment: center; }
+                                        Text { horizontal-stretch: 1; text: s.title; color: s.active ? Theme.on-surface : Theme.on-var; font-size: 13px; overflow: elide; vertical-alignment: center; }
                                         if s.pending > 0: Pill { text: s.pending; fg: Theme.primary-soft; fill: Theme.primary.with-alpha(0.15); height: 18px; }
                                         Rectangle {
                                             height: 18px; y: (parent.height - 18px) / 2; width: tag.preferred-width + 12px; border-radius: 4px;
@@ -520,9 +577,9 @@ export component AppWindow inherits Window {
                                             tag := Text { text: s.state == "running" ? "Active" : s.state == "idle" ? "Idle" : "Ended"; color: s.state == "running" ? Theme.ok : Theme.outline; font-size: 11px; font-family: Theme.mono; }
                                         }
                                     }
-                                    Text { text: s.title + (s.tags == "" ? "" : "  · " + s.tags); color: Theme.outline; font-size: 11px; overflow: elide; }
+                                    Text { text: s.when + (s.tags == "" ? "" : "  · " + s.tags); color: Theme.outline; font-size: 11px; overflow: elide; }
                                 }
-                                sess-area := TouchArea { mouse-cursor: pointer; clicked => { root.side = 0; root.new-open = false; root.open-chat(s.sid); } }
+                                sess-area := TouchArea { enabled: !s.head; mouse-cursor: pointer; clicked => { root.side = 0; root.new-open = false; root.open-chat(s.sid); } }
                             }
                         }
                     }
@@ -617,11 +674,13 @@ export component AppWindow inherits Window {
                     Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
                     HorizontalLayout {
                         padding-left: root.gutter; padding-right: root.gutter; spacing: 10px; alignment: start;
-                        Label { text: "SESSION //"; vertical-alignment: center; }
+                        if root.hw >= 900px: Label { text: "SESSION //"; vertical-alignment: center; }
                         if !root.renaming: Text { text: root.chat-title; color: Theme.on-surface; font-size: 16px; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                         if root.renaming: VerticalLayout { horizontal-stretch: 1; alignment: center; LineEdit { text <=> root.rename-text; font-size: 14px; accepted(t) => { root.renaming = false; root.rename-chat(t); } } }
                         if root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename_ok"); height: 28px; primary: true; clicked => { root.renaming = false; root.rename-chat(root.rename-text); } } }
                         if !root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename"); height: 28px; clicked => { root.rename-text = root.chat-title; root.renaming = true; } } }
+                        VerticalLayout { alignment: center; Btn { text: T.tr("select_mode"); height: 28px; primary: root.select-mode; clicked => { root.select-mode = !root.select-mode; } } }
+                        if root.hw >= 1000px && Acct.names.length > 1: VerticalLayout { alignment: center; Btn { text: T.tr("cont_btn"); height: 28px; enabled: root.state != "running"; clicked => { root.cont-open = !root.cont-open; } } }
                         VerticalLayout { alignment: center; Btn { text: T.tr("chat_delete"); height: 28px; danger: true; enabled: root.state != "running"; clicked => { root.renaming = false; root.delete-chat(); } } }
                         if root.hw >= 1250px: Rectangle {
                             y: 12px; height: 28px; width: min(dirrow.preferred-width, 300px); border-radius: 6px; background: Theme.container; border-width: 1px; border-color: Theme.hairline;
@@ -653,8 +712,21 @@ export component AppWindow inherits Window {
                                 fill: Team.chip == "on" ? Theme.primary.with-alpha(0.15) : transparent;
                             }
                         }
+                        if Team.show: VerticalLayout {
+                            alignment: center;
+                            Btn {
+                                text: Team.chip == "on" ? T.tr("swbp_turn_off") : Team.chip == "off" ? T.tr("swbp_turn_on") : T.tr("swbp_turn_check"); height: 28px;
+                                enabled: Team.can-send && !Team.busy;
+                                clicked => { if (Team.chip == "on") { Team.turn(false); } else if (Team.chip == "off") { Team.panel = true; Team.turn(true); } else { Team.check(); } }
+                            }
+                        }
+                        if Team.show && Team.chip == "on": VerticalLayout { alignment: center; Btn { text: T.tr("swbp_panel"); height: 28px; primary: root.swb-shown; clicked => { Team.panel = !Team.panel; } } }
                     }
                 }
+                HorizontalLayout {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
                 // transcript
                 Rectangle {
                     vertical-stretch: 1;
@@ -665,7 +737,7 @@ export component AppWindow inherits Window {
                             height: rv.preferred-height + (row.kind == "day" ? 18px : 0px);
                             rv := RowView {
                                 x: root.gutter; y: row.kind == "day" ? 18px : 0px; width: parent.width - 2 * root.gutter;
-                                r: row; toggle(k) => { root.toggle(k); } copy(t) => { root.copy(t); } link(u) => { root.link(u); } open-image(id, i) => { root.open-image(id, i); }
+                                r: row; select-mode: root.select-mode; toggle(k) => { root.toggle(k); } copy(t) => { root.copy(t); } link(u) => { root.link(u); } open-image(id, i) => { root.open-image(id, i); }
                             }
                         }
                     }
@@ -748,6 +820,9 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
+                    }
+                    if root.swb-docked: SwbPanel { width: 360px; }
+                }
             }
         }
 
@@ -799,10 +874,32 @@ export component AppWindow inherits Window {
         if !root.new-open && (root.side == 3 || root.side == 5): SchedPanel { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; zoom-pct: root.zoom-pct; zoom(d) => { root.zoom(d); } }
         if !root.new-open && root.side == 4: FilesPanel { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; }
 
+        // ---- the plug-in's panel over the page when the window is too narrow for a column ----
+        if root.swb-shown && !root.swb-docked: Rectangle {
+            x: root.width - 360px; y: 108px; width: 360px; height: root.height - 108px;
+            TouchArea { }
+            SwbPanel { }
+        }
+
         // ---- the worktree card under the header chip; a click outside closes it ----
         if Wt.open && root.has-chat && Wt.show: Rectangle {
             TouchArea { clicked => { Wt.open = false; } }
             WtCard { x: root.width - self.width - 16px; y: 62px; width: 400px; }
+        }
+
+        // ---- the account chooser of "continue in another account", under the header button; a click outside closes it ----
+        if root.cont-open && root.has-chat: Rectangle {
+            TouchArea { clicked => { root.cont-open = false; } }
+            Rectangle {
+                x: root.width - self.width - 16px; y: 62px; width: 300px; height: cc.preferred-height;
+                background: Theme.container; border-radius: 12px; border-width: 1px; border-color: Theme.hairline;
+                cc := VerticalLayout {
+                    padding: 14px; spacing: 8px;
+                    Text { text: T.tr("cont_title"); color: Theme.on-surface; font-size: 14px; font-weight: 600; }
+                    WText { text: T.tr("cont_note"); size: 12px; fg: Theme.on-var; }
+                    for n[i] in Acct.names: Btn { text: n; height: 30px; enabled: !(root.chat-account == "" ? i == 0 : n == root.chat-account); clicked => { root.cont-open = false; root.continue-chat(i, n); } }
+                }
+            }
         }
 
         // ---- the usage-limits card under the header chip; a click outside closes it ----
@@ -1036,6 +1133,12 @@ export component AppWindow inherits Window {
                         // footer: the reason for denying, the keys, the buttons
                         Rectangle {
                             background: Theme.low; height: ft.preferred-height;
+                            // The whole text of a cut button, over the dialog while the pointer is on it.
+                            if root.perm-tip != "" && root.perm.visible: Rectangle {
+                                x: parent.width - self.width - 20px; y: 0px - self.height - 6px; width: min(parent.width - 40px, 600px); height: tp.preferred-height + 20px;
+                                background: Theme.container; border-radius: 8px; border-width: 1px; border-color: Theme.hairline;
+                                tp := Text { x: 10px; y: 10px; width: parent.width - 20px; text: root.perm-tip; wrap: word-wrap; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; }
+                            }
                             ft := VerticalLayout {
                                 padding: 14px; padding-left: 20px; padding-right: 20px; spacing: 10px;
                                 reason := LineEdit { placeholder-text: T.deny-reason; text <=> root.deny-text; }
@@ -1051,8 +1154,8 @@ export component AppWindow inherits Window {
                                     }
                                     Rectangle { horizontal-stretch: 1; }
                                     Btn { text: "✕  " + T.deny; clicked => { root.answer-perm(root.perm.request-id, false, false, root.deny-text); } }
-                                    if root.perm.grant-session != "": Btn { text: T.tr("perm_allow_session") + ": " + root.perm.grant-session; clicked => { root.grant-perm(root.perm.request-id, "session"); } }
-                                    if root.perm.grant-always != "": Btn { text: T.tr("perm_allow_always") + ": " + root.perm.grant-always; clicked => { root.grant-perm(root.perm.request-id, "always"); } }
+                                    if root.perm.grant-session != "": Btn { text: T.tr("perm_allow_session") + ": " + root.perm.grant-session; max-text: 300px; hovered(h) => { root.perm-tip = h ? T.tr("perm_allow_session") + ": " + root.perm.grant-session : ""; } clicked => { root.grant-perm(root.perm.request-id, "session"); } }
+                                    if root.perm.grant-always != "": Btn { text: T.tr("perm_allow_always") + ": " + root.perm.grant-always; max-text: 300px; hovered(h) => { root.perm-tip = h ? T.tr("perm_allow_always") + ": " + root.perm.grant-always : ""; } clicked => { root.grant-perm(root.perm.request-id, "always"); } }
                                     if root.perm.can-remember: Btn { text: T.allow-chat; clicked => { root.answer-perm(root.perm.request-id, true, true, ""); } }
                                     Btn { text: "✓  " + T.allow-once; primary: true; clicked => { root.answer-perm(root.perm.request-id, true, false, ""); } }
                                 }

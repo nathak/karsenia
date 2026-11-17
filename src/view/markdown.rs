@@ -14,8 +14,8 @@ pub enum Block {
     Quote(String),
     Code { lang: String, text: String },
     Rule,
-    /// A table as plain text, one line per row, cells joined with ` │ `.
-    Table(String),
+    /// A table: as plain text (one line per row, cells joined with ` │ `, for copying) and as rows of cells (the first row is the header).
+    Table { text: String, grid: Vec<Vec<String>> },
 }
 
 /// Escapes every ASCII punctuation mark, so nothing in `text` is read as markdown or HTML.
@@ -71,7 +71,7 @@ pub fn blocks(src: &str) -> Vec<Block> {
     let mut heading: Option<u8> = None;
     let mut quote = 0usize;
     let mut code: Option<(String, String)> = None;
-    let mut table: Option<(Vec<String>, Vec<String>)> = None;
+    let mut table: Option<(Vec<Vec<String>>, Vec<String>)> = None;
 
     // A block ends: what was read becomes the block its context says.
     fn flush(out: &mut Vec<Block>, inline: &mut Inline, heading: Option<u8>, quote: usize, lists: &[Option<u64>], marker: &mut Option<String>) {
@@ -111,10 +111,11 @@ pub fn blocks(src: &str) -> Vec<Block> {
                     }
                 }
                 Event::Start(Tag::TableCell) => cells.push(String::new()),
-                Event::End(TagEnd::TableHead) | Event::End(TagEnd::TableRow) => rows.push(std::mem::take(cells).join(" │ ")),
+                Event::End(TagEnd::TableHead) | Event::End(TagEnd::TableRow) => rows.push(std::mem::take(cells)),
                 Event::End(TagEnd::Table) => {
-                    let (rows, _) = table.take().unwrap_or_default();
-                    out.push(Block::Table(rows.join("\n")));
+                    let (grid, _) = table.take().unwrap_or_default();
+                    let text = grid.iter().map(|row| row.join(" │ ")).collect::<Vec<_>>().join("\n");
+                    out.push(Block::Table { text, grid });
                 }
                 _ => {}
             }
@@ -247,7 +248,7 @@ mod tests {
         assert_eq!(b[7], Block::Quote("q".into()));
         assert_eq!(b[8], Block::Code { lang: "js".into(), text: "console.log(1)".into() });
         assert_eq!(b[9], Block::Rule);
-        assert_eq!(b[10], Block::Table("a │ b\n1 │ 2".into()));
+        assert_eq!(b[10], Block::Table { text: "a │ b\n1 │ 2".into(), grid: vec![vec!["a".into(), "b".into()], vec!["1".into(), "2".into()]] });
     }
 
     #[test]

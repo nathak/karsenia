@@ -3,6 +3,7 @@ pub mod accounts;
 pub mod cli_sessions;
 pub mod claude;
 pub mod extract;
+pub mod handover;
 pub mod index;
 pub mod mcp;
 pub mod view;
@@ -23,6 +24,7 @@ pub mod session;
 pub mod settings;
 pub mod skills;
 pub mod usage;
+pub mod workbench;
 pub mod worktree;
 
 /// `n` random bytes as lower-case hex.

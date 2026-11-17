@@ -36,6 +36,28 @@ pub fn write(path: &Path, text: &str) -> std::io::Result<()> {
     file.write_all(text.as_bytes())
 }
 
+/// Written whole into a new file beside `path` and renamed over it: a reader sees the old text or the new, never half. The name of the
+/// new file cannot be guessed and is made only if it does not exist (a link left there is not written through).
+pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{:x}-{:x}.tmp", std::process::id(), nonce));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&tmp)?;
+    let done = file.write_all(text.as_bytes()).and_then(|()| file.sync_all());
+    drop(file);
+    match done.and_then(|()| std::fs::rename(&tmp, path)) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
 pub fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
     unlink_if_link(path);
     let mut file = options().append(true).open(path)?;

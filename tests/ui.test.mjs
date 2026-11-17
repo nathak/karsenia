@@ -437,6 +437,8 @@ test('a result held by a plug-in guard is told from a plain error', () => {
   assert.equal(guardKind('SmartWorkbench team mode: this edit is not small (more than 6 lines)'), 'team')
   assert.equal(guardKind([{ type: 'text', text: 'PreToolUse:Edit hook: SmartWorkbench team mode: this edit is not small' }]), 'team')
   assert.equal(guardKind('VHDB guard (한 번만): see the history first'), 'vhdb')
+  assert.equal(guardKind('<tool_use_error>The user declined this Bash call in SmartWorkbench (may print secrets).</tool_use_error>'), 'swb_ask')
+  assert.equal(guardKind('The user declined this call'), null, 'a decline that is not the plug-in\'s is not told as its question')
   assert.equal(guardKind('File not found'), null)
   assert.equal(guardKind([{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }]), null)
   assert.equal(guardKind(undefined), null)

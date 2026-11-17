@@ -32,7 +32,7 @@ const TEXT = {
     cvThinkSecs: '{s}초', cvThinkTok: '약 {n}토큰', cvThinkSum: '생각 · {s}초 · {n}자', cvThinkSumNoTime: '생각 · {n}자', cvThinkRedacted: '생각 (가려짐)', cvThinking: '생각하는 중…',
     cvCopy: '복사', cvCopied: '복사했습니다', cvShowAll: '전체 보기 ({n}줄)', cvLines: '{n}줄',
     cvHookCode: '훅 {name}: 종료 코드 {code}', cvHookOutcome: '훅 {name}: {outcome}', cvVhdbInject: 'VHDB 기록이 프롬프트에 붙었습니다', cvRate: '사용량 {window} {pct}% · {at} 재설정', cvRateState: '사용량 {window}: {status}', cvWin_five_hour: '5시간', cvWin_seven_day: '7일',
-    cvGuardTeam: '팀 모드가 막음', cvGuardVhdb: 'VHDB가 한 번 막음', cvGuardTip: '사용자가 거부한 것이 아니라 플러그인 규칙이 막았습니다', cvChipTeam: '팀 플러그인', cvChipVhdb: 'VHDB', cvChipTip: '이 대화에 플러그인이 연결되어 있습니다. 켜져 있는지는 이 화면에서 알 수 없습니다',
+    cvGuardTeam: '팀 모드가 막음', cvGuardVhdb: 'VHDB가 한 번 막음', cvGuardSwbAsk: '가드가 물었지만 답할 곳이 없어 거부됨', cvGuardTip: '사용자가 거부한 것이 아니라 플러그인 규칙이 막았습니다', cvChipTeam: '팀 플러그인', cvChipVhdb: 'VHDB', cvChipTip: '이 대화에 플러그인이 연결되어 있습니다. 켜져 있는지는 이 화면에서 알 수 없습니다',
     cvRawInput: '원본 입력', cvDiffTooBig: '너무 커서 변경 내용을 비교하지 않았습니다', cvCutChars: '… {n}자에서 잘렸습니다', cvMs: '{n}ms', cvSubTools: '도구 {n}개',
     cvSessions: '대화 목록', cvYou: '나', cvHint: 'Enter 전송 · Shift+Enter 줄바꿈', cvLastTurn: '마지막 결과의 비용과 토큰', cvThemeDark: '다크 테마 (누르면 라이트)', cvThemeLight: '라이트 테마 (누르면 시스템 설정)', cvThemeAuto: '시스템 설정 따름 (누르면 다크)', cvAttach: '이미지', cvDefaultModel: '기본 모델', cvProvAnthropic: 'Claude 로그인으로 실행', cvJustNow: '방금', cvToday: '오늘',
     searchPh: '모든 대화에서 검색', noResults: '결과가 없습니다', searchFailed: '검색할 수 없습니다', allowChat: '이 대화에서 이 도구 허용 (읽기 전용)',
@@ -119,7 +119,7 @@ const TEXT = {
     cvThinkSecs: '{s}s', cvThinkTok: '~{n} tokens', cvThinkSum: 'thinking · {s}s · {n} chars', cvThinkSumNoTime: 'thinking · {n} chars', cvThinkRedacted: 'thinking (hidden)', cvThinking: 'thinking…',
     cvCopy: 'copy', cvCopied: 'copied', cvShowAll: 'show all ({n} lines)', cvLines: '{n} lines',
     cvHookCode: 'hook {name}: exit code {code}', cvHookOutcome: 'hook {name}: {outcome}', cvVhdbInject: 'VHDB history was added to the prompt', cvRate: 'usage {window} {pct}% · resets {at}', cvRateState: 'usage {window}: {status}', cvWin_five_hour: '5 hours', cvWin_seven_day: '7 days',
-    cvGuardTeam: 'held by team mode', cvGuardVhdb: 'held once by VHDB', cvGuardTip: 'a plug-in rule held this, not the user', cvChipTeam: 'team plug-in', cvChipVhdb: 'VHDB', cvChipTip: 'plug-in connected to this chat; whether it is switched on is not known here',
+    cvGuardTeam: 'held by team mode', cvGuardVhdb: 'held once by VHDB', cvGuardSwbAsk: 'guard asked, nobody to answer: declined', cvGuardTip: 'a plug-in rule held this, not the user', cvChipTeam: 'team plug-in', cvChipVhdb: 'VHDB', cvChipTip: 'plug-in connected to this chat; whether it is switched on is not known here',
     cvRawInput: 'raw input', cvDiffTooBig: 'too large to compare the changes', cvCutChars: '… cut at {n} characters', cvMs: '{n} ms', cvSubTools: '{n} tools',
     cvSessions: 'Chats', cvYou: 'you', cvHint: 'Enter to send · Shift+Enter for a new line', cvLastTurn: 'cost and tokens of the last result', cvThemeDark: 'dark theme (click for light)', cvThemeLight: 'light theme (click for system)', cvThemeAuto: 'follows the system (click for dark)', cvAttach: 'image', cvDefaultModel: 'default model', cvProvAnthropic: 'runs on your Claude login', cvJustNow: 'now', cvToday: 'today',
     searchPh: 'Search all chats', noResults: 'No results', searchFailed: 'Search is not available', allowChat: 'Allow this tool in this chat (read-only)',
@@ -995,7 +995,7 @@ function setToolResult(block) {
   if (guard) {
     // Held by a plug-in rule (team mode or VHDB): said so, not shown as a plain failure.
     tool.card.classList.add('guard', 'guard-' + guard)
-    tool.status.textContent = t(guard === 'team' ? 'cvGuardTeam' : 'cvGuardVhdb')
+    tool.status.textContent = t(guard === 'team' ? 'cvGuardTeam' : guard === 'swb_ask' ? 'cvGuardSwbAsk' : 'cvGuardVhdb')
     tool.status.title = t('cvGuardTip')
   } else tool.status.textContent = (block.is_error ? t('failed') : t('done')) + (!S.replaying && tool.t0 && Date.now() - tool.t0 >= 100 ? ' · ' + wtText(t('cvMs'), { n: Date.now() - tool.t0 }) : '')
   tool.result.replaceChildren()
@@ -1151,6 +1151,7 @@ function showPerm() {
       const b = el('button', '', `${g.grant === 'always' ? t('allowAlways') : t('allowSession')}: ${g.rule}`)
       b.type = 'button'
       b.dataset.grant = g.grant
+      b.title = b.textContent
       b.addEventListener('click', () => grantAnswer(g.grant))
       rows.append(b, el('div', 'muted', g.grant === 'always' ? t('grantAlwaysNote') : t('grantSessionNote')))
     }

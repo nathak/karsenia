@@ -404,3 +404,6 @@ dialog .sugg { font-size: var(--fs-ui); color: var(--muted); }
   .pwd, .sep, #turn-pill, #composer .hint { display: none; }
   .msg.user { max-width: 92%; }
 }
+
+/* A permission button with a long rule is cut with an ellipsis; its whole text is the tooltip. */
+.grants button { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }

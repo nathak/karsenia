@@ -64,6 +64,8 @@ pub struct Row {
     pub indent: i32,
     /// The images of a user message.
     pub images: Option<Shots>,
+    /// A table's cells by row (the first row is the header).
+    pub grid: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +123,8 @@ pub struct Head {
     pub team: Option<TeamSeen>,
     /// How many `/swb` command turns have ended: a button waits for this to change.
     pub team_turns: u32,
+    /// What the last `/swb status` answered (the plug-in's text summary of the contract) and when: shown when no snapshot exists.
+    pub swb_status: Option<(String, u64)>,
 }
 
 pub struct Transcript {
@@ -135,6 +139,7 @@ pub struct Transcript {
     ts: u64,
     /// The turn in progress answers a `/swb` message, and the status reply it showed so far.
     team_cmd: bool,
+    cmd_status: bool,
     team_cand: Option<TeamLine>,
     pub head: Head,
     /// Permission requests waiting, oldest first (their whole data as the chat sent it).
@@ -305,6 +310,9 @@ pub fn guard_kind(text: &str) -> Option<&'static str> {
         Some("team")
     } else if head.to_ascii_lowercase().contains("vhdb guard") {
         Some("vhdb")
+    } else if head.contains("The user declined this") && head.contains("in SmartWorkbench") {
+        // The guard asked, and in a chat with no terminal to ask in its question ends as a "decline": nobody here refused it.
+        Some("swb_ask")
     } else {
         None
     }
@@ -376,7 +384,7 @@ fn local(ms: u64) -> Option<(String, String)> {
 
 impl Transcript {
     pub fn new(lang: Lang) -> Self {
-        Self { lang, nodes: Vec::new(), tools: HashMap::new(), live_text: None, live_think: None, think_ms: None, asst_meta: false, day: String::new(), ts: 0, team_cmd: false, team_cand: None, head: Head::default(), pending: Vec::new(), replaying: true, first_text: None, expanded: Default::default() }
+        Self { lang, nodes: Vec::new(), tools: HashMap::new(), live_text: None, live_think: None, think_ms: None, asst_meta: false, day: String::new(), ts: 0, team_cmd: false, cmd_status: false, team_cand: None, head: Head::default(), pending: Vec::new(), replaying: true, first_text: None, expanded: Default::default() }
     }
 
     fn t(&self, key: &str) -> String {
@@ -474,6 +482,7 @@ impl Transcript {
                 self.push(Item::UserMeta(time), None);
                 let mut text = s(data, "text").to_owned();
                 self.team_cmd = team::is_swb_command(&text);
+                self.cmd_status = text.trim() == "/swb status";
                 self.team_cand = None;
                 if self.first_text.is_none() && !text.is_empty() && !crate::session::is_slash(&text) {
                     self.first_text = Some(text.chars().take(60).collect());
@@ -645,6 +654,13 @@ impl Transcript {
                 if self.team_cmd {
                     // The state counts only for a `/swb` message answered without a model: a sentence a model wrote, or one a
                     // file carried into its answer, does not change it.
+                    if zero && self.cmd_status {
+                        let text: String = s(d, "result").chars().filter(|c| !c.is_control() || *c == '\n').take(4000).collect();
+                        if !text.trim().is_empty() {
+                            self.head.swb_status = Some((text, self.ts));
+                        }
+                    }
+                    self.cmd_status = false;
                     if zero {
                         let line = self.team_cand.take().or_else(|| team::parse_team_line(s(d, "result")));
                         if let Some(line) = line {
@@ -757,6 +773,7 @@ impl Transcript {
         let lang = self.lang;
         let (state, mut status) = match guard {
             Some("team") => ("guard", tr(lang, "guard_team")),
+            Some("swb_ask") => ("guard", tr(lang, "guard_swb_ask")),
             Some(_) => ("guard", tr(lang, "guard_vhdb")),
             None if is_error => ("err", tr(lang, "error")),
             None => ("done", tr(lang, "done")),
@@ -839,7 +856,7 @@ impl Transcript {
                             Row { text: shown, label: if lang.is_empty() { "text".into() } else { lang.to_lowercase() }, extra: fill(&self.t("lines"), &[("n", n.to_string())]), detail: if foldable { fill(&self.t(if open { "fold" } else { "show_all" }), &[("n", n.to_string())]) } else { String::new() }, open, add: i32::from(foldable), key, ..row("code") }
                         }
                         Block::Rule => Row { key, ..row("rule") },
-                        Block::Table(text) => Row { text: text.clone(), key, ..row("table") },
+                        Block::Table { text, grid } => Row { text: text.clone(), grid: grid.clone(), key, ..row("table") },
                     });
                 }
                 if out.len() == start && !src.trim().is_empty() {
@@ -960,6 +977,30 @@ mod tests {
         t.toggle("t1");
         let tool = t.rows().into_iter().find(|r| r.kind == "tool").unwrap();
         assert!(tool.open && tool.detail.contains("out") && tool.detail.contains("ls -la"));
+    }
+
+    #[test]
+    fn the_answer_of_swb_status_is_kept_and_only_for_that_command() {
+        let mut t = chat();
+        t.apply("user", &json!({"text": "/swb status"}), 1000);
+        t.apply("claude", &json!({"type": "result", "subtype": "success", "num_turns": 0, "is_error": false, "result": "smartworkbench: WB ○ No goal set\nGoal: — (unlocked, draft)"}), 2000);
+        let (text, at) = t.head.swb_status.clone().expect("kept");
+        assert!(text.contains("Goal: —") && text.contains('\n'));
+        assert_eq!(at, 2000);
+        // Another command, or a turn a model answered, does not replace it.
+        t.apply("user", &json!({"text": "/swb lock"}), 3000);
+        t.apply("claude", &json!({"type": "result", "subtype": "success", "num_turns": 0, "is_error": false, "result": "smartworkbench: locked"}), 4000);
+        t.apply("user", &json!({"text": "/swb status"}), 5000);
+        t.apply("claude", &json!({"type": "result", "subtype": "success", "num_turns": 2, "is_error": false, "result": "a sentence a model wrote"}), 6000);
+        assert_eq!(t.head.swb_status.as_ref().map(|s| s.1), Some(2000));
+    }
+
+    #[test]
+    fn a_guard_question_that_had_nobody_to_ask_is_told_from_a_refusal() {
+        let msg = "<tool_use_error>The user declined this Bash call in SmartWorkbench (may print secrets).</tool_use_error>";
+        assert_eq!(guard_kind(msg), Some("swb_ask"));
+        assert_eq!(guard_kind("The user declined this call"), None);
+        assert_eq!(guard_kind("SmartWorkbench team mode: not small"), Some("team"));
     }
 
     #[test]
