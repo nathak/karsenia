@@ -12,9 +12,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use crate::claude::process::{ClaudeProcess, ProcEvent, SpawnOpts};
 use crate::claude::protocol::{self, CanUseTool, Event, Image, IMAGE_TYPES, MAX_IMAGE_BYTES};
 use crate::extract::TurnEnd;
-use crate::index::Index;
-use crate::memory::{recall_block, secret_hit, MemoryStore};
-use crate::skills::SkillStore;
+use crate::accounts::AccountRef;
+use crate::memory::{recall_block, secret_hit};
+use crate::realm::Realm;
 use crate::mcp::McpGate;
 use crate::providers::{ProviderRef, ProviderStore};
 use crate::random_hex;
@@ -32,6 +32,8 @@ pub struct ProposalInput {
     pub last_seq: u64,
     /// The chat runs against a provider the person chose: nothing of it is read by a proposal (that would send it to the account).
     pub provider: bool,
+    /// The account the chat runs as: a proposal is read only by the worker of that account.
+    pub account: Option<AccountRef>,
 }
 
 /// A tool call through which text from outside the person's own files and words can enter the chat: the web, a tool of another MCP
@@ -82,6 +84,25 @@ pub struct Meta {
     /// The chat's `claude` runs in a container (only possible with a provider; EXPERIMENTAL).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub container: bool,
+    /// The chat works in its own git worktree (its `cwd`), made and removed by this app (see `worktree`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<crate::worktree::WorktreeRef>,
+    /// The account this chat runs as, fixed for the chat's life. None is the default account (what chats made before accounts
+    /// existed read as). Its notes, skills and history are the ones of that account's realm only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<AccountRef>,
+    /// The `claude` command line session this chat was made from (its conversation was copied into the log): an id the CLI may
+    /// replace on resume, so that "already imported" is judged by this and by `claude_session_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_from: Option<String>,
+    /// The permission mode the chat's `claude` starts with, chosen when the chat was made and fixed for its life. A chat made before
+    /// modes existed reads as the default (no argument).
+    #[serde(default, skip_serializing_if = "crate::claude::perm::PermMode::is_default")]
+    pub permission_mode: crate::claude::perm::PermMode,
+    /// `title` was given by a person (when the chat was made or by renaming): it is then also the CLI's session name (`--name`), and a
+    /// first message does not replace it. False: the title is the first message's words and the CLI is told no name.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub named: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,16 +114,48 @@ pub struct Info {
     pub pending: usize,
 }
 
+/// What a person who allows a request also asks Claude Code to remember.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Grant {
+    /// Nothing: this one call.
+    None,
+    /// This app's own read-only tool, for the rest of the process (what the "allow in this chat" button does).
+    Remember,
+    /// The rule Claude suggested, for the running process (destination `session`).
+    Session,
+    /// The rule Claude suggested, written by Claude Code into the project's `.claude/settings.local.json` (destination `localSettings`).
+    Always,
+}
+
 enum Cmd {
     Send { text: String, images: Vec<Image>, reply: oneshot::Sender<Result<(), String>> },
-    Permission { request_id: String, allow: bool, message: Option<String>, remember: bool, reply: oneshot::Sender<Result<(), String>> },
+    Permission { request_id: String, allow: bool, message: Option<String>, grant: Grant, reply: oneshot::Sender<Result<(), String>> },
     Interrupt { reply: oneshot::Sender<Result<(), String>> },
+    SetModel { model: Option<String>, reply: oneshot::Sender<Result<(), String>> },
+    Rename { title: String, reply: oneshot::Sender<Result<(), String>> },
+    Remove { reply: oneshot::Sender<Result<(), String>> },
     Stop,
     Kill,
     UserTexts { after: u64, since: u64, reply: oneshot::Sender<Vec<(u64, String)>> },
     ProposalInput { since: u64, reply: oneshot::Sender<ProposalInput> },
     Subscribe { after: u64, reply: oneshot::Sender<(Vec<Envelope>, broadcast::Receiver<Envelope>)> },
     Info { reply: oneshot::Sender<Info> },
+    /// Before a chat of an extra account starts its process: what is needed to ask the program whether the account is logged in.
+    Preflight { reply: oneshot::Sender<Result<Option<Login>, String>> },
+    /// About to remove this chat's worktree: refused while a turn runs; otherwise the process ends and nothing more is sent.
+    Retire { reply: oneshot::Sender<Result<(), String>> },
+    /// How removing it went: on success the chat is marked, on failure it can go on.
+    Retired { ok: bool },
+    /// The person accepted the git settings of this chat's project as they are now (see `worktree::fingerprint`).
+    SetConfigHash { hash: String },
+}
+
+/// What it takes to ask `claude auth status` about a chat's account.
+#[derive(Debug, Clone)]
+pub struct Login {
+    pub bin: String,
+    pub dir: PathBuf,
+    pub env: crate::claude::env::EnvPlan,
 }
 
 #[derive(Clone)]
@@ -119,12 +172,45 @@ async fn ask<T>(tx: &mpsc::UnboundedSender<Cmd>, build: impl FnOnce(oneshot::Sen
 
 impl SessionHandle {
     pub async fn send(&self, text: String, images: Vec<Image>) -> Result<(), String> {
+        // A chat of an extra account that is about to start its process: the account must be logged in. The question is asked here and
+        // not inside the chat's task, so a slow answer holds up nothing else of the chat.
+        if let Some(login) = ask(&self.tx, |reply| Cmd::Preflight { reply }).await.unwrap_or_else(|| Err("the session is gone".into()))? {
+            match crate::accounts::status(&login.bin, &login.dir, &login.env, Some(&login.dir)).await {
+                Ok(status) if !status.logged_in => return Err("this account is not logged in; log in from the Accounts panel, then send again".into()),
+                Ok(_) => {}
+                Err(error @ crate::accounts::StatusError::Redirected) => return Err(error.message()),
+                // Not being able to ask is not a reason to refuse: the program has no other login to use here, so it fails by itself.
+                Err(error) => tracing::warn!("could not read the login status of an account: {}", error.message()),
+            }
+        }
         ask(&self.tx, |reply| Cmd::Send { text, images, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
     }
 
     /// `remember` asks Claude Code to allow this one read-only tool for the rest of this process; only the person's click sets it.
     pub async fn permission(&self, request_id: String, allow: bool, message: Option<String>, remember: bool) -> Result<(), String> {
-        ask(&self.tx, |reply| Cmd::Permission { request_id, allow, message, remember, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+        self.answer(request_id, allow, message, if remember { Grant::Remember } else { Grant::None }).await
+    }
+
+    /// The answer to a permission request, with what the person also asked Claude Code to remember (see `Grant`).
+    pub async fn answer(&self, request_id: String, allow: bool, message: Option<String>, grant: Grant) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::Permission { request_id, allow, message, grant, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
+    /// Changes the model the chat runs with (None: Claude Code's default). Only between turns: the running `claude` is ended and the
+    /// next message starts it again with `--resume` and the new `--model`, so the conversation goes on with the other model.
+    pub async fn set_model(&self, model: Option<String>) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::SetModel { model, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
+    /// Gives the chat a name (blank is refused; control characters are dropped; 60 characters at most). A first message does not replace it.
+    pub async fn rename(&self, title: String) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::Rename { title, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
+    /// Deletes the chat for good: its process, its log, its settings file and what it left in the run folder. Not while a turn runs
+    /// or a question waits, and not while it has a worktree that is not removed (remove that first).
+    pub async fn remove(&self) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::Remove { reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
     }
 
     pub async fn interrupt(&self) -> Result<(), String> {
@@ -158,6 +244,20 @@ impl SessionHandle {
     pub async fn info(&self) -> Option<Info> {
         ask(&self.tx, |reply| Cmd::Info { reply }).await
     }
+
+    /// Ends the process and stops new messages so the worktree can be removed; Err("busy") while a turn runs.
+    pub async fn retire(&self) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::Retire { reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
+    /// Tells the chat whether its worktree was removed (marks it) or not (lets it go on).
+    pub fn retired(&self, ok: bool) {
+        let _ = self.tx.send(Cmd::Retired { ok });
+    }
+
+    pub fn set_config_hash(&self, hash: String) {
+        let _ = self.tx.send(Cmd::SetConfigHash { hash });
+    }
 }
 
 pub struct Setup {
@@ -165,14 +265,10 @@ pub struct Setup {
     pub bin: String,
     pub dir: PathBuf,
     pub log: Vec<Envelope>,
-    pub index: Option<Arc<Index>>,
+    /// The notes, skills and history of this chat's account. None for a provider chat (it gets nothing of the account's side) and
+    /// for a chat whose account is not available.
+    pub realm: Option<Arc<Realm>>,
     pub mcp: Option<Arc<McpGate>>,
-    pub memory: Option<Arc<MemoryStore>>,
-    /// Told when a turn ends well, so auto-save can read what the person wrote.
-    pub turns: Option<mpsc::UnboundedSender<TurnEnd>>,
-    pub skills: Option<Arc<SkillStore>>,
-    /// Told the same, so an automatic skill proposal can be considered.
-    pub skill_turns: Option<mpsc::UnboundedSender<TurnEnd>>,
     pub providers: Option<Arc<ProviderStore>>,
     /// Read when a container chat starts: the runtime and the image are the person's settings.
     pub settings: Option<Arc<crate::settings::SettingsStore>>,
@@ -184,8 +280,8 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-pub fn new_meta(cwd: PathBuf, model: Option<String>, provider: Option<ProviderRef>, container: bool) -> Meta {
-    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider, container }
+pub fn new_meta(cwd: PathBuf, model: Option<String>, provider: Option<ProviderRef>, container: bool, account: Option<AccountRef>) -> Meta {
+    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider, container, worktree: None, account, imported_from: None, permission_mode: Default::default(), named: false }
 }
 
 pub fn log_path(dir: &std::path::Path, sid: &str) -> PathBuf {
@@ -201,7 +297,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, index: setup.index, mcp: setup.mcp, memory: setup.memory, turns: setup.turns, skills: setup.skills, skill_turns: setup.skill_turns, providers: setup.providers, settings: setup.settings, instance: setup.instance, secret: None, seq, bcast, state: State::Idle, process: None, pending: HashMap::new() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secret: None, seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, retire_reply: None };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -212,12 +308,8 @@ struct Actor {
     bin: String,
     dir: PathBuf,
     log: Vec<Envelope>,
-    index: Option<Arc<Index>>,
+    realm: Option<Arc<Realm>>,
     mcp: Option<Arc<McpGate>>,
-    memory: Option<Arc<MemoryStore>>,
-    turns: Option<mpsc::UnboundedSender<TurnEnd>>,
-    skills: Option<Arc<SkillStore>>,
-    skill_turns: Option<mpsc::UnboundedSender<TurnEnd>>,
     providers: Option<Arc<ProviderStore>>,
     settings: Option<Arc<crate::settings::SettingsStore>>,
     instance: String,
@@ -228,6 +320,12 @@ struct Actor {
     state: State,
     process: Option<ClaudeProcess>,
     pending: HashMap<String, CanUseTool>,
+    /// Its worktree is being removed: nothing is sent until that is settled.
+    retiring: bool,
+    /// The chat was deleted: the loop ends and nothing more is written for it.
+    gone: bool,
+    /// Who waits for the process to end before the worktree is removed.
+    retire_reply: Option<oneshot::Sender<Result<(), String>>>,
 }
 
 impl Actor {
@@ -239,6 +337,9 @@ impl Actor {
                     let Some(command) = command else { break };
                     if let Some(new_events) = self.command(command) {
                         events = Some(new_events);
+                    }
+                    if self.gone {
+                        return;
                     }
                 }
                 event = async { match events.as_mut() { Some(rx) => rx.recv().await, None => std::future::pending().await } } => {
@@ -264,7 +365,7 @@ impl Actor {
         if let Ok(line) = serde_json::to_string(&envelope) {
             let _ = crate::private::append_line(&log_path(&self.dir, &self.meta.sid), &line);
         }
-        if let Some(index) = &self.index {
+        if let Some(index) = self.realm.as_ref().and_then(|r| r.index.as_ref()) {
             index.add(&self.meta.cwd.to_string_lossy(), self.meta.created, &envelope);
         }
         self.log.push(envelope.clone());
@@ -298,6 +399,24 @@ impl Actor {
         Ok(Some(provider))
     }
 
+    /// The settings folder and the environment of this chat's account: None for the default account. The folder is looked at again at
+    /// every start (a link or a changed mode put there since is refused), and the chat must still have its realm: an account that was
+    /// removed leaves the chat readable but not startable, and it never falls back to the default account.
+    fn account_env(&self) -> Result<Option<(PathBuf, crate::claude::env::EnvPlan)>, String> {
+        let Some(bound) = &self.meta.account else { return Ok(None) };
+        if self.meta.provider.is_some() {
+            return Err("a chat is of an account or of a provider, not both".into());
+        }
+        if !crate::accounts::valid_id(&bound.id) || self.realm.as_ref().and_then(|r| r.account.as_deref()) != Some(bound.id.as_str()) || self.realm.as_ref().is_some_and(|r| r.is_retired()) {
+            return Err("this chat's account is not available; make a new chat".into());
+        }
+        let home = crate::platform::home_dir();
+        let default = crate::accounts::default_config_dir(std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).as_deref(), home.as_deref());
+        let real = crate::accounts::check_dir(&crate::accounts::config_dir(&self.dir, &bound.id), &self.dir.join("accounts"), default.as_deref())?;
+        let env = crate::claude::env::account_plan(&crate::claude::env::inherited_names(), &real);
+        Ok(Some((real, env)))
+    }
+
     /// The container this chat starts in, when it is a container chat: needs the person's runtime and image, and an address the
     /// container can reach (its own `localhost` is not this computer's).
     fn container_spec(&self, provider: &crate::providers::Provider, config_dir: &std::path::Path) -> Result<Option<crate::claude::container::Spec>, String> {
@@ -313,7 +432,7 @@ impl Actor {
         if real != self.meta.cwd {
             return Err("the project folder is not where this chat was made (a link or a move); make a new chat".into());
         }
-        c::project_allowed(&real, &self.dir, std::env::var_os("HOME").map(PathBuf::from).as_deref(), std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).as_deref()).map_err(str::to_owned)?;
+        c::project_allowed(&real, &self.dir, crate::platform::home_dir().as_deref(), std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).as_deref()).map_err(str::to_owned)?;
         let settings = self.settings.as_ref().map(|s| s.get()).unwrap_or_default();
         let program = c::validate_runtime(settings.container_runtime.as_deref().unwrap_or_default()).map_err(|e| format!("container settings: {e}"))?;
         let image = c::validate_image(settings.container_image.as_deref().unwrap_or_default()).map_err(|e| format!("container settings: {e}"))?;
@@ -327,7 +446,7 @@ impl Actor {
     /// The notes this chat starts with, written to a 0600 file for `--append-system-prompt-file` (never into argv).
     /// It is rebuilt at every start, so a resumed chat gets the notes as they are now.
     fn write_recall(&mut self) -> Option<PathBuf> {
-        let store = self.memory.clone()?;
+        let store = self.realm.as_ref()?.memory.clone()?;
         let notes = store.recall(&self.meta.cwd.to_string_lossy());
         let block = recall_block(&notes)?;
         let path = self.recall_path();
@@ -398,8 +517,49 @@ impl Actor {
                 let _ = reply.send(result);
                 return events;
             }
-            Cmd::Permission { request_id, allow, message, remember, reply } => {
-                let _ = reply.send(self.permission(&request_id, allow, message, remember));
+            Cmd::Permission { request_id, allow, message, grant, reply } => {
+                let _ = reply.send(self.permission(&request_id, allow, message, grant));
+            }
+            Cmd::SetModel { model, reply } => {
+                let (result, restarted) = self.set_model(model);
+                let _ = reply.send(result);
+                if restarted {
+                    // The old process is gone: what it still had to say is not heard (a closed stream replaces its stream).
+                    let (_tx, rx) = mpsc::unbounded_channel();
+                    return Some(rx);
+                }
+            }
+            Cmd::Rename { title, reply } => {
+                let clean: String = title.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(60).collect();
+                let result = if clean.is_empty() {
+                    Err("a name cannot be blank".to_owned())
+                } else {
+                    self.meta.title = clean.clone();
+                    self.meta.named = true;
+                    self.save_meta();
+                    self.emit("renamed", json!({"title": clean}));
+                    // A running-but-idle `claude` is ended so the next message starts it with `--resume` and the new `--name`.
+                    if self.state != State::Running && self.pending.is_empty() && self.process.is_some() {
+                        if let Some(process) = self.process.take() {
+                            process.stop();
+                        }
+                        if let Some(gate) = &self.mcp {
+                            gate.revoke(&self.meta.sid);
+                        }
+                        let _ = std::fs::remove_file(self.recall_path());
+                        let _ = std::fs::remove_dir_all(self.skills_path());
+                        self.set_state(State::Idle);
+                        let _ = reply.send(Ok(()));
+                        let (_tx, rx) = mpsc::unbounded_channel();
+                        return Some(rx);
+                    }
+                    Ok(())
+                };
+                let _ = reply.send(result);
+            }
+            Cmd::Remove { reply } => {
+                let result = self.remove();
+                let _ = reply.send(result);
             }
             Cmd::Interrupt { reply } => {
                 let result = match (&self.state, &self.process) {
@@ -425,7 +585,7 @@ impl Actor {
                 let _ = reply.send(self.proposal_input(since));
             }
             Cmd::UserTexts { after, since, reply } => {
-                let texts = self.log.iter().filter(|_| self.meta.provider.is_none()).filter(|e| e.kind == "user" && e.seq > after && e.ts >= since).filter_map(|e| e.data["text"].as_str().map(|t| (e.seq, t.to_owned()))).collect();
+                let texts = self.log.iter().filter(|_| self.meta.provider.is_none()).filter(|e| e.kind == "user" && e.seq > after && e.ts >= since && e.data["imported"] != true).filter_map(|e| e.data["text"].as_str().map(|t| (e.seq, t.to_owned()))).collect();
                 let _ = reply.send(texts);
             }
             Cmd::Subscribe { after, reply } => {
@@ -435,13 +595,70 @@ impl Actor {
             Cmd::Info { reply } => {
                 let _ = reply.send(self.info());
             }
+            Cmd::Preflight { reply } => {
+                let answer = if self.process.is_some() {
+                    Ok(None)
+                } else {
+                    self.account_env().map(|found| found.map(|(dir, env)| Login { bin: self.bin.clone(), dir, env }))
+                };
+                let _ = reply.send(answer);
+            }
+            Cmd::Retire { reply } => {
+                if self.meta.worktree.is_none() {
+                    let _ = reply.send(Err("this chat has no worktree".to_owned()));
+                } else if self.state == State::Running || self.retire_reply.is_some() {
+                    let _ = reply.send(Err("busy".to_owned()));
+                } else {
+                    self.retiring = true;
+                    match &self.process {
+                        // The answer waits for the process to be gone: a dying claude must not write into the folder being removed.
+                        Some(process) => {
+                            process.stop();
+                            self.retire_reply = Some(reply);
+                        }
+                        None => {
+                            let _ = reply.send(Ok(()));
+                        }
+                    }
+                }
+            }
+            Cmd::Retired { ok } => {
+                self.retiring = false;
+                self.retire_reply = None;
+                if ok {
+                    if let Some(wt) = self.meta.worktree.as_mut() {
+                        wt.removed = true;
+                    }
+                    self.save_meta();
+                    // Every page that has this chat open hears it.
+                    self.emit("worktree_removed", json!({}));
+                }
+            }
+            Cmd::SetConfigHash { hash } => {
+                if let Some(wt) = self.meta.worktree.as_mut() {
+                    wt.config_hash = hash;
+                }
+                self.save_meta();
+            }
         }
         None
     }
 
     fn send(&mut self, text: String, images: Vec<Image>) -> (Result<(), String>, Option<mpsc::UnboundedReceiver<ProcEvent>>) {
+        // Also with a process that is already running: the account was deleted, and a turn must not start under the deletion.
+        if self.realm.as_ref().is_some_and(|r| r.is_retired()) {
+            return (Err("this chat's account is not available; make a new chat".into()), None);
+        }
         if self.state == State::Running {
             return (Err("a turn is already running".into()), None);
+        }
+        if let Some(wt) = &self.meta.worktree {
+            if wt.removed || self.retiring {
+                return (Err("this chat's worktree was removed; the chat can only be read".into()), None);
+            }
+            if !self.meta.cwd.is_dir() {
+                return (Err("this chat's worktree folder is gone; remove the worktree from the chat's header".into()), None);
+            }
         }
         if text.trim().is_empty() && images.is_empty() {
             return (Err("nothing to send".into()), None);
@@ -495,8 +712,16 @@ impl Actor {
                     return (Err(message), None);
                 }
                 None => {
+                    let env = match self.account_env() {
+                        Ok(found) => found.map(|(_, env)| env).unwrap_or_default(),
+                        Err(message) => {
+                            self.emit("error", json!({"message": message}));
+                            return (Err(message), None);
+                        }
+                    };
+                    let account = self.meta.account.as_ref().map(|a| a.id.clone());
                     let mcp_config = match &self.mcp {
-                        Some(gate) => match gate.grant(&self.meta.sid) {
+                        Some(gate) => match gate.grant(&self.meta.sid, account.as_deref()) {
                             Ok(path) => Some(path),
                             Err(error) => {
                                 self.emit("error", json!({"message": format!("history search is off for this chat: {error:#}")}));
@@ -507,10 +732,10 @@ impl Actor {
                     };
                     let system_file = self.write_recall();
                     let plugin_dir = self.write_skills();
-                    (mcp_config, system_file, plugin_dir, Default::default(), None, self.meta.model.clone())
+                    (mcp_config, system_file, plugin_dir, env, None, self.meta.model.clone())
                 }
             };
-            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container };
+            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.named.then(|| self.meta.title.clone()) };
             match ClaudeProcess::spawn(&opts) {
                 Ok((process, rx)) => {
                     self.process = Some(process);
@@ -528,7 +753,8 @@ impl Actor {
             }
         }
 
-        if self.meta.title.is_empty() {
+        // A command (`/swb team on`) is not what the chat is about: the next message names it.
+        if self.meta.title.is_empty() && !is_slash(&text) {
             self.meta.title = text.chars().take(60).collect();
             self.save_meta();
         }
@@ -544,13 +770,34 @@ impl Actor {
         (Ok(()), events)
     }
 
-    fn permission(&mut self, request_id: &str, allow: bool, message: Option<String>, remember: bool) -> Result<(), String> {
-        let Some(ask) = self.pending.remove(request_id) else {
+    /// What a request may be remembered as, for this chat: the rules come from the request's own suggestion only (see `protocol::grants`).
+    /// A provider chat's or a container chat's rules are not written into the project (what such a chat wrote there outlives it and is
+    /// read later by chats of the account), and a request that carries the undocumented `server_policy_ask_only` gets no rule at all.
+    fn grants_for(&self, ask: &protocol::CanUseTool) -> protocol::Grants {
+        if ask.server_policy_ask_only {
+            return protocol::Grants::default();
+        }
+        let mut grants = protocol::grants(&ask.permission_suggestions, &ask.tool_name);
+        if self.meta.provider.is_some() || self.meta.container {
+            grants.always = None;
+        }
+        grants
+    }
+
+    fn permission(&mut self, request_id: &str, allow: bool, message: Option<String>, grant: Grant) -> Result<(), String> {
+        let Some(ask) = self.pending.get(request_id).cloned() else {
             return Err("unknown or already answered".into());
         };
-        // Only the one read-only tool of this app, only on a person's click, and Claude Code decides how long it holds (this process).
-        let rules = (allow && remember && crate::mcp::is_read_only(&ask.tool_name))
-            .then(|| json!([{"type": "addRules", "rules": [{"toolName": ask.tool_name}], "behavior": "allow", "destination": "session"}]));
+        // A rule to remember is checked before the request is taken off the list: a refusal leaves it waiting for a plain answer.
+        let (rules, granted) = match (allow, grant) {
+            (true, Grant::Session) => (self.grants_for(&ask).session.ok_or("there is no rule to remember for this request")?, Some("session")),
+            (true, Grant::Always) => (self.grants_for(&ask).always.ok_or("this request cannot be remembered for the project")?, Some("always")),
+            // Only the one read-only tool of this app, only on a person's click, and Claude Code decides how long it holds (this process).
+            (true, Grant::Remember) if crate::mcp::is_read_only(&ask.tool_name) => (json!([{"type": "addRules", "rules": [{"toolName": ask.tool_name}], "behavior": "allow", "destination": "session"}]), None),
+            _ => (Value::Null, None),
+        };
+        let rules = (!rules.is_null()).then_some(rules);
+        self.pending.remove(request_id);
         // A person allowed this exact note: the save that follows with the same input may be active at once (see mcp_host).
         if allow && ask.tool_name == crate::mcp::full_name(crate::mcp::MEMORY_SAVE) {
             if let Some(gate) = &self.mcp {
@@ -559,7 +806,12 @@ impl Actor {
         }
         let line = if allow { protocol::allow(request_id, &ask.input, rules) } else { protocol::deny(request_id, message.as_deref().unwrap_or("The user declined this.")) };
         let sent = self.process.as_ref().map(|p| p.send_line(line)).unwrap_or(false);
-        self.emit("permission_resolved", json!({"request_id": request_id, "outcome": if allow { "allowed" } else { "denied" }}));
+        let mut resolved = json!({"request_id": request_id, "outcome": if allow { "allowed" } else { "denied" }});
+        if let Some(granted) = granted {
+            resolved["grant"] = json!(granted);
+            resolved["rule"] = json!(self.grants_for(&ask).rule_text);
+        }
+        self.emit("permission_resolved", resolved);
         if sent {
             Ok(())
         } else {
@@ -577,7 +829,10 @@ impl Actor {
                 self.emit("claude", raw);
             }
             ProcEvent::Line(Event::CanUseTool(ask)) => {
-                let data = serde_json::to_value(&ask).unwrap_or(Value::Null);
+                let mut data = serde_json::to_value(&ask).unwrap_or(Value::Null);
+                // What can be remembered for this request, for the dialogs to offer (they never build a rule themselves).
+                let grants = self.grants_for(&ask);
+                data["grants"] = json!({"session": grants.session.is_some().then(|| grants.rule_text.clone()).flatten(), "always": grants.always.is_some().then(|| grants.rule_text.clone()).flatten(), "exact": grants.exact});
                 self.pending.insert(ask.request_id.clone(), ask);
                 self.emit("permission", data);
             }
@@ -588,17 +843,20 @@ impl Actor {
                 // A provider chat is never read by auto-save or skill proposals: their runs go to the account.
                 if subtype == "success" && self.meta.provider.is_none() {
                     let turn = TurnEnd { sid: self.meta.sid.clone(), cwd: self.meta.cwd.to_string_lossy().into_owned() };
-                    if let Some(turns) = &self.turns {
-                        let _ = turns.send(turn.clone());
-                    }
-                    if let Some(turns) = &self.skill_turns {
-                        let _ = turns.send(turn);
+                    if let Some(realm) = &self.realm {
+                        if let Some(turns) = &realm.turns {
+                            let _ = turns.send(turn.clone());
+                        }
+                        if let Some(turns) = &realm.skill_turns {
+                            let _ = turns.send(turn);
+                        }
                     }
                 }
             }
             ProcEvent::Line(Event::ControlResponse { raw, .. }) => self.emit("claude", raw),
             ProcEvent::Line(Event::Raw(raw)) => {
                 self.note_skill_use(&raw);
+                self.note_usage(&raw);
                 self.raw_event(raw)
             }
             ProcEvent::Line(Event::Unparsed(text)) => self.emit("claude", json!({"type": "unparsed", "text": text})),
@@ -611,9 +869,21 @@ impl Actor {
         }
     }
 
+    /// The limits a `rate_limit_event` of this chat's `claude` reports are kept for its account. A provider chat has no Anthropic
+    /// limits, and a live line is the only way in (a replayed log or an imported session never reaches this).
+    fn note_usage(&self, raw: &Value) {
+        if raw["type"] != "rate_limit_event" || self.meta.provider.is_some() {
+            return;
+        }
+        let Some(realm) = &self.realm else { return };
+        if !realm.is_retired() {
+            realm.usage.record(realm.account.as_deref(), &raw["rate_limit_info"], now_ms());
+        }
+    }
+
     /// A chat that calls one of this app's skills (the `Skill` tool with a `tenrec:` name) marks it as used.
     fn note_skill_use(&self, raw: &Value) {
-        let Some(store) = &self.skills else { return };
+        let Some(store) = self.realm.as_ref().and_then(|r| r.skills.as_ref()) else { return };
         if raw["type"] != "assistant" || !raw["parent_tool_use_id"].is_null() {
             return;
         }
@@ -633,7 +903,7 @@ impl Actor {
     /// This chat's approved skills as a one-off plugin folder (files 0600, folders 0700), rebuilt at every start and removed when the
     /// process ends: a skill disabled or deleted since is simply not in it, and a running chat is never changed under its feet.
     fn write_skills(&mut self) -> Option<PathBuf> {
-        let store = self.skills.clone()?;
+        let store = self.realm.as_ref()?.skills.clone()?;
         let path = self.skills_path();
         let names = store.materialize(&self.meta.cwd.to_string_lossy(), &path).ok()?;
         if names.is_empty() {
@@ -652,10 +922,12 @@ impl Actor {
         let external = self.log.iter().any(|e| {
             e.kind == "claude" && e.data["type"] == "assistant" && e.data["message"]["content"].as_array().into_iter().flatten().any(|b| b["type"] == "tool_use" && is_external_tool(b["name"].as_str().unwrap_or_default(), &b["input"]))
         });
-        for e in self.log.iter().filter(|e| e.ts >= since) {
+        // What was imported from an earlier session (its messages, tool calls and results) is not this chat's own work.
+        for e in self.log.iter().filter(|e| e.ts >= since && e.data["imported"] != true) {
             match e.kind.as_str() {
                 "user" => {
-                    if let Some(text) = e.data["text"].as_str() {
+                    // What was imported from an earlier session is not read for a skill proposal: it is not this chat's own work.
+                    if let Some(text) = e.data["text"].as_str().filter(|_| e.data["imported"] != true) {
                         texts.push((e.seq, text.to_owned()));
                     }
                     turn_tools = 0;
@@ -689,7 +961,7 @@ impl Actor {
         if lines.len() > 40 {
             lines.drain(..lines.len() - 40);
         }
-        ProposalInput { cwd: self.meta.cwd.to_string_lossy().into_owned(), user_texts: texts, tool_lines: lines, last_turn_tools: turn_tools, external_used: external, last_seq: self.seq, provider: self.meta.provider.is_some() }
+        ProposalInput { cwd: self.meta.cwd.to_string_lossy().into_owned(), user_texts: texts, tool_lines: lines, last_turn_tools: turn_tools, external_used: external, last_seq: self.seq, provider: self.meta.provider.is_some(), account: self.meta.account.clone() }
     }
 
     fn raw_event(&mut self, raw: Value) {
@@ -707,6 +979,73 @@ impl Actor {
         }
     }
 
+    /// See `SessionHandle::remove`. After it the actor stops (`gone`) and writes nothing more.
+    fn remove(&mut self) -> Result<(), String> {
+        if self.state == State::Running || !self.pending.is_empty() || self.retire_reply.is_some() || self.retiring {
+            return Err("a chat can be deleted between turns, not while one runs or a question waits".into());
+        }
+        if self.meta.worktree.as_ref().is_some_and(|w| !w.removed) {
+            return Err("this chat has a worktree: remove it from the chat's header first".into());
+        }
+        if let Some(process) = self.process.take() {
+            process.stop();
+        }
+        if let Some(gate) = &self.mcp {
+            gate.revoke(&self.meta.sid);
+        }
+        let sid = self.meta.sid.clone();
+        if !sid.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("not a chat id".into());
+        }
+        let _ = std::fs::remove_file(log_path(&self.dir, &sid));
+        let _ = std::fs::remove_file(meta_path(&self.dir, &sid));
+        // What it left in the run folder (`<sid>.mem.txt`, `<sid>.skills`, its MCP file...).
+        if let Ok(entries) = std::fs::read_dir(self.dir.join("run")) {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().starts_with(&format!("{sid}.")) {
+                    let path = entry.path();
+                    let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+                }
+            }
+        }
+        self.gone = true;
+        Ok(())
+    }
+
+    /// See `SessionHandle::set_model`. The second value is true when a process was ended.
+    fn set_model(&mut self, model: Option<String>) -> (Result<(), String>, bool) {
+        if self.state == State::Running || !self.pending.is_empty() {
+            return (Err("the model can be changed between turns, not while one runs or a question waits".into()), false);
+        }
+        if self.meta.provider.is_some() {
+            return (Err("a provider chat's models are set by its provider".into()), false);
+        }
+        if self.realm.as_ref().is_some_and(|r| r.is_retired()) {
+            return (Err("this chat's account is not available; make a new chat".into()), false);
+        }
+        if self.meta.worktree.as_ref().is_some_and(|w| w.removed) {
+            return (Err("this chat's worktree was removed; the chat can only be read".into()), false);
+        }
+        if self.meta.model == model {
+            return (Ok(()), false);
+        }
+        let had = self.process.take();
+        let restarted = had.is_some();
+        if let Some(process) = had {
+            process.stop();
+            if let Some(gate) = &self.mcp {
+                gate.revoke(&self.meta.sid);
+            }
+            let _ = std::fs::remove_file(self.recall_path());
+            let _ = std::fs::remove_dir_all(self.skills_path());
+        }
+        self.meta.model = model.clone();
+        self.save_meta();
+        self.emit("model", json!({"model": model}));
+        self.set_state(State::Idle);
+        (Ok(()), restarted)
+    }
+
     fn exited(&mut self, code: Option<i32>) {
         self.cancel_pending();
         if let Some(gate) = &self.mcp {
@@ -716,6 +1055,9 @@ impl Actor {
         let _ = std::fs::remove_dir_all(self.skills_path());
         self.process = None;
         self.set_state(State::Exited { code });
+        if let Some(reply) = self.retire_reply.take() {
+            let _ = reply.send(Ok(()));
+        }
     }
 }
 
@@ -729,9 +1071,24 @@ fn redact(value: Value, secret: &str) -> Value {
     }
 }
 
+/// A command for Claude Code or a plug-in (`/swb team on`, `/plugin:cmd`), not a topic: `/` and a word, then a space or the
+/// end. A path (`/home/me/a.rs fix this`) is a topic.
+pub fn is_slash(text: &str) -> bool {
+    let Some(rest) = text.trim_start().strip_prefix('/') else { return false };
+    let word: &str = rest.split(char::is_whitespace).next().unwrap_or_default();
+    !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '-'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_is_not_a_topic() {
+        assert!(is_slash("/swb team on") && is_slash("  /cost"));
+        assert!(is_slash("/swb") && is_slash("/plugin:cmd arg"));
+        assert!(!is_slash("look at /etc/hosts") && !is_slash("") && !is_slash("/") && !is_slash("/home/me/a.rs fix this"));
+    }
 
     #[test]
     fn a_key_is_replaced_in_every_string_however_deep_and_other_values_are_left_alone() {
@@ -747,5 +1104,7 @@ mod tests {
         let meta: Meta = serde_json::from_str(old).unwrap();
         assert!(meta.provider.is_none());
         assert!(!serde_json::to_string(&meta).unwrap().contains("provider"));
+        assert!(meta.worktree.is_none(), "an older chat is a plain chat, not a worktree chat");
+        assert!(!serde_json::to_string(&meta).unwrap().contains("worktree"));
     }
 }

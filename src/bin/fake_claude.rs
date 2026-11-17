@@ -5,6 +5,7 @@
 //!   {"$sleep":ms}                                    wait
 //!   {"$exit":code}                                   end the process
 //! FAKE_ENV_LOG: one JSON line per start, `{"argv": [...], "env": {...}}`, with the variables a credential could ride in (test values only).
+//! FAKE_AUTH: a file holding what `auth status` prints (`$DIR` stands for CLAUDE_CONFIG_DIR); `auth logout` logs `AUTH_LOGOUT`.
 //! FAKE_LOG: every argument line (`ARGV ...`) and every stdin line (`IN ...`) is appended here as it arrives.
 use std::fs::OpenOptions;
 use std::io::{BufRead, Write};
@@ -51,6 +52,21 @@ fn main() {
     log(&log_path, &format!("ARGV {}", std::env::args().skip(1).collect::<Vec<_>>().join(" ")));
     log_env(&std::env::var("FAKE_ENV_LOG").ok());
 
+    // `claude auth status|logout`: status prints FAKE_AUTH's text (`$DIR` is the config folder this run was given) or a logged-in answer.
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("auth") {
+        let dir = std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_default();
+        match argv.get(1).map(String::as_str) {
+            Some("status") => {
+                let default = r#"{"loggedIn":true,"email":"fake@example.com","configDirectory":"$DIR"}"#.to_owned();
+                let text = std::env::var("FAKE_AUTH").ok().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or(default);
+                println!("{}", text.trim().replace("$DIR", &dir));
+            }
+            Some("logout") => log(&log_path, "AUTH_LOGOUT"),
+            _ => {}
+        }
+        return;
+    }
     // A scheduled run (--max-turns with --output-format json): the prompt on stdin, one JSON result out.
     //   FAKE_SCHED: a file holding the result line to print; FAKE_SCHED_SLEEP_MS: wait first; FAKE_SCHED_EXIT: exit with this code instead.
     if args_has(&std::env::args().collect::<Vec<_>>(), "--max-turns") {

@@ -101,7 +101,7 @@ fn tree_text(dir: &Path, skip: &str) -> String {
 }
 
 fn note(fx: &Fx, cwd: &Path) {
-    let added = fx.server.registry.memory().unwrap().add(NewMem { scope: "project", cwd: Some(cwd.display().to_string()), kind: "fact".into(), text: "The release script is scripts/ship.sh".into(), source: "manual", sid: None, seq: None, status: "active", instr: false, allow_secret: false });
+    let added = fx.server.registry.realm(None).unwrap().memory.clone().unwrap().add(NewMem { scope: "project", cwd: Some(cwd.display().to_string()), kind: "fact".into(), text: "The release script is scripts/ship.sh".into(), source: "manual", sid: None, seq: None, status: "active", instr: false, allow_secret: false });
     assert!(matches!(added, tenrec::memory::Added::Saved(_)), "{added:?}");
 }
 
@@ -196,7 +196,7 @@ async fn a_provider_chat_is_not_read_for_notes_skills_or_search_and_a_normal_cha
     assert!(provider_chat.proposal_input(0).await.unwrap().provider);
 
     // Not in the history index either: the account's chats search it.
-    let index = registry.index().unwrap();
+    let index = registry.realm(None).unwrap().index.clone().unwrap();
     index.flush();
     let search = |q: &str| index.search(&SearchQuery { q: q.into(), cwd: None, sid: None, since: None, limit: 10 }).unwrap();
     assert!(search("PROVIDERNEEDLE").is_empty(), "a provider chat's words are in the history index");
@@ -286,7 +286,7 @@ async fn the_providers_panel_takes_a_key_and_never_gives_it_back_and_a_new_chat_
 
     // A skill proposal for a provider chat is refused: its run would go to the account.
     let sid = created["sid"].as_str().unwrap().to_owned();
-    ws.send(Message::Text(json!({"op": "skill_propose", "rid": 9, "sid": sid, "hint": "a hint"}).to_string())).await.unwrap();
+    ws.send(Message::Text(json!({"op": "skill_propose", "account": null, "rid": 9, "sid": sid, "hint": "a hint"}).to_string())).await.unwrap();
     let (notice, _) = next_text(&mut ws, &["skill_notice"]).await;
     assert!(notice["data"]["text"].as_str().unwrap().contains("another provider"), "{notice}");
 }
@@ -336,7 +336,7 @@ async fn a_chat_keeps_its_provider_after_a_restart_and_is_still_not_in_the_histo
     turn(&again, "RESTARTAFTERWORD").await;
     let normal_again = reopened.get(&normal.sid).unwrap();
     turn(&normal_again, "RESTARTNORMALAFTER").await;
-    let index = reopened.index().unwrap();
+    let index = reopened.realm(None).unwrap().index.clone().unwrap();
     index.flush();
     let search = |q: &str| index.search(&SearchQuery { q: q.into(), cwd: None, sid: None, since: None, limit: 10 }).unwrap();
     assert!(!search("RESTARTNORMALWORD").is_empty(), "a normal chat is brought back into the index at a restart");

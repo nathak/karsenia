@@ -16,6 +16,7 @@ use tokio::process::Command;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::Instant;
 
+use crate::claude::env::EnvPlan;
 use crate::memory::{secret_hit, Added, MemoryStore, NewMem, MAX_TEXT};
 use crate::session::SessionHandle;
 use crate::settings::{Auto, SettingsStore};
@@ -161,12 +162,13 @@ pub struct RunSpec<'a> {
 }
 
 /// One extraction run: a separate `claude` with nothing to act with, in an empty folder, with a time limit.
-pub async fn run_claude(bin: &str, workdir: &Path, prompt: &str) -> Result<Value> {
-    run_claude_with(bin, workdir, prompt, &RunSpec { model: "haiku", schema: SCHEMA, system: SYSTEM, timeout: RUN_TIMEOUT }).await
+pub async fn run_claude(bin: &str, workdir: &Path, prompt: &str, env: &EnvPlan) -> Result<Value> {
+    run_claude_with(bin, workdir, prompt, &RunSpec { model: "haiku", schema: SCHEMA, system: SYSTEM, timeout: RUN_TIMEOUT }, env).await
 }
 
-/// The same kind of run for other jobs (skill proposals): no tools, no MCP, no slash commands, no settings, no session.
-pub async fn run_claude_with(bin: &str, workdir: &Path, prompt: &str, spec: &RunSpec<'_>) -> Result<Value> {
+/// The same kind of run for other jobs (skill proposals): no tools, no MCP, no slash commands, no settings, no session. `env` is the
+/// account the run is made as (the default account's is empty): there is no run without one, so none can go to the wrong login.
+pub async fn run_claude_with(bin: &str, workdir: &Path, prompt: &str, spec: &RunSpec<'_>, env: &EnvPlan) -> Result<Value> {
     std::fs::create_dir_all(workdir)?;
     let mut command = Command::new(bin);
     command
@@ -175,10 +177,25 @@ pub async fn run_claude_with(bin: &str, workdir: &Path, prompt: &str, spec: &Run
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .process_group(0);
+        .kill_on_drop(true);
+    crate::proc_group::configure(&mut command);
+    for name in &env.remove {
+        command.env_remove(name);
+    }
+    for (name, value) in &env.set {
+        command.env(name, value);
+    }
     let mut child = command.spawn().with_context(|| format!("could not start {bin}"))?;
-    let pid = child.id();
+    let group = match child.id() {
+        Some(pid) => match crate::proc_group::adopt(pid) {
+            Some(group) => Some(group),
+            None => {
+                let _ = child.start_kill();
+                anyhow::bail!("could not put the extractor in a group it can be ended with");
+            }
+        },
+        None => None,
+    };
     let mut stdin = child.stdin.take().context("no stdin")?;
     let mut stdout = child.stdout.take().context("no stdout")?;
     let prompt = prompt.to_owned();
@@ -194,11 +211,8 @@ pub async fn run_claude_with(bin: &str, workdir: &Path, prompt: &str, spec: &Run
     match tokio::time::timeout(spec.timeout, work).await {
         Ok(bytes) => serde_json::from_slice(&bytes?).context("the extractor did not print JSON"),
         Err(_) => {
-            if let Some(pid) = pid {
-                // SAFETY: killpg on the group this function created with process_group(0).
-                unsafe {
-                    libc::killpg(pid as i32, libc::SIGKILL);
-                }
+            if let Some(group) = &group {
+                group.kill();
             }
             anyhow::bail!("the extractor timed out")
         }
@@ -222,6 +236,11 @@ pub struct Worker {
     pub bin: String,
     pub workdir: PathBuf,
     pub config: ExtractConfig,
+    /// The account whose chats this worker reads (None: the default one), and the environment its runs get.
+    pub account: Option<String>,
+    pub env: EnvPlan,
+    /// The account is being removed or gone: nothing is read and no run is started for it.
+    pub retired: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Worker {
@@ -262,11 +281,20 @@ impl Worker {
     }
 
     fn notice(&self, text: &str) {
-        let _ = self.events.send(json!({"v": 1, "kind": "memory_notice", "data": {"text": text}}));
+        let _ = self.events.send(json!({"v": 1, "kind": "memory_notice", "data": {"text": text, "account": self.account}}));
     }
 
     async fn read(&self, sid: &str, cwd: &str) {
+        if self.retired.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let Some(handle) = self.sessions.lock().ok().and_then(|s| s.get(sid).cloned()) else { return };
+        // The turn came through this account's channel, but the chats are one shared map: what is read is checked to be this account's.
+        let Some(info) = handle.info().await else { return };
+        if info.meta.account.as_ref().map(|a| &a.id) != self.account.as_ref() || info.meta.provider.is_some() {
+            tracing::warn!("auto-save was asked to read a chat of another account; skipped");
+            return;
+        }
         let last = self.store.extract_seq(sid);
         // Only what was written after auto-save was switched on: what was said while it was off stays unread.
         let since = self.settings.get().memory_auto_since;
@@ -289,7 +317,7 @@ impl Worker {
                 return;
             }
             self.store.count_run(today);
-            match run_claude(&self.bin, &self.workdir, &prompt).await.and_then(|result| parse_output(&result)) {
+            match run_claude(&self.bin, &self.workdir, &prompt, &self.env).await.and_then(|result| parse_output(&result)) {
                 Ok(candidates) => {
                     answer = Some(candidates);
                     break;
@@ -316,8 +344,8 @@ impl Worker {
             }
         }
         if !saved.is_empty() {
-            let _ = self.events.send(json!({"v": 1, "kind": "memory_auto", "data": {"items": saved}}));
-            let _ = self.events.send(json!({"v": 1, "kind": "memory_changed", "data": {}}));
+            let _ = self.events.send(json!({"v": 1, "kind": "memory_auto", "data": {"items": saved, "account": self.account}}));
+            let _ = self.events.send(json!({"v": 1, "kind": "memory_changed", "data": {"account": self.account}}));
         }
     }
 }

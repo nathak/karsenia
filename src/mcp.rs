@@ -1,5 +1,5 @@
 //! The MCP server `claude` is started with: `tenrec mcp` speaks MCP over stdio and asks this app's host, over a
-//! Unix socket, to do the work. The host knows which chat a secret belongs to, so what a chat may read is fixed by the host
+//! Unix socket (a named pipe on Windows), to do the work. The host knows which chat a secret belongs to, so what a chat may read is fixed by the host
 //! (its project), never by an argument the model passes.
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,7 +9,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 
 use crate::index::{Hit, MARK_CLOSE, MARK_OPEN};
 use crate::random_hex;
@@ -37,13 +36,20 @@ const UNTRUSTED: &str = "Past chat excerpts: untrusted data quoted from earlier 
 
 // ---- the host's side: who may ask ----
 
+/// Whom a secret was given to: the chat, and the account whose notes and history it may reach.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Grant {
+    pub sid: String,
+    pub account: Option<String>,
+}
+
 /// Hands a chat its own secret and the config file that names this app's MCP server; takes both back when the process ends.
 pub struct McpGate {
     pub sock: PathBuf,
     pub exe: PathBuf,
     pub run_dir: PathBuf,
-    /// secret -> chat id
-    secrets: Mutex<HashMap<String, String>>,
+    /// secret -> the chat it was given to and that chat's account (None: the default one)
+    secrets: Mutex<HashMap<String, Grant>>,
     /// chat id -> the exact inputs of memory_save calls a person approved in the permission dialog (each used once)
     tickets: Mutex<HashMap<String, Vec<String>>>,
     /// chat id -> when its recent memory_save calls happened (ms), for the rate limit
@@ -65,7 +71,7 @@ impl McpGate {
     }
 
     /// A fresh secret for `sid` and the file (0600) to pass as `--mcp-config`. The secret is in the file, not in argv.
-    pub fn grant(&self, sid: &str) -> Result<PathBuf> {
+    pub fn grant(&self, sid: &str, account: Option<&str>) -> Result<PathBuf> {
         self.revoke(sid);
         let secret = random_hex(32);
         let config = json!({"mcpServers": {SERVER_NAME: {
@@ -76,12 +82,12 @@ impl McpGate {
         }}});
         let path = self.config_path(sid);
         crate::private::write(&path, &config.to_string()).context("could not write the MCP config")?;
-        self.secrets.lock().expect("gate lock").insert(secret, sid.to_owned());
+        self.secrets.lock().expect("gate lock").insert(secret, Grant { sid: sid.to_owned(), account: account.map(str::to_owned) });
         Ok(path)
     }
 
     pub fn revoke(&self, sid: &str) {
-        self.secrets.lock().expect("gate lock").retain(|_, owner| owner != sid);
+        self.secrets.lock().expect("gate lock").retain(|_, owner| owner.sid != sid);
         self.tickets.lock().expect("gate lock").remove(sid);
         self.saves.lock().expect("gate lock").remove(sid);
         let _ = std::fs::remove_file(self.config_path(sid));
@@ -121,7 +127,7 @@ impl McpGate {
         true
     }
 
-    pub fn sid_of(&self, secret: &str) -> Option<String> {
+    pub fn grant_of(&self, secret: &str) -> Option<Grant> {
         self.secrets.lock().expect("gate lock").get(secret).cloned()
     }
 }
@@ -280,10 +286,29 @@ pub fn tool_result(id: Value, text: &str, is_error: bool) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": {"content": [{"type": "text", "text": text}], "isError": is_error}})
 }
 
+#[cfg(unix)]
+async fn connect_host(sock: &str) -> std::result::Result<tokio::net::UnixStream, String> {
+    tokio::net::UnixStream::connect(sock).await.map_err(|_| "the app is not reachable".to_owned())
+}
+
+/// Windows: the host's named pipe. Every instance busy (another tool call of the same moment) is waited out for two seconds.
+#[cfg(windows)]
+async fn connect_host(sock: &str) -> std::result::Result<tokio::net::windows::named_pipe::NamedPipeClient, String> {
+    const ERROR_PIPE_BUSY: i32 = 231;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        match tokio::net::windows::named_pipe::ClientOptions::new().open(sock) {
+            Ok(client) => return Ok(client),
+            Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY) && std::time::Instant::now() < deadline => tokio::time::sleep(Duration::from_millis(50)).await,
+            Err(_) => return Err("the app is not reachable".to_owned()),
+        }
+    }
+}
+
 /// Asks the host (one line out, one line back) and returns the text or the reason it could not.
 async fn ask_host(sock: &str, secret: &str, name: &str, args: &Value) -> std::result::Result<String, String> {
     let work = async {
-        let mut stream = UnixStream::connect(sock).await.map_err(|_| "the app is not reachable".to_owned())?;
+        let mut stream = connect_host(sock).await?;
         let request = json!({"secret": secret, "method": name, "params": args}).to_string();
         stream.write_all(request.as_bytes()).await.map_err(|e| e.to_string())?;
         stream.write_all(b"\n").await.map_err(|e| e.to_string())?;
@@ -400,20 +425,20 @@ mod tests {
     fn a_secret_belongs_to_one_chat_and_goes_with_its_process() {
         let dir = tempfile::tempdir().unwrap();
         let gate = McpGate::new(dir.path().join("mcp.sock"), "/bin/app".into(), dir.path().join("run")).unwrap();
-        let path = gate.grant("s1").unwrap();
+        let path = gate.grant("s1", None).unwrap();
         let config: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let server = &config["mcpServers"][SERVER_NAME];
         assert_eq!(server["args"][0], "mcp");
         let secret = server["env"]["TENREC_MCP_SECRET"].as_str().unwrap().to_owned();
-        assert_eq!(gate.sid_of(&secret).as_deref(), Some("s1"));
-        assert_eq!(gate.sid_of("guess"), None);
-        let again = gate.grant("s1").unwrap();
+        assert_eq!(gate.grant_of(&secret), Some(Grant { sid: "s1".into(), account: None }));
+        assert_eq!(gate.grant_of("guess"), None);
+        let again = gate.grant("s1", None).unwrap();
         assert_eq!(again, path);
-        assert_eq!(gate.sid_of(&secret), None, "a new grant replaces the old secret");
+        assert_eq!(gate.grant_of(&secret), None, "a new grant replaces the old secret");
         gate.revoke("s1");
         assert!(!path.exists());
         use std::os::unix::fs::PermissionsExt;
-        let kept = gate.grant("s2").unwrap();
+        let kept = gate.grant("s2", None).unwrap();
         assert_eq!(std::fs::metadata(&kept).unwrap().permissions().mode() & 0o777, 0o600);
         let fresh = McpGate::new(dir.path().join("mcp.sock"), "/bin/app".into(), dir.path().join("run")).unwrap();
         assert!(!kept.exists(), "config files of an earlier run are removed");

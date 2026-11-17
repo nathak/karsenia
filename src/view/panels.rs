@@ -1,0 +1,689 @@
+//! The Memory and Skills panels and the search results, turned into flat rows for the desktop app. The data is what the web
+//! page receives (the `memory`, `skills` and `search_results` replies); nothing here talks to a store.
+use std::collections::{HashMap, HashSet};
+
+use serde_json::Value;
+
+use super::i18n::{fill, tr, Lang};
+use super::markdown::escape;
+use crate::index::{MARK_CLOSE, MARK_OPEN};
+
+/// How long ago, short: "방금" / "now", then minutes, hours, days.
+pub fn ago(ms: u64, now: u64, lang: Lang) -> String {
+    let s = now.saturating_sub(ms) / 1000;
+    match s {
+        0..=59 => if lang == Lang::Ko { "방금".into() } else { "now".into() },
+        60..=3599 => format!("{}m", s / 60),
+        3600..=86399 => format!("{}h", s / 3600),
+        _ => format!("{}d", s / 86400),
+    }
+}
+
+/// The last part of a folder path, for a short label.
+pub fn folder_name(path: &str) -> String {
+    path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(path).to_owned()
+}
+
+fn s(v: &Value, key: &str) -> String {
+    v[key].as_str().unwrap_or_default().to_owned()
+}
+
+fn id(v: &Value) -> String {
+    v["id"].as_i64().map(|n| n.to_string()).unwrap_or_default()
+}
+
+// ---- memory ----
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MemHead {
+    pub available: bool,
+    pub notice: String,
+    /// 0 off, 1 this project, 2 project and the person.
+    pub auto: i32,
+    pub has_cwd: bool,
+    /// The first-run card about auto-save has not been answered.
+    pub card: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MemRow {
+    /// head, note or empty.
+    pub kind: String,
+    /// The section's key for a head; "<section>:<id>" for a note.
+    pub key: String,
+    /// pending, project, user, recent, others or deleted: what a note can do.
+    pub section: String,
+    pub id: String,
+    pub text: String,
+    pub meta: String,
+    pub pinned: bool,
+    pub instr: bool,
+    pub open: bool,
+    pub count: i32,
+}
+
+/// Sections closed until opened.
+pub const MEM_CLOSED: [&str; 3] = ["recent", "others", "deleted"];
+
+/// Whether a section is open: the closed ones are open when listed in `toggled`, the others when not.
+pub fn is_open(key: &str, closed_by_default: &[&str], toggled: &HashSet<String>) -> bool {
+    closed_by_default.contains(&key) == toggled.contains(key)
+}
+
+/// What the search box and the "suggested" chip leave of a list: a head stays only while a row under it does, an empty-section line goes
+/// while a search is on. `text` and `pending` say what a row is for the filter.
+pub fn keep_matching<T: Clone>(rows: &[T], filter: &str, only_pending: bool, kind: impl Fn(&T) -> &str, text: impl Fn(&T) -> String, pending: impl Fn(&T) -> bool) -> Vec<T> {
+    let needle = filter.trim().to_lowercase();
+    if needle.is_empty() && !only_pending {
+        return rows.to_vec();
+    }
+    let mut out: Vec<T> = Vec::new();
+    let mut head: Option<T> = None;
+    for r in rows {
+        match kind(r) {
+            "head" => head = Some(r.clone()),
+            "empty" => {}
+            _ => {
+                if (needle.is_empty() || text(r).to_lowercase().contains(&needle)) && (!only_pending || pending(r)) {
+                    if let Some(h) = head.take() {
+                        out.push(h);
+                    }
+                    out.push(r.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+pub fn memory_view(data: &Value, lang: Lang, now: u64, toggled: &HashSet<String>) -> (MemHead, Vec<MemRow>) {
+    let settings = &data["settings"];
+    let head = MemHead {
+        available: data["available"] == true,
+        notice: s(data, "notice"),
+        auto: match settings["memory_auto"].as_str() {
+            Some("project") => 1,
+            Some("project_user") => 2,
+            _ => 0,
+        },
+        has_cwd: data["cwd"].as_str().is_some_and(|c| !c.is_empty()),
+        card: data["available"] == true && settings["memory_card_seen"] != true,
+    };
+    let mut rows = Vec::new();
+    if !head.available {
+        return (head, rows);
+    }
+    let overview = &data["overview"];
+    let project_title = match data["cwd"].as_str().filter(|c| !c.is_empty()) {
+        Some(cwd) => format!("{} · {}", tr(lang, "mem_project"), folder_name(cwd)),
+        None => tr(lang, "mem_project"),
+    };
+    let sections = [
+        ("pending", "pending", tr(lang, "mem_pending")),
+        ("project", "project", project_title),
+        ("user", "user", tr(lang, "mem_user")),
+        ("recent", "recent_auto", tr(lang, "mem_recent")),
+        ("others", "others", tr(lang, "mem_others")),
+        ("deleted", "deleted", tr(lang, "mem_deleted")),
+    ];
+    let mut any = false;
+    for (key, field, title) in sections {
+        let notes = overview[field].as_array().cloned().unwrap_or_default();
+        // The pending, project and person sections are shown even when empty only if something else is there: an empty
+        // panel shows one line instead.
+        if notes.is_empty() {
+            continue;
+        }
+        any = true;
+        let open = is_open(key, &MEM_CLOSED, toggled);
+        rows.push(MemRow { kind: "head".into(), key: key.into(), section: key.into(), text: title, open, count: notes.len() as i32, ..Default::default() });
+        if !open {
+            continue;
+        }
+        for note in &notes {
+            let source = match note["source"].as_str() {
+                Some("claude") => tr(lang, "mem_src_claude"),
+                Some("auto") => tr(lang, "mem_src_auto"),
+                _ => tr(lang, "mem_src_manual"),
+            };
+            let when = note["deleted_at"].as_u64().filter(|_| key == "deleted").or(note["updated"].as_u64()).unwrap_or(0);
+            let mut meta = format!("{source} · {}", ago(when, now, lang));
+            if key == "others" {
+                if let Some(cwd) = note["cwd"].as_str() {
+                    meta = format!("{} · {meta}", folder_name(cwd));
+                }
+            }
+            rows.push(MemRow {
+                kind: "note".into(),
+                key: format!("{key}:{}", id(note)),
+                section: key.into(),
+                id: id(note),
+                text: s(note, "text"),
+                meta,
+                pinned: note["pinned"] == true,
+                instr: note["instr"] == true,
+                ..Default::default()
+            });
+        }
+    }
+    if !any {
+        rows.push(MemRow { kind: "empty".into(), key: "empty".into(), text: tr(lang, "mem_empty"), ..Default::default() });
+    }
+    (head, rows)
+}
+
+// ---- skills ----
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SkHead {
+    pub available: bool,
+    pub notice: String,
+    pub auto: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SkillRow {
+    /// head, proposal, skill or empty.
+    pub kind: String,
+    pub key: String,
+    /// proposals, active or deleted.
+    pub section: String,
+    pub id: String,
+    pub name: String,
+    pub meta: String,
+    pub description: String,
+    /// SKILL.md as it would be saved (a proposal) or the current body (a skill).
+    pub body: String,
+    /// One line per finding: "line 3 · code · excerpt".
+    pub risks: String,
+    pub has_block: bool,
+    pub has_warn: bool,
+    pub enabled: bool,
+    /// A proposal to improve a skill (its name stays).
+    pub improve: bool,
+    /// The active version of a skill.
+    pub version: i32,
+    pub open: bool,
+    pub count: i32,
+}
+
+/// One line per finding: "must fix · line 3 · code · excerpt".
+pub fn risk_lines(risks: &[Value], lang: Lang) -> String {
+    risks
+        .iter()
+        .map(|r| {
+            let level = if r["level"] == "block" { tr(lang, "sk_blocked") } else { tr(lang, "sk_warn") };
+            let place = match r["line"].as_u64() {
+                Some(0) | None => String::new(),
+                Some(n) => format!("{} · ", fill(&tr(lang, "sk_line"), &[("n", n.to_string())])),
+            };
+            format!("{level} · {place}{} · {}", s(r, "code"), s(r, "excerpt"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SkVer {
+    pub n: i32,
+    pub meta: String,
+    pub description: String,
+    pub current: bool,
+}
+
+/// The versions of a skill, newest first as the server lists them; `current` is the active one.
+pub fn versions_view(data: &Value, current: i64, lang: Lang, now: u64) -> Vec<SkVer> {
+    data["versions"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .map(|v| {
+                    let n = v["n"].as_i64().unwrap_or(0);
+                    let source = match v["source"].as_str() {
+                        Some("claude") => tr(lang, "mem_src_claude"),
+                        Some("auto") => tr(lang, "mem_src_auto"),
+                        _ => tr(lang, "mem_src_manual"),
+                    };
+                    SkVer { n: n as i32, meta: format!("v{n} · {source} · {}", ago(v["created"].as_u64().unwrap_or(0), now, lang)), description: s(v, "description"), current: n == current }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Skill sections closed until opened.
+pub const SK_CLOSED: [&str; 1] = ["deleted"];
+
+pub fn skills_view(data: &Value, lang: Lang, now: u64, toggled: &HashSet<String>) -> (SkHead, Vec<SkillRow>) {
+    let head = SkHead { available: data["available"] == true, notice: s(data, "notice"), auto: data["auto"] == true };
+    let mut rows = Vec::new();
+    if !head.available {
+        return (head, rows);
+    }
+    let overview = &data["overview"];
+    let scope = |v: &Value| if v["scope"] == "user" { tr(lang, "sk_scope_user") } else { v["cwd"].as_str().map(folder_name).unwrap_or_else(|| tr(lang, "sk_scope_project")) };
+    let mut any = false;
+    for (key, title) in [("proposals", tr(lang, "sk_pending")), ("active", tr(lang, "sk_active")), ("deleted", tr(lang, "sk_deleted"))] {
+        let items = overview[key].as_array().cloned().unwrap_or_default();
+        if items.is_empty() {
+            continue;
+        }
+        any = true;
+        let open = is_open(key, &SK_CLOSED, toggled);
+        rows.push(SkillRow { kind: "head".into(), key: key.into(), section: key.into(), name: title, open, count: items.len() as i32, ..Default::default() });
+        if !open {
+            continue;
+        }
+        for item in &items {
+            if key == "proposals" {
+                let risks = item["risks"].as_array().cloned().unwrap_or_default();
+                let lines = risk_lines(&risks, lang);
+                let target = item["target"].as_str().filter(|t| !t.is_empty());
+                let mut meta = scope(item);
+                if target.is_some() {
+                    meta = format!("{} · {meta}", tr(lang, "sk_improve_tag"));
+                }
+                meta = format!("{meta} · {}", ago(item["created"].as_u64().unwrap_or(0), now, lang));
+                rows.push(SkillRow {
+                    kind: "proposal".into(),
+                    key: format!("p:{}", id(item)),
+                    section: key.into(),
+                    id: id(item),
+                    name: s(item, "name"),
+                    meta,
+                    description: s(item, "description"),
+                    body: s(item, "body"),
+                    risks: lines,
+                    improve: target.is_some(),
+                    has_block: risks.iter().any(|r| r["level"] == "block"),
+                    has_warn: risks.iter().any(|r| r["level"] == "warn"),
+                    ..Default::default()
+                });
+            } else {
+                let enabled = item["status"] == "active";
+                let used = match item["last_used"].as_u64() {
+                    Some(t) => format!("{} {}", tr(lang, "sk_last_used"), ago(t, now, lang)),
+                    None => tr(lang, "sk_never"),
+                };
+                let mut meta = format!("{} · v{} · {used}", scope(item), item["version"].as_i64().unwrap_or(1));
+                if key == "active" && !enabled {
+                    meta = format!("{} · {meta}", tr(lang, "sk_disabled_tag"));
+                }
+                rows.push(SkillRow {
+                    kind: "skill".into(),
+                    key: format!("{key}:{}", id(item)),
+                    section: key.into(),
+                    id: id(item),
+                    name: s(item, "name"),
+                    meta,
+                    description: s(item, "description"),
+                    body: s(item, "body"),
+                    enabled,
+                    version: item["version"].as_i64().unwrap_or(1) as i32,
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    if !any {
+        rows.push(SkillRow { kind: "empty".into(), key: "empty".into(), name: tr(lang, "sk_empty"), ..Default::default() });
+    }
+    (head, rows)
+}
+
+// ---- search ----
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HitRow {
+    pub sid: String,
+    pub title: String,
+    pub meta: String,
+    /// The snippet as safe markdown, the match in bold.
+    pub md: String,
+    pub plain: String,
+}
+
+/// A snippet with MARK_OPEN / MARK_CLOSE around the matches: escaped markdown with the matches in bold, and the plain text.
+/// Line breaks become spaces; a mark without its pair is dropped.
+pub fn snippet_md(snippet: &str) -> (String, String) {
+    let flat: String = snippet.chars().map(|c| if c == '\n' || c == '\r' || c == '\t' { ' ' } else { c }).collect();
+    let (mut md, mut plain, mut part) = (String::new(), String::new(), String::new());
+    let mut inside = false;
+    let close = |md: &mut String, part: &mut String, bold: bool| {
+        let text = std::mem::take(part);
+        let core = text.trim();
+        if bold && !core.is_empty() {
+            // Spaces stay outside the marks: `** x**` is not bold in markdown.
+            let (lead, tail) = (&text[..text.len() - text.trim_start().len()], &text[text.trim_end().len()..]);
+            md.push_str(&format!("{lead}**{}**{tail}", escape(core)));
+        } else {
+            md.push_str(&escape(&text));
+        }
+    };
+    for c in flat.chars() {
+        match c {
+            MARK_OPEN if !inside => {
+                close(&mut md, &mut part, false);
+                inside = true;
+            }
+            MARK_CLOSE if inside => {
+                close(&mut md, &mut part, true);
+                inside = false;
+            }
+            MARK_OPEN | MARK_CLOSE => {}
+            c if c.is_control() => {}
+            c => {
+                part.push(c);
+                plain.push(c);
+            }
+        }
+    }
+    close(&mut md, &mut part, inside);
+    // Leading spaces would make an indented code block.
+    (md.trim_start().to_owned(), plain)
+}
+
+pub fn hits_view(data: &Value, lang: Lang, now: u64) -> Result<Vec<HitRow>, String> {
+    if let Some(error) = data["error"].as_str() {
+        return Err(error.to_owned());
+    }
+    Ok(data["hits"]
+        .as_array()
+        .map(|hits| {
+            hits.iter()
+                .map(|hit| {
+                    let (md, plain) = snippet_md(hit["snippet"].as_str().unwrap_or_default());
+                    let title = s(hit, "title");
+                    let title = if title.is_empty() { tr(lang, "untitled") } else { title };
+                    let role = if hit["role"] == "user" { tr(lang, "you") } else { "Claude".to_owned() };
+                    HitRow { sid: s(hit, "sid"), title, meta: format!("{role} · {} · {}", folder_name(&s(hit, "cwd")), ago(hit["ts"].as_u64().unwrap_or(0), now, lang)), md, plain }
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+// ---- accounts ----
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AcctHead {
+    pub notice: String,
+    /// Fewer than the eight accounts the app allows.
+    pub can_add: bool,
+    /// The account picker's entries, the default account first, and the id behind each (None for the default one).
+    pub names: Vec<String>,
+    pub ids: Vec<Option<String>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AcctRow {
+    /// "" for the default account.
+    pub id: String,
+    pub name: String,
+    pub sub: String,
+    /// never, busy, in, out, error or closed.
+    pub state: String,
+    pub chats: usize,
+    pub open: bool,
+    pub is_default: bool,
+    /// What logs this account in from a terminal.
+    pub login: String,
+    /// The folder this account's `claude` keeps its login and history in.
+    pub dir: String,
+}
+
+/// The Accounts card: the default account, then each extra one. `status` holds what `account_status` said per account
+/// ("" for the default one): no key when never asked, None while asking. `chats` counts the chats of each account.
+pub fn accounts_view(list: &Value, status: &HashMap<String, Option<Value>>, chats: &HashMap<String, usize>, lang: Lang) -> (AcctHead, Vec<AcctRow>) {
+    let accounts = list["accounts"].as_array().cloned().unwrap_or_default();
+    let mut head = AcctHead { notice: s(list, "notice"), can_add: accounts.len() < 8, names: vec![tr(lang, "acct_default")], ids: vec![None] };
+    // The state goes on the row's pill; the line under it says only what the pill does not (the email, the error).
+    let describe = |key: &str, open: bool| -> (String, String) {
+        if !open {
+            return ("closed".into(), String::new());
+        }
+        match status.get(key) {
+            None => ("never".into(), String::new()),
+            Some(None) => ("busy".into(), String::new()),
+            Some(Some(data)) => match data.get("error").and_then(Value::as_str) {
+                Some(e) => ("error".into(), fill(&tr(lang, "acct_st_failed"), &[("e", e.to_owned())])),
+                None if data["status"]["logged_in"] == true => {
+                    let st = &data["status"];
+                    let mut parts = Vec::new();
+                    for key in ["email", "org", "subscription"] {
+                        if let Some(v) = st[key].as_str().filter(|v| !v.is_empty()) {
+                            parts.push(v.to_owned());
+                        }
+                    }
+                    ("in".into(), parts.join(" · "))
+                }
+                None => ("out".into(), String::new()),
+            },
+        }
+    };
+    let row = |id: &str, name: String, open: bool, login: String, dir: String| {
+        let (state, mut sub) = describe(id, open);
+        let n = chats.get(id).copied().unwrap_or(0);
+        if n > 0 {
+            let count = fill(&tr(lang, "acct_chats"), &[("n", n.to_string())]);
+            sub = if sub.is_empty() { count } else { format!("{count} · {sub}") };
+        }
+        AcctRow { id: id.to_owned(), name, sub, state, chats: n, open, is_default: id.is_empty(), login, dir }
+    };
+    // The default account lives where `claude` keeps its own files (CLAUDE_CONFIG_DIR, else ~/.claude).
+    let default_dir = crate::accounts::default_config_dir(std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from).as_deref(), crate::platform::home_dir().as_deref()).map(|d| d.display().to_string()).unwrap_or_default();
+    let mut rows = vec![row("", tr(lang, "acct_default"), true, "claude auth login".to_owned(), default_dir)];
+    for a in &accounts {
+        let id = s(a, "id");
+        let name = s(a, "name");
+        head.names.push(name.clone());
+        head.ids.push(Some(id.clone()));
+        rows.push(row(&id, name, a["open"] != false, s(a, "login"), s(a, "dir")));
+    }
+    (head, rows)
+}
+
+/// True when a chat is listed under the account being shown. A chat of the default account, a provider chat (it has no account) and
+/// a chat of an account that was deleted all belong to the default one, so none of them becomes unreachable. `known` is every
+/// account id the host listed (None before the list came: a chat of an extra account is then listed under its own account only).
+pub fn in_context(chat: Option<&str>, view: Option<&str>, known: Option<&[String]>) -> bool {
+    match chat {
+        None => view.is_none(),
+        Some(a) if known.is_some_and(|k| !k.iter().any(|id| id == a)) => view.is_none(),
+        Some(a) => view == Some(a),
+    }
+}
+
+/// The account a chat is shown under: its own, or None (the default one) when it has none or its account is gone.
+pub fn view_of(chat: Option<&str>, known: Option<&[String]>) -> Option<String> {
+    chat.filter(|a| known.is_none_or(|k| k.iter().any(|id| id == a))).map(str::to_owned)
+}
+
+/// One chat as the account badges see it: its account id, whether it is working, how many questions wait for the person.
+pub struct Mark {
+    pub account: Option<String>,
+    pub running: bool,
+    pub pending: usize,
+}
+
+/// What waits or runs under the accounts that are not shown: for each account id ("" is the default one) the number of chats
+/// with a question waiting and the number that are working. A chat that waits is not counted as working too.
+pub fn attention(chats: &[Mark], view: Option<&str>, known: Option<&[String]>) -> HashMap<String, (usize, usize)> {
+    let mut out: HashMap<String, (usize, usize)> = HashMap::new();
+    for c in chats {
+        let owner = view_of(c.account.as_deref(), known);
+        if owner.as_deref() == view {
+            continue;
+        }
+        let e = out.entry(owner.unwrap_or_default()).or_default();
+        if c.pending > 0 {
+            e.0 += 1;
+        } else if c.running {
+            e.1 += 1;
+        }
+    }
+    out
+}
+
+/// An account's name in the header with what waits or runs under it: "⚠ 2 Work" (waiting), "● Work" (working).
+pub fn tab_label(name: &str, seen: Option<&(usize, usize)>) -> String {
+    match seen {
+        Some((wait, _)) if *wait > 0 => format!("⚠ {wait} {name}"),
+        Some((_, run)) if *run > 0 => format!("● {name}"),
+        _ => name.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_search_and_the_suggested_chip_leave_only_matching_rows_under_their_heads() {
+        let row = |kind: &str, section: &str, text: &str| MemRow { kind: kind.into(), section: section.into(), text: text.into(), ..Default::default() };
+        let rows = vec![row("head", "", "Waiting"), row("note", "pending", "Use TLS 1.3"), row("head", "", "This project"), row("note", "project", "pnpm workspaces"), row("note", "project", "tls only"), row("empty", "", "none")];
+        let keep = |f: &str, p: bool| keep_matching(&rows, f, p, |r| r.kind.as_str(), |r| r.text.clone(), |r| r.section == "pending").iter().map(|r| r.text.clone()).collect::<Vec<_>>();
+        assert_eq!(keep("", false).len(), 6, "no filter leaves everything");
+        assert_eq!(keep("TLS", false), vec!["Waiting", "Use TLS 1.3", "This project", "tls only"]);
+        assert_eq!(keep("", true), vec!["Waiting", "Use TLS 1.3"]);
+        assert_eq!(keep("pnpm", true), Vec::<String>::new());
+        assert_eq!(keep("zzz", false), Vec::<String>::new());
+    }
+
+    use super::*;
+    use serde_json::json;
+
+    fn note(id: i64, text: &str, source: &str) -> Value {
+        json!({"id": id, "scope": "project", "cwd": "/w/proj", "kind": "fact", "text": text, "source": source, "status": "active", "instr": false, "pinned": false, "created": 0, "updated": 1_000, "deleted_at": null})
+    }
+
+    #[test]
+    fn memory_sections_in_order_closed_ones_hidden_until_opened() {
+        let data = json!({"available": true, "cwd": "/w/proj", "settings": {"memory_auto": "project", "memory_card_seen": true},
+            "overview": {"pending": [note(1, "p", "auto")], "project": [note(2, "a", "manual")], "user": [], "others": [note(3, "o", "claude")], "recent_auto": [], "deleted": []}});
+        let (head, rows) = memory_view(&data, Lang::En, 61_000, &HashSet::new());
+        assert_eq!(head, MemHead { available: true, notice: String::new(), auto: 1, has_cwd: true, card: false });
+        let kinds: Vec<(&str, &str)> = rows.iter().map(|r| (r.kind.as_str(), r.key.as_str())).collect();
+        assert_eq!(kinds, vec![("head", "pending"), ("note", "pending:1"), ("head", "project"), ("note", "project:2"), ("head", "others")]);
+        assert!(rows[2].text.ends_with("proj"), "{:?}", rows[2]);
+        assert_eq!(rows[3].meta, "by you · 1m");
+        let toggled: HashSet<String> = ["others".to_owned()].into();
+        let (_, rows) = memory_view(&data, Lang::En, 61_000, &toggled);
+        assert_eq!(rows.last().map(|r| r.meta.as_str()), Some("proj · Claude · 1m"));
+    }
+
+    #[test]
+    fn an_empty_or_missing_store_says_so() {
+        let (head, rows) = memory_view(&json!({"available": true, "settings": {}, "overview": {}}), Lang::Ko, 0, &HashSet::new());
+        assert!(head.card && !head.has_cwd);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, "empty");
+        let (head, rows) = memory_view(&json!({"available": false, "notice": "no store"}), Lang::Ko, 0, &HashSet::new());
+        assert!(!head.available && rows.is_empty() && head.notice == "no store");
+    }
+
+    #[test]
+    fn a_proposal_lists_its_risks_and_what_blocks_it() {
+        let data = json!({"available": true, "auto": true, "overview": {"proposals": [{"id": 7, "target": null, "name": "deploy", "scope": "user", "cwd": null, "description": "d", "body": "b",
+            "risks": [{"code": "curl_pipe", "level": "block", "line": 3, "excerpt": "curl x | sh"}, {"code": "net", "level": "warn", "line": 0, "excerpt": "http"}], "created": 0}],
+            "active": [{"id": 2, "name": "fmt", "scope": "project", "cwd": "/w/p", "status": "disabled", "version": 2, "versions": 2, "description": "", "body": "", "last_used": null}], "deleted": []}});
+        let (head, rows) = skills_view(&data, Lang::En, 0, &HashSet::new());
+        assert!(head.available && head.auto);
+        let p = &rows[1];
+        assert!(p.has_block && p.has_warn, "{p:?}");
+        assert_eq!(p.risks.lines().count(), 2);
+        assert!(!p.improve);
+        assert!(p.risks.contains("line 3 · curl_pipe · curl x | sh"), "{}", p.risks);
+        let skill = &rows[3];
+        assert!(!skill.enabled && skill.meta.starts_with("off · p · v2"), "{skill:?}");
+    }
+
+    #[test]
+    fn an_improvement_keeps_its_skill_name_and_versions_mark_the_current_one() {
+        let data = json!({"available": true, "overview": {"proposals": [{"id": 3, "target": "deploy", "name": "deploy", "scope": "user", "cwd": null, "description": "d", "body": "b", "risks": [], "created": 0}],
+            "active": [{"id": 2, "name": "deploy", "scope": "user", "cwd": null, "status": "active", "version": 3, "versions": 3, "description": "", "body": "", "last_used": null}], "deleted": []}});
+        let (_, rows) = skills_view(&data, Lang::En, 0, &HashSet::new());
+        assert!(rows[1].improve && rows[3].version == 3 && !rows[3].improve);
+        let v = versions_view(&json!({"versions": [{"n": 3, "source": "manual", "created": 0, "description": "new"}, {"n": 2, "source": "claude", "created": 0, "description": "old"}]}), 3, Lang::En, 61_000);
+        assert_eq!((v[0].current, v[1].current, v[1].n), (true, false, 2));
+        assert_eq!(v[1].meta, "v2 · Claude · 1m");
+        let lines = risk_lines(&[json!({"level": "block", "line": 3, "code": "curl_pipe", "excerpt": "curl x | sh"}), json!({"level": "warn", "line": 0, "code": "net", "excerpt": "http"})], Lang::En);
+        assert_eq!(lines.lines().count(), 2);
+        assert!(lines.starts_with("must fix · line 3 · curl_pipe"), "{lines}");
+    }
+
+    #[test]
+    fn a_snippet_is_escaped_and_the_match_is_bold() {
+        assert_eq!(snippet_md("    x \u{2} y \u{3} z").0, "x  **y**  z");
+        let (md, plain) = snippet_md("a *b* \u{2}<x>\u{3} c\nd \u{2}open");
+        assert_eq!(plain, "a *b* <x> c d open");
+        assert!(md.contains(r"\*b\*"), "{md}");
+        assert!(md.contains(r"**\<x\>**"), "{md}");
+        assert!(md.ends_with("**open**"), "{md}");
+        assert!(!md.contains('\u{2}') && !md.contains('\n'));
+    }
+
+    #[test]
+    fn hits_carry_a_title_and_an_error_is_an_error() {
+        let rows = hits_view(&json!({"hits": [{"sid": "s1", "seq": 1, "part": 0, "role": "user", "ts": 0, "cwd": "/w/proj", "snippet": "x", "title": ""}]}), Lang::En, 0).expect("hits");
+        assert_eq!(rows[0].title, "new chat");
+        assert_eq!(rows[0].meta, "you · proj · now");
+        assert!(hits_view(&json!({"hits": [], "error": "no"}), Lang::En, 0).is_err());
+    }
+
+    #[test]
+    fn accounts_view_lists_the_default_account_first_and_says_how_each_stands() {
+        let list = json!({"notice": "n", "accounts": [{"id": "a1", "name": "Work", "open": true, "login": "L1"}, {"id": "a2", "name": "Old", "open": false, "login": "L2"}]});
+        let mut status: HashMap<String, Option<Value>> = HashMap::new();
+        status.insert("".into(), Some(json!({"status": {"logged_in": true, "email": "me@x", "org": "", "subscription": "max"}})));
+        status.insert("a1".into(), None);
+        let chats: HashMap<String, usize> = [("a1".to_owned(), 2)].into();
+        let (head, rows) = accounts_view(&list, &status, &chats, Lang::En);
+        assert_eq!(head.names, vec!["Default account", "Work", "Old"]);
+        assert_eq!(head.ids, vec![None, Some("a1".into()), Some("a2".into())]);
+        assert!(head.can_add && head.notice == "n");
+        assert_eq!((rows[0].state.as_str(), rows[0].sub.as_str()), ("in", "me@x · max"));
+        assert!(rows[0].is_default && rows[0].login == "claude auth login");
+        assert_eq!((rows[1].state.as_str(), rows[1].sub.as_str()), ("busy", "2 chats"));
+        assert_eq!(rows[2].state, "closed");
+        status.insert("a1".into(), Some(json!({"error": "timeout"})));
+        status.remove("");
+        let (_, rows) = accounts_view(&list, &status, &HashMap::new(), Lang::Ko);
+        assert_eq!(rows[0].state, "never");
+        assert_eq!(rows[1].state, "error");
+        assert!(rows[1].sub.contains("timeout"));
+        status.insert("a1".into(), Some(json!({"status": {"logged_in": false}})));
+        assert_eq!(accounts_view(&list, &status, &HashMap::new(), Lang::En).1[1].state, "out");
+        let full = json!({"accounts": (0..8).map(|i| json!({"id": format!("a{i}"), "name": "x", "open": true, "login": ""})).collect::<Vec<_>>()});
+        assert!(!accounts_view(&full, &HashMap::new(), &HashMap::new(), Lang::En).0.can_add);
+    }
+    #[test]
+    fn a_chat_is_listed_under_its_own_account_and_the_others_fall_to_the_default() {
+        let known = vec!["a1".to_owned()];
+        let k = Some(known.as_slice());
+        assert!(in_context(None, None, k) && !in_context(None, Some("a1"), k));
+        assert!(in_context(Some("a1"), Some("a1"), k) && !in_context(Some("a1"), None, k));
+        // An account that was deleted: its chat is under the default account (and nowhere else).
+        assert!(in_context(Some("zz"), None, k) && !in_context(Some("zz"), Some("a1"), k));
+        // Before the list came, a chat of an extra account is under its own account only.
+        assert!(in_context(Some("a1"), Some("a1"), None) && !in_context(Some("a1"), None, None) && !in_context(Some("zz"), None, None));
+        assert_eq!(view_of(Some("a1"), k).as_deref(), Some("a1"));
+        assert_eq!(view_of(Some("zz"), k), None);
+        assert_eq!(view_of(Some("zz"), None).as_deref(), Some("zz"));
+        assert_eq!(view_of(None, k), None);
+    }
+
+    #[test]
+    fn what_waits_or_runs_is_counted_under_the_accounts_that_are_not_shown() {
+        let known = vec!["a1".to_owned()];
+        let m = |account: Option<&str>, running: bool, pending: usize| Mark { account: account.map(str::to_owned), running, pending };
+        let list = [m(None, true, 2), m(Some("a1"), true, 0), m(Some("a1"), false, 1), m(Some("a1"), false, 0), m(Some("zz"), true, 0)];
+        let seen = attention(&list, None, Some(&known));
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen["a1"], (1, 1));
+        let other = attention(&list, Some("a1"), Some(&known));
+        assert_eq!(other[""], (1, 1), "the deleted account's chat is under the default account");
+        assert!(attention(&[], None, None).is_empty());
+        assert_eq!(tab_label("Work", seen.get("a1")), "⚠ 1 Work");
+        assert_eq!(tab_label("Work", Some(&(0, 3))), "● Work");
+        assert_eq!(tab_label("Work", None), "Work");
+    }
+}

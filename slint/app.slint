@@ -1,0 +1,1054 @@
+// Tenrec desktop: the Stitch design ("Tenrec Precision Instrument") drawn with Slint. Rust fills the models and answers the
+// callbacks (src/bin/desktop); nothing here reads markup from a model or a tool: text is text, and an answer's paragraphs are
+// `styled-text` made from markdown that Rust escaped first (src/view/markdown.rs).
+import { LineEdit, ComboBox, ScrollView, ListView, CheckBox, Palette } from "std-widgets.slint";
+import "../ui/vendor/fonts/pretendard-400.otf";
+import "../ui/vendor/fonts/pretendard-600.otf";
+import "../ui/vendor/fonts/JetBrainsMono-Regular.ttf";
+import "../ui/vendor/fonts/JetBrainsMono-SemiBold.ttf";
+import { Theme, T, Pill, Btn, Rich, SelText, WText, Label, Badge, KeyHint, Toggle, SegTabs, IconBtn, ProgressBar, EmptyState } from "base.slint";
+import { SchedPanel, Sched, SchedHeadV, SchedTask, SchedRun } from "sched.slint";
+import { FilesPanel, Files, FsRow, FsCrumb } from "files.slint";
+import { TeamPage } from "team.slint";
+import { NewChatCard, AccountsManage } from "newchat.slint";
+import { VhdbPage, Vh, VhDecision } from "vhdb.slint";
+import { ImportPanel, Imp, ImpRow } from "import.slint";
+import { MemPanel, SkillsPanel, SettingsPanel, TeamCard, WtCard, UsageCard, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, TeamRole } from "panels.slint";
+export { Sched, SchedHeadV, SchedTask, SchedRun, Files, FsRow, FsCrumb, Imp, ImpRow }
+export { Vh, VhDecision, Theme, T, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, TeamRole }
+
+
+export struct ChatRow {
+    kind: string, depth: int, key: string, text: string, rich: styled-text, plain: string, label: string, extra: string, status: string,
+    state: string, detail: string, open: bool, badge: string, add: int, del: int, indent: int,
+}
+
+export struct SessionItem { sid: string, folder: string, title: string, when: string, state: string, active: bool, tags: string, pending: int }
+
+export struct PermView {
+    visible: bool, request-id: string, title: string, more: string, description: string, input: string, blocked: string, suggestions: string, can-remember: bool,
+    // The rule Claude suggested, as text, when it can be remembered for this run / for the project ("" for none), and a line saying what each does.
+    grant-session: string, grant-always: string, grant-note: string,
+    // What the card shows of the request: the tool, the chat's folder, a shell command, a file path and what is done to it, and whether it can change things.
+    tool: string, cwd: string, command: string, file: string, file-state: string, warn: bool, sid: string,
+}
+
+
+component NavItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    in property <string> hint;
+    in property <bool> on;
+    // A count beside the name (runs not yet read); nothing when 0.
+    in property <int> badge: 0;
+    callback clicked;
+    height: 38px;
+    border-radius: 8px;
+    background: on ? Theme.primary : area.has-hover ? Theme.high.with-alpha(0.6) : transparent;
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 10px; spacing: 10px;
+        Image { source: root.icon; width: 18px; height: 18px; y: (parent.height - 18px) / 2; colorize: on ? Theme.on-primary : Theme.on-var; }
+        Text { text: root.text; color: on ? Theme.on-primary : Theme.on-var; font-size: 14px; font-weight: on ? 600 : 400; vertical-alignment: center; }
+        Rectangle { horizontal-stretch: 1; }
+        if root.badge > 0: VerticalLayout { alignment: center; Pill { text: root.badge; fg: on ? Theme.on-primary : Theme.primary-soft; fill: on ? Theme.on-primary.with-alpha(0.15) : Theme.primary.with-alpha(0.15); height: 18px; } }
+        if root.hint != "": VerticalLayout { alignment: center; KeyHint { text: root.hint; fg: on ? Theme.on-primary : Theme.on-var; fill: on ? Theme.on-primary.with-alpha(0.15) : Theme.high; } }
+    }
+    area := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// One row of the transcript.
+component RowView inherits Rectangle {
+    in property <ChatRow> r;
+    callback toggle(string);
+    callback copy(string);
+    callback link(string);
+    property <length> indent: r.depth * 24px;
+    VerticalLayout {
+        padding-left: root.indent;
+        if r.kind == "day": HorizontalLayout {
+            padding-top: 6px; padding-bottom: 18px; spacing: 12px; alignment: center;
+            Rectangle { width: 96px; height: 1px; y: parent.height / 2; background: Theme.highest; }
+            Text { text: r.text; color: Theme.outline; font-size: 11px; font-weight: 600; font-family: Theme.mono; }
+            Rectangle { width: 96px; height: 1px; y: parent.height / 2; background: Theme.highest; }
+        }
+        if r.kind == "meta-user": HorizontalLayout {
+            alignment: end; spacing: 8px; padding-right: 4px; padding-bottom: 5px;
+            Text { text: r.text; color: Theme.info; font-size: 11px; font-family: Theme.mono; }
+            Text { text: r.extra; color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+        }
+        if r.kind == "user": HorizontalLayout {
+            alignment: end; padding-bottom: 18px;
+            Rectangle {
+                max-width: root.width * 0.8;
+                background: Theme.high;
+                border-radius: 12px;
+                VerticalLayout {
+                    padding: 12px;
+                    SelText { text: r.text; size: 14px; }
+                }
+            }
+        }
+        if r.kind == "meta-asst": HorizontalLayout {
+            spacing: 8px; padding-left: 4px; padding-bottom: 6px; alignment: start;
+            Rectangle {
+                width: 24px; height: 24px; border-radius: 6px; background: Theme.primary;
+                Image { source: @image-url("icons/bolt.svg"); width: 13px; height: 13px; colorize: Theme.on-primary; }
+            }
+            Text { text: r.text; color: Theme.primary-soft; font-size: 12px; font-weight: 600; font-family: Theme.mono; vertical-alignment: center; }
+            Text { text: r.extra; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+        }
+        if r.kind == "para": VerticalLayout {
+            padding-left: 4px; padding-right: 24px; padding-bottom: 10px;
+            Rich { rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
+        }
+        if r.kind == "heading": VerticalLayout {
+            padding-left: 4px; padding-top: 6px; padding-bottom: 8px;
+            Rich { rich: r.rich; plain: r.plain; size: r.extra == "1" ? 20px : r.extra == "2" ? 18px : 16px; fg: Theme.on-surface; }
+        }
+        if r.kind == "item": HorizontalLayout {
+            padding-left: 8px + r.indent * 18px; padding-bottom: 4px; spacing: 8px;
+            Text { text: r.label; color: Theme.primary-soft; font-size: 15px; min-width: 14px; vertical-alignment: top; }
+            Rich { horizontal-stretch: 1; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
+        }
+        if r.kind == "quote": HorizontalLayout {
+            padding-left: 4px; padding-bottom: 8px; spacing: 10px;
+            Rectangle { width: 3px; background: Theme.hairline; }
+            Rich { horizontal-stretch: 1; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.outline; }
+        }
+        if r.kind == "rule": VerticalLayout { padding-top: 8px; padding-bottom: 12px; Rectangle { height: 1px; background: Theme.hairline; } }
+        if r.kind == "code" || r.kind == "table": VerticalLayout {
+            padding-bottom: 12px; padding-right: 24px;
+            Rectangle {
+                background: Theme.lowest;
+                border-radius: 8px;
+                clip: true;
+                VerticalLayout {
+                    Rectangle {
+                        background: Theme.high;
+                        height: 32px;
+                        HorizontalLayout {
+                            padding-left: 12px; padding-right: 8px; spacing: 8px;
+                            Image { source: r.kind == "code" ? @image-url("icons/code.svg") : @image-url("icons/table.svg"); width: 14px; height: 14px; y: (parent.height - 14px) / 2; colorize: Theme.primary; }
+                            Text { text: r.label; color: Theme.on-surface; font-size: 12px; font-weight: 600; font-family: Theme.mono; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text { text: r.extra; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+                            Rectangle {
+                                width: 52px; height: 22px; y: 5px; border-radius: 6px;
+                                background: copy-area.has-hover ? Theme.highest : Theme.container;
+                                Text { text: T.copy; color: Theme.on-var; font-size: 11px; }
+                                copy-area := TouchArea { mouse-cursor: pointer; clicked => { root.copy(r.text); } }
+                            }
+                        }
+                    }
+                    VerticalLayout {
+                        padding: 12px;
+                        SelText { text: r.text; size: 13px; mono: true; chars: true; }
+                    }
+                    if r.add == 1: Rectangle {
+                        height: 30px;
+                        background: fold-area.has-hover ? Theme.high : Theme.container;
+                        Text { text: r.detail; color: Theme.on-var; font-size: 11px; font-family: Theme.mono; }
+                        fold-area := TouchArea { mouse-cursor: pointer; clicked => { root.toggle(r.key); } }
+                    }
+                }
+            }
+        }
+        if r.kind == "think": VerticalLayout {
+            padding-bottom: 12px; padding-right: 24px;
+            Rectangle {
+                background: Theme.low; border-radius: 8px; border-width: 1px; border-color: Theme.hairline;
+                VerticalLayout {
+                    Rectangle {
+                        height: 38px;
+                        HorizontalLayout {
+                            padding-left: 12px; padding-right: 12px; spacing: 8px;
+                            if r.add == 1: Image { source: r.open ? @image-url("icons/chevron-down.svg") : @image-url("icons/chevron-right.svg"); width: 12px; height: 12px; y: (parent.height - 12px) / 2; colorize: Theme.outline; }
+                            if r.add != 1: Rectangle { width: 6px; height: 6px; y: (parent.height - 6px) / 2; border-radius: 3px; background: Theme.primary; }
+                            Text { text: r.text; color: think-area.has-hover ? Theme.on-surface : Theme.primary-soft; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        }
+                        think-area := TouchArea { mouse-cursor: pointer; clicked => { root.toggle(r.key); } }
+                    }
+                    if r.open && r.detail != "": HorizontalLayout {
+                        padding: 12px; padding-top: 0px; spacing: 10px;
+                        Rectangle { width: 2px; background: Theme.hairline; }
+                        WText { horizontal-stretch: 1; text: r.detail; fg: Theme.on-var; size: 13px; }
+                    }
+                }
+            }
+        }
+        if r.kind == "tool": VerticalLayout {
+            padding-bottom: 12px; padding-right: 24px;
+            Rectangle {
+                background: Theme.lowest;
+                border-radius: 8px;
+                border-width: r.state == "guard" ? 1px : 0px;
+                border-color: Theme.primary;
+                clip: true;
+                VerticalLayout {
+                    Rectangle {
+                        background: tool-area.has-hover ? Theme.highest : Theme.high;
+                        height: 34px;
+                        HorizontalLayout {
+                            padding-left: 12px; padding-right: 10px; spacing: 8px;
+                            Text { text: ">"; color: Theme.ok; font-weight: 700; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
+                            Text { text: r.label + ":"; color: Theme.outline; font-weight: 600; font-family: Theme.mono; font-size: 11px; vertical-alignment: center; }
+                            if r.badge != "": Pill { text: r.badge; fg: Theme.violet; y: 6px; }
+                            Text { horizontal-stretch: 1; text: r.text; color: Theme.on-surface; font-weight: 600; font-family: Theme.mono; font-size: 12px; overflow: elide; vertical-alignment: center; }
+                            if r.extra != "": Text { text: r.extra; color: Theme.outline; font-family: Theme.mono; font-size: 11px; vertical-alignment: center; }
+                            if r.add > 0 || r.del > 0: HorizontalLayout {
+                                spacing: 4px;
+                                Text { text: "+" + r.add; color: Theme.ok; font-weight: 600; font-family: Theme.mono; font-size: 11px; vertical-alignment: center; }
+                                Text { text: "−" + r.del; color: Theme.error; font-weight: 600; font-family: Theme.mono; font-size: 11px; vertical-alignment: center; }
+                            }
+                            Pill {
+                                y: 6px;
+                                text: r.status;
+                                show-icon: r.state == "done" || r.state == "err" || r.state == "guard";
+                                icon: r.state == "done" ? @image-url("icons/check.svg") : r.state == "err" ? @image-url("icons/x.svg") : @image-url("icons/shield.svg");
+                                pulse: r.state == "running";
+                                fg: r.state == "done" ? Theme.ok : r.state == "err" ? Theme.error : r.state == "guard" ? Theme.primary-soft : Theme.outline;
+                                fill: r.state == "done" ? Theme.ok.with-alpha(0.14) : r.state == "err" ? Theme.error.with-alpha(0.14) : r.state == "guard" ? Theme.primary.with-alpha(0.14) : Theme.container;
+                            }
+                            Image { source: r.open ? @image-url("icons/chevron-down.svg") : @image-url("icons/chevron-right.svg"); width: 13px; height: 13px; y: (parent.height - 13px) / 2; colorize: Theme.outline; }
+                        }
+                        tool-area := TouchArea { mouse-cursor: pointer; clicked => { root.toggle(r.key); } }
+                    }
+                    if r.open: VerticalLayout {
+                        padding: 12px;
+                        SelText { text: r.detail; size: 12px; mono: true; chars: true; fg: Theme.on-var; }
+                    }
+                }
+            }
+        }
+        if r.kind == "note": VerticalLayout {
+            padding-bottom: 14px;
+            WText { text: r.text; fg: Theme.outline; size: 12px; mono: true; }
+        }
+        if r.kind == "note-sys" || r.kind == "note-err": VerticalLayout {
+            padding-bottom: 12px;
+            Rectangle {
+                background: r.kind == "note-err" ? Theme.error.with-alpha(0.1) : Theme.container; border-radius: 8px;
+                border-width: r.kind == "note-err" ? 1px : 0px; border-color: Theme.error.with-alpha(0.35);
+                height: nr.preferred-height;
+                nr := HorizontalLayout {
+                    padding: 10px; padding-left: 14px; padding-right: 14px; spacing: 10px;
+                    Rectangle { width: 6px; height: 6px; y: 7px; border-radius: 3px; background: r.kind == "note-err" ? Theme.error : Theme.info; }
+                    Text { text: r.kind == "note-err" ? "ERROR" : "SYSTEM NOTICE"; color: r.kind == "note-err" ? Theme.error : Theme.info; font-size: 11px; font-weight: 600; font-family: Theme.mono; letter-spacing: 0.8px; vertical-alignment: top; }
+                    WText { horizontal-stretch: 1; text: r.text; fg: r.kind == "note-err" ? Theme.error : Theme.on-var; size: 13px; }
+                }
+            }
+        }
+    }
+}
+
+// One login account in the header, as in the Stitch design: the tabs are the accounts the window can show, then "Accounts".
+component AcctTab inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    // The widest a tab gets (shorter when there are many accounts or the window is narrow).
+    in property <length> cap: 120px;
+    callback clicked;
+    y: 12px;
+    height: 32px;
+    width: min(label.preferred-width + 24px, root.cap);
+    border-radius: 6px;
+    background: root.active ? Theme.high : (ta.has-hover ? Theme.high.with-alpha(0.5) : transparent);
+    border-width: root.active ? 1px : 0px;
+    border-color: Theme.hairline;
+    label := Text { x: 12px; width: parent.width - 24px; text: root.text; color: root.active ? Theme.primary-soft : Theme.on-var; font-size: 13px; font-weight: root.active ? 600 : 400; vertical-alignment: center; overflow: elide; }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component AppWindow inherits Window {
+    title: "Tenrec";
+    preferred-width: 1280px;
+    preferred-height: 820px;
+    // The physical minimum stays the same at every zoom, so a large saved zoom never pushes the window off a small screen.
+    min-width: 760px * 100 / root.zoom-pct;
+    min-height: 640px * 100 / root.zoom-pct;
+    background: Theme.surface;
+    default-font-family: "Pretendard";
+    default-font-size: 14px;
+
+    in property <[SessionItem]> sessions;
+    // True when the account shown has no chat (there is more than one account).
+    in property <bool> no-chats;
+    in property <[ChatRow]> rows;
+    in property <bool> has-chat;
+    in property <string> chat-title;
+    // The name of the open chat's account when it is not the default one (the Stitch header's account chip).
+    in property <string> chat-account;
+    in property <string> pwd-path;
+    // The folder as the host wrote it, for the copy button; and the breadcrumb's two names.
+    in property <string> pwd-full;
+    in property <string> crumb-ws;
+    in property <string> crumb-proj;
+    // The folder's current git branch ("" when it is not a repository).
+    in property <string> crumb-branch;
+    // The name of the page open now (for the breadcrumb when no chat is shown).
+    out property <string> page-name: root.new-open ? T.new-chat : root.side == 0 ? T.tab-chats : root.side == 1 ? T.tab-memory : root.side == 2 ? T.tab-skills : root.side == 3 ? T.tab-sched : root.side == 4 ? T.tab-files : root.side == 6 ? T.tr("tab_team") : root.side == 7 ? "VHDB" : T.tr("tab_settings");
+    in property <string> state;
+    in property <string> state-label;
+    in property <string> turn-cost;
+    in property <string> turn-tokens;
+    // The width of the header: what does not fit goes first (the connection chip, the cost, then the folder).
+    // Set when the window is sized (a binding on the width would loop through the header's own size).
+    property <length> hw: 1000px;
+    changed width => { root.hw = root.width - 280px; root.gutter = max(16px, (root.width - 280px - 1000px) / 2); }
+    // The widgets of the toolkit (fields, lists) follow the look chosen above.
+    property <bool> dk: Theme.dark;
+    changed dk => { Palette.color-scheme = root.dk ? ColorScheme.dark : ColorScheme.light; }
+    init => { Theme.sys-dark = Palette.color-scheme != ColorScheme.light; Palette.color-scheme = root.dk ? ColorScheme.dark : ColorScheme.light; root.hw = root.width - 280px; root.gutter = max(16px, (root.width - 280px - 1000px) / 2); root.tall = root.height >= 760px; }
+    in property <string> model-name;
+    in property <string> foot-prov;
+    in property <string> conn-host: "local";
+    // Tall enough for the model and connection cards in the sidebar.
+    property <bool> tall: false;
+    changed height => { root.tall = root.height >= 760px; }
+    in property <PermView> perm;
+    in-out property <string> draft;
+    // Shell mode: the composer runs what is typed in the terminal's shell (only when the terminal is on).
+    in-out property <bool> shell-mode;
+    in-out property <string> new-cwd;
+    in-out property <string> new-name;
+    // The open chat's name being edited in the header, and the actions on it.
+    in-out property <bool> renaming;
+    in-out property <string> rename-text;
+    callback rename-chat(string);
+    callback delete-chat();
+    in-out property <bool> new-open;
+    in property <string> toast-text;
+    // A button on the toast ("Undo", "Show"), "" for none; Rust keeps what it does.
+    in property <string> toast-action;
+    callback toast-act();
+    // The panel shown changed (0 chats, 1 memory, 2 skills, 3 schedule, 4 files, 5 settings).
+    callback panel-open(int);
+    in-out property <int> side: 0;
+    // The side margin of the transcript and the composer: the column is at most 1000px wide.
+    property <length> gutter: 16px;
+    out property <bool> at-bottom: list.content-y <= min(0px, list.visible-height - list.content-height) + 120px;
+
+    callback open-chat(string);
+    // cwd, model, the account's index in Acct.names and its name (checked again in Rust: the list can change meanwhile).
+    // cwd, model, account index and name, provider index and name, run in a container (the Rust side checks the names again).
+    // ... and the permission mode index
+    callback new-chat(string, string, int, string, int, string, bool, bool, int);
+    // The new chat's account, as an index into Acct.names.
+    in-out property <int> new-acct;
+    // The new chat's permission mode (an index into PermMode::ALL); it is back on the default whenever the page closes.
+    in-out property <int> new-perm;
+    // The permission mode of the open chat when it is not the default ("" for none).
+    in property <string> chat-perm;
+    // The open chat's model as an index into the picker (0: the default), and the pick.
+    in property <int> model-idx;
+    callback set-chat-model(int);
+    in property <bool> chat-perm-danger;
+    in-out property <int> new-prov;
+    in-out property <bool> new-container;
+    in-out property <bool> new-worktree;
+    // The folder picker is open.
+    in property <bool> picking;
+    callback pick-folder();
+    callback send(string);
+    callback stop();
+    callback toggle(string);
+    callback copy(string);
+    callback link(string);
+    callback answer-perm(string, bool, bool, string);
+    // request id, "session" or "always": allow and ask Claude Code to remember the rule the host built from the request's own suggestion
+    callback grant-perm(string, string);
+    in-out property <string> deny-text;
+    // Whole-window zoom in percent (src/bin/desktop/zoom.rs); zoom(-1) smaller, zoom(1) larger, zoom(0) back to 100%.
+    in property <int> zoom-pct: 100;
+    callback zoom(int);
+
+    public function scroll-bottom() {
+        list.content-y = min(0px, list.visible-height - list.content-height);
+    }
+    // The composer only while it is on screen: a panel or the new-chat page covers it, and typing there must not send.
+    public function focus-composer() { Pal.open = false; if (root.side == 0 && !root.new-open) { composer.focus(); } else { keys.focus(); } }
+    // Gives the zoom keys a focused element again after something that held focus went away.
+    public function refocus() { Pal.open = false; if (root.has-chat && root.side == 0 && !root.new-open) { composer.focus(); } else { keys.focus(); } }
+    changed new-open => { if (root.new-open) { root.panel-open(100); } else { root.new-perm = 0; root.new-name = ""; root.refocus(); } }
+    // A panel that goes away takes focus with it.
+    changed side => { Team.open = false; Usage.open = false; Know.adding = false; root.panel-open(root.side); root.refocus(); }
+
+    // Every element sits in here: capture-key-pressed runs from the window down the focused element's parents, so the zoom
+    // keys work whatever holds focus, before the composer or a dialog sees them; everything else is passed on.
+    keys := FocusScope {
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        init => { self.focus(); }
+        capture-key-pressed(event) => {
+            // Esc closes the team card; a dialog that waits for an answer keeps its own Esc.
+            if (event.text == Key.Escape && (Team.open || Usage.open) && !root.perm.visible && !Dialog.visible) { Team.open = false; Usage.open = false; return accept; }
+            if ((event.modifiers.alt || event.modifiers.control) && !event.modifiers.shift && !event.modifiers.meta && !root.perm.visible && !Dialog.visible) {
+                if (event.text == "1") { root.side = 0; root.new-open = false; return accept; }
+                if (event.text == "2") { root.side = 1; root.new-open = false; return accept; }
+                if (event.text == "3") { root.side = 2; root.new-open = false; return accept; }
+                if (event.text == "4") { root.side = 3; root.new-open = false; return accept; }
+                if (event.text == "5") { root.side = 4; root.new-open = false; return accept; }
+                if (event.text == "6") { root.side = 6; root.new-open = false; return accept; }
+                if (event.text == "7") { root.side = 7; root.new-open = false; return accept; }
+            }
+            // Ctrl+K: the command palette.
+            if (event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta && !event.modifiers.shift && !root.perm.visible && !Dialog.visible && (event.text == "k" || event.text == "K")) { if (Pal.open) { Pal.open = false; root.refocus(); } else { Pal.sel = 0; Pal.filter(""); Pal.open = true; } return accept; }
+            if (event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta && root.side == 4 && !root.new-open && !root.perm.visible && !Dialog.visible && (event.text == "s" || event.text == "S")) { Files.save(); return accept; }
+            if (event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta) {
+                if (event.text == "=" || event.text == "+") { root.zoom(1); return accept; }
+                if (event.text == "-") { root.zoom(-1); return accept; }
+                if (event.text == "0") { root.zoom(0); return accept; }
+            }
+            return reject;
+        }
+
+        HorizontalLayout {
+            // ---- sidebar: brand, the menu from top to bottom, the chats, the new-chat button ----
+            Rectangle {
+                width: 280px;
+                background: Theme.low;
+                Rectangle { x: parent.width - 1px; width: 1px; background: Theme.hairline; }
+                VerticalLayout {
+                    padding-left: 14px; padding-right: 14px; padding-top: 16px; padding-bottom: 14px; spacing: 0px;
+                    // brand
+                    HorizontalLayout {
+                        spacing: 10px; padding-left: 2px; padding-bottom: 14px;
+                        Rectangle {
+                            width: 36px; height: 36px; border-radius: 8px; background: Theme.primary;
+                            Image { source: @image-url("icons/terminal.svg"); width: 18px; height: 18px; colorize: Theme.on-primary; }
+                        }
+                        VerticalLayout {
+                            alignment: center; spacing: 1px; horizontal-stretch: 1;
+                            Text { text: "TENREC"; font-size: 14px; font-weight: 600; color: Theme.on-surface; font-family: Theme.mono; letter-spacing: 0.6px; }
+                            Text { text: T.app-sub; font-size: 10px; color: Theme.outline; font-family: Theme.mono; overflow: elide; }
+                        }
+                        VerticalLayout { alignment: center; Badge { text: "● " + T.tr("app_running"); tone: "ok"; } }
+                    }
+                    // the account the window shows (the same choice as the header tabs)
+                    Rectangle {
+                        height: ctx.preferred-height;
+                        border-radius: 8px; background: Theme.container; border-width: 1px; border-color: Theme.hairline;
+                        ctx := VerticalLayout {
+                            padding: 10px; spacing: 8px;
+                            HorizontalLayout {
+                                Label { text: T.tr("acct_context"); vertical-alignment: center; horizontal-stretch: 1; }
+                                Badge { text: "ACTIVE"; tone: "primary"; }
+                            }
+                            if Acct.names.length <= 3: SegTabs { items: Acct.labels; current: Acct.view; chosen(i) => { Acct.view = i; Acct.view-chosen(i); } }
+                            if Acct.names.length > 3: ComboBox { model: Acct.labels; current-index <=> Acct.view; selected(v) => { Acct.view-chosen(self.current-index); } }
+                        }
+                    }
+                    VerticalLayout {
+                        padding-top: 12px; spacing: 2px;
+                        NavItem { icon: @image-url("icons/forum.svg"); text: T.tab-chats; hint: "⌥1"; on: root.side == 0 && !root.new-open; clicked => { root.side = 0; root.new-open = false; } }
+                        NavItem { icon: @image-url("icons/brain.svg"); text: T.tab-memory; hint: "⌥2"; on: root.side == 1 && !root.new-open; clicked => { root.side = 1; root.new-open = false; } }
+                        NavItem { icon: @image-url("icons/bolt.svg"); text: T.tab-skills; hint: "⌥3"; on: root.side == 2 && !root.new-open; clicked => { root.side = 2; root.new-open = false; } }
+                        NavItem { icon: @image-url("icons/calendar.svg"); text: T.tab-sched; hint: "⌥4"; badge: Sched.head.unseen; on: root.side == 3 && !root.new-open; clicked => { root.side = 3; root.new-open = false; } }
+                        NavItem { icon: @image-url("icons/folder.svg"); text: T.tab-files; hint: "⌥5"; on: root.side == 4 && !root.new-open; clicked => { root.side = 4; root.new-open = false; } }
+                        NavItem { icon: @image-url("icons/team.svg"); text: T.tr("tab_team"); hint: "⌥6"; on: root.side == 6 && !root.new-open; clicked => { root.side = 6; root.new-open = false; } }
+                        NavItem { icon: @image-url("icons/database.svg"); text: "VHDB"; hint: "⌥7"; on: root.side == 7 && !root.new-open; clicked => { root.side = 7; root.new-open = false; } }
+                    }
+                    VerticalLayout { padding-top: 12px; padding-bottom: 12px; Rectangle { height: 1px; background: Theme.hairline; } }
+                    LineEdit { text <=> Search.text; placeholder-text: T.tr("srch_ph"); edited(t) => { Search.changed(t); } }
+                    HorizontalLayout {
+                        padding-left: 6px; padding-right: 2px; padding-bottom: 8px; padding-top: 12px; spacing: 6px;
+                        Label { text: T.sessions; vertical-alignment: center; horizontal-stretch: 1; }
+                        Rectangle { width: 7px; height: 7px; y: (parent.height - 7px) / 2; border-radius: 3.5px; background: Theme.ok; }
+                        IconBtn { y: -4px; icon: @image-url("icons/plus.svg"); clicked => { root.new-acct = Acct.view; Imp.open = false; root.new-open = true; } }
+                    }
+                    if Search.text != "": ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 4px;
+                            if Search.status != "": Text { text: Search.status; color: Theme.outline; font-size: 12px; }
+                            for h in Search.hits: Rectangle {
+                                height: hit.preferred-height;
+                                border-radius: 6px;
+                                background: hit-area.has-hover ? Theme.high : transparent;
+                                hit := VerticalLayout {
+                                    padding-left: 10px; padding-right: 10px; padding-top: 7px; padding-bottom: 7px; spacing: 2px;
+                                    Text { text: h.title; color: Theme.on-surface; font-size: 13px; overflow: elide; }
+                                    Text { text: h.meta; color: Theme.outline; font-size: 11px; font-family: Theme.mono; overflow: elide; }
+                                    Rectangle { height: min(snip.height, 52px); clip: true; snip := Rich { width: parent.width; rich: h.rich; plain: h.plain; size: 12px; fg: Theme.on-var; } }
+                                }
+                                hit-area := TouchArea { mouse-cursor: pointer; clicked => { root.side = 0; root.new-open = false; Search.open(h.sid); } }
+                            }
+                        }
+                    }
+                    if Search.text == "" && root.no-chats: Rectangle { height: 40px; Text { text: T.tr("no_chats_here"); color: Theme.outline; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; } }
+                    if Search.text == "": ListView {
+                        vertical-stretch: 1;
+                        for s in root.sessions: Rectangle {
+                            height: card.preferred-height + 4px;
+                            Rectangle {
+                                y: 2px; height: parent.height - 4px;
+                                border-radius: 6px;
+                                border-width: 1px;
+                                border-color: s.active ? Theme.hairline : transparent;
+                                background: s.active ? Theme.container : sess-area.has-hover ? Theme.high : transparent;
+                                card := VerticalLayout {
+                                    padding-left: 12px; padding-right: 10px; padding-top: 9px; padding-bottom: 9px; spacing: 3px;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        Text { horizontal-stretch: 1; text: s.folder; color: s.active ? Theme.on-surface : Theme.on-var; font-size: 13px; font-family: Theme.mono; overflow: elide; vertical-alignment: center; }
+                                        if s.pending > 0: Pill { text: s.pending; fg: Theme.primary-soft; fill: Theme.primary.with-alpha(0.15); height: 18px; }
+                                        Rectangle {
+                                            height: 18px; y: (parent.height - 18px) / 2; width: tag.preferred-width + 12px; border-radius: 4px;
+                                            background: s.state == "running" ? Theme.ok.with-alpha(0.14) : transparent;
+                                            tag := Text { text: s.state == "running" ? "Active" : s.state == "idle" ? "Idle" : "Ended"; color: s.state == "running" ? Theme.ok : Theme.outline; font-size: 11px; font-family: Theme.mono; }
+                                        }
+                                    }
+                                    Text { text: s.title + (s.tags == "" ? "" : "  · " + s.tags); color: Theme.outline; font-size: 11px; overflow: elide; }
+                                }
+                                sess-area := TouchArea { mouse-cursor: pointer; clicked => { root.side = 0; root.new-open = false; root.open-chat(s.sid); } }
+                            }
+                        }
+                    }
+                    VerticalLayout { padding-top: 10px; padding-bottom: 10px; Rectangle { height: 1px; background: Theme.hairline; } }
+                    if root.tall: Rectangle {
+                        height: foot.preferred-height; border-radius: 8px; background: Theme.container; border-width: 1px; border-color: Theme.hairline;
+                        foot := VerticalLayout {
+                            padding: 10px; spacing: 6px;
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Rectangle { width: 7px; height: 7px; y: (parent.height - 7px) / 2; border-radius: 3.5px; background: Theme.ok; }
+                                Text { text: root.model-name; color: Theme.on-surface; font-size: 12px; font-weight: 600; font-family: Theme.mono; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                            }
+                            Text { text: T.tr("foot_provider") + ": " + root.foot-prov; color: Theme.outline; font-size: 11px; font-family: Theme.mono; overflow: elide; }
+                            Text { text: root.conn-host + " · " + T.connected; color: Theme.ok; font-size: 11px; font-family: Theme.mono; overflow: elide; }
+                        }
+                    }
+                    VerticalLayout { padding-top: 10px; Btn { text: "+  " + T.new-chat; primary: true; height: 42px; clicked => { root.new-acct = Acct.view; Imp.open = false; root.new-open = true; } } }
+                    HorizontalLayout {
+                        padding-top: 8px; spacing: 6px;
+                        Rectangle {
+                            horizontal-stretch: 1; height: 32px; border-radius: 6px; background: set-area.has-hover ? Theme.high : transparent;
+                            HorizontalLayout {
+                                padding-left: 8px; spacing: 8px;
+                                Image { source: @image-url("icons/settings.svg"); width: 16px; height: 16px; y: (parent.height - 16px) / 2; colorize: root.side == 5 ? Theme.primary-soft : Theme.on-var; }
+                                Text { text: T.tr("tab_settings"); color: root.side == 5 ? Theme.primary-soft : Theme.on-var; font-size: 13px; vertical-alignment: center; }
+                            }
+                            set-area := TouchArea { mouse-cursor: pointer; clicked => { root.side = 5; root.new-open = false; } }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1; height: 32px; border-radius: 6px; background: cli-area.has-hover ? Theme.high : transparent;
+                            HorizontalLayout {
+                                alignment: end; padding-right: 8px; spacing: 8px;
+                                Text { text: T.tr("cli_sessions"); color: Theme.on-var; font-size: 13px; vertical-alignment: center; }
+                                Image { source: @image-url("icons/terminal.svg"); width: 16px; height: 16px; y: (parent.height - 16px) / 2; colorize: Theme.on-var; }
+                            }
+                            cli-area := TouchArea { mouse-cursor: pointer; clicked => { root.new-acct = Acct.view; root.new-open = true; Imp.acct = root.new-acct; Imp.open = true; Imp.scan(Imp.acct, Acct.names.length > 1 ? Acct.names[Imp.acct] : ""); } }
+                        }
+                    }
+                }
+            }
+
+            // ---- main ----
+            VerticalLayout {
+                horizontal-stretch: 1;
+                // header
+                Rectangle {
+                    height: 56px;
+                    background: Theme.surface;
+                    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
+                    HorizontalLayout {
+                        // Sized by the header, not the other way round: what is shown depends on this width.
+                        width: parent.width; height: parent.height;
+                        padding-left: 16px; padding-right: 16px; spacing: 10px; alignment: start;
+                        for n[i] in Acct.labels: AcctTab { text: n; cap: Acct.names.length >= 4 ? (root.hw < 900px ? 56px : 80px) : (root.hw < 900px ? 90px : 120px); active: !root.new-open && Acct.view == i; clicked => { Acct.view = i; Acct.view-chosen(i); root.new-open = false; } }
+                        AcctTab { text: T.tr("tab_manage"); cap: Acct.names.length >= 4 ? 72px : 120px; active: root.new-open; clicked => { root.new-acct = Acct.view; Imp.open = false; root.new-open = true; } }
+                        Rectangle { y: 16px; width: 1px; height: 24px; background: Theme.hairline; }
+                        // breadcrumb: workspace / project, or the page's name when no chat is open
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            HorizontalLayout {
+                                spacing: 6px; alignment: start;
+                                Image { source: @image-url("icons/folder.svg"); width: 16px; height: 16px; y: (parent.height - 16px) / 2; colorize: Theme.on-var; }
+                                Text { text: root.has-chat && root.side == 0 ? root.crumb-ws : "tenrec"; color: Theme.on-var; font-size: 13px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; }
+                                Text { text: "/"; color: Theme.outline.with-alpha(0.5); vertical-alignment: center; }
+                                Text { text: root.has-chat && root.side == 0 ? root.crumb-proj : root.page-name; color: Theme.on-surface; font-size: 13px; font-weight: 600; font-family: Theme.mono; vertical-alignment: center; overflow: elide; }
+                                if root.has-chat && root.side == 0 && root.crumb-branch != "": VerticalLayout { alignment: center; Badge { text: "⎇ " + root.crumb-branch; tone: "info"; } }
+                            }
+                        }
+                        Pill {
+                            y: 17px; clickable: true; clicked => { Usage.open = !Usage.open; Wt.open = false; Team.open = false; }
+                            text: Usage.chip;
+                            fg: Usage.tone(Usage.level);
+                        }
+                        if root.hw >= 900px: Rectangle {
+                            y: 14px; height: 28px; width: tk.preferred-width; border-radius: 8px; background: Theme.container; border-width: 1px; border-color: Theme.hairline;
+                            tk := HorizontalLayout {
+                                padding-left: 10px; padding-right: 10px; spacing: 6px;
+                                Label { text: T.tr("hdr_tokens"); vertical-alignment: center; }
+                                Text { text: root.turn-tokens == "" ? "—" : root.turn-tokens; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; font-weight: 600; vertical-alignment: center; }
+                                Rectangle { width: 1px; height: 14px; y: 7px; background: Theme.hairline; }
+                                Label { text: T.tr("hdr_cost"); vertical-alignment: center; }
+                                Text { text: root.turn-cost == "" ? "—" : root.turn-cost; color: Theme.ok; font-size: 12px; font-family: Theme.mono; font-weight: 600; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+                // the chat's own header: session title, folder, account, state (as in the Stitch main chat)
+                if root.has-chat && root.side == 0: Rectangle {
+                    height: 52px;
+                    background: Theme.surface;
+                    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
+                    HorizontalLayout {
+                        padding-left: root.gutter; padding-right: root.gutter; spacing: 10px; alignment: start;
+                        Label { text: "SESSION //"; vertical-alignment: center; }
+                        if !root.renaming: Text { text: root.chat-title; color: Theme.on-surface; font-size: 16px; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        if root.renaming: VerticalLayout { horizontal-stretch: 1; alignment: center; LineEdit { text <=> root.rename-text; font-size: 14px; accepted(t) => { root.renaming = false; root.rename-chat(t); } } }
+                        if root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename_ok"); height: 28px; primary: true; clicked => { root.renaming = false; root.rename-chat(root.rename-text); } } }
+                        if !root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename"); height: 28px; clicked => { root.rename-text = root.chat-title; root.renaming = true; } } }
+                        VerticalLayout { alignment: center; Btn { text: T.tr("chat_delete"); height: 28px; danger: true; enabled: root.state != "running"; clicked => { root.renaming = false; root.delete-chat(); } } }
+                        if root.hw >= 1250px: Rectangle {
+                            y: 12px; height: 28px; width: min(dirrow.preferred-width, 300px); border-radius: 6px; background: Theme.container; border-width: 1px; border-color: Theme.hairline;
+                            dirrow := HorizontalLayout {
+                                padding-left: 8px; padding-right: 4px; spacing: 6px;
+                                Label { text: "DIR:"; vertical-alignment: center; }
+                                Text { text: root.pwd-path; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; }
+                                IconBtn { y: 0px; width: 24px; height: 28px; icon: @image-url("icons/copy.svg"); clicked => { root.copy(root.pwd-full); } }
+                            }
+                        }
+                        if root.chat-account != "": VerticalLayout { alignment: center; Badge { text: root.chat-account; tone: "ok"; mono: false; } }
+                        if root.has-chat && root.side == 0: VerticalLayout { alignment: center; ComboBox { width: 150px; model: [T.tr("model_default_opt"), "sonnet", "opus", "haiku", "fable", "sonnet[1m]", "opus[1m]"]; current-index: root.model-idx; enabled: root.state != "running"; selected(v) => { root.set-chat-model(self.current-index); } } }
+                        if root.chat-perm != "": VerticalLayout { alignment: center; Badge { text: root.chat-perm; tone: root.chat-perm-danger ? "err" : "warn"; mono: false; } }
+                        VerticalLayout {
+                            alignment: center;
+                            Pill {
+                                text: root.state-label; pulse: root.state == "running";
+                                fg: root.state == "running" ? Theme.primary-soft : root.state == "idle" ? Theme.ok : Theme.outline;
+                                fill: root.state == "running" ? Theme.primary.with-alpha(0.15) : root.state == "idle" ? Theme.ok.with-alpha(0.1) : transparent;
+                            }
+                        }
+                        if Wt.show: VerticalLayout { alignment: center; Pill { clickable: true; clicked => { Wt.open = !Wt.open; Usage.open = false; if (Wt.open) { Wt.check(); } } text: T.tr("wt_chip"); fg: Theme.info; } }
+                        if Team.show: VerticalLayout {
+                            alignment: center;
+                            Pill {
+                                clickable: true; clicked => { Team.open = !Team.open; Usage.open = false; }
+                                text: T.tr("team_chip") + " " + Team.chip-label;
+                                fg: Team.chip == "on" ? Theme.primary-soft : Theme.outline;
+                                fill: Team.chip == "on" ? Theme.primary.with-alpha(0.15) : transparent;
+                            }
+                        }
+                    }
+                }
+                // transcript
+                Rectangle {
+                    vertical-stretch: 1;
+                    if !root.has-chat: Text { text: T.empty; color: Theme.outline; font-size: 13px; }
+                    list := ListView {
+                        visible: root.has-chat;
+                        for row in root.rows: Rectangle {
+                            height: rv.preferred-height + (row.kind == "day" ? 18px : 0px);
+                            rv := RowView {
+                                x: root.gutter; y: row.kind == "day" ? 18px : 0px; width: parent.width - 2 * root.gutter;
+                                r: row; toggle(k) => { root.toggle(k); } copy(t) => { root.copy(t); } link(u) => { root.link(u); }
+                            }
+                        }
+                    }
+                }
+                // composer
+                Rectangle {
+                    height: compose-card.height + 26px;
+                    compose-card := Rectangle {
+                        x: root.gutter; y: 10px; width: parent.width - 2 * root.gutter; height: cv.preferred-height;
+                        background: Theme.lowest;
+                        border-radius: 12px;
+                        border-width: 1px;
+                        border-color: root.shell-mode ? Theme.info : composer.has-focus ? Theme.primary : Theme.hairline;
+                        clip: true;
+                        cv := VerticalLayout {
+                            if Att.items.length > 0: Rectangle {
+                                height: 76px;
+                                HorizontalLayout {
+                                    padding-left: 12px; padding-right: 12px; padding-top: 10px; padding-bottom: 2px; spacing: 8px; alignment: start;
+                                    for a[i] in Att.items: Rectangle {
+                                        width: 64px; height: 64px; border-radius: 8px; background: Theme.high; clip: true;
+                                        if a.has-thumb: Image { source: a.thumb; width: parent.width; height: parent.height; image-fit: cover; }
+                                        if !a.has-thumb: Text { text: a.label; color: Theme.on-var; font-size: 12px; font-family: Theme.mono; }
+                                        Rectangle {
+                                            x: parent.width - 22px; y: 2px; width: 20px; height: 20px; border-radius: 10px; background: #000000b0;
+                                            Image { source: @image-url("icons/x.svg"); width: 10px; height: 10px; colorize: Theme.on-surface; }
+                                            TouchArea { mouse-cursor: pointer; clicked => { Att.remove(i); } }
+                                        }
+                                    }
+                                    VerticalLayout { alignment: end; Text { text: Att.items.length + " / 5"; color: Theme.outline; font-size: 11px; font-family: Theme.mono; } }
+                                }
+                            }
+                            Rectangle {
+                                height: 76px;
+                                composer := TextInput {
+                                    x: 12px; y: 10px; width: parent.width - 24px; height: parent.height - 14px;
+                                    text <=> root.draft;
+                                    enabled: root.has-chat;
+                                    wrap: word-wrap;
+                                    single-line: false;
+                                    color: Theme.on-surface;
+                                    font-size: 15px;
+                                    selection-background-color: Theme.primary.with-alpha(0.4);
+                                    key-pressed(event) => {
+                                        if (event.text == Key.Return && !event.modifiers.shift && !event.modifiers.control) {
+                                            if (root.side == 0 && !root.new-open && root.state != "running" && (root.draft != "" || Att.items.length > 0)) { root.send(root.draft); }
+                                            return accept;
+                                        }
+                                        if ((event.text == "v" || event.text == "V") && event.modifiers.control && !event.modifiers.alt) {
+                                            if (Att.paste-image()) { return accept; }
+                                        }
+                                        return reject;
+                                    }
+                                }
+                                if root.draft == "": Text {
+                                    x: 12px; y: 10px; text: root.shell-mode ? T.tr("shell_ph") : T.placeholder; color: Theme.outline; font-size: 15px;
+                                }
+                            }
+                            Rectangle {
+                                background: Theme.low;
+                                height: 44px;
+                                HorizontalLayout {
+                                    padding-left: 10px; padding-right: 10px; spacing: 8px;
+                                    if root.has-chat: Rectangle {
+                                        y: 11px; height: 22px; border-radius: 6px; background: Theme.container;
+                                        HorizontalLayout {
+                                            padding-left: 9px; padding-right: 9px; spacing: 6px;
+                                            Rectangle { width: 7px; height: 7px; y: (parent.height - 7px) / 2; border-radius: 3.5px; background: Theme.ok; }
+                                            Text { text: root.model-name; color: Theme.on-surface; font-size: 11px; font-weight: 600; font-family: Theme.mono; vertical-alignment: center; }
+                                        }
+                                    }
+                                    if Files.term-enabled && root.has-chat: Btn { y: 7px; text: "!  " + T.tr("shell_chip"); primary: root.shell-mode; clicked => { root.shell-mode = !root.shell-mode; } }
+                                    Btn { y: 7px; text: T.tr("att_add"); show-icon: true; icon: @image-url("icons/image.svg"); enabled: root.has-chat; clicked => { Att.pick(); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    Text { text: T.hint; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+                                    if root.state == "running": Btn { y: 7px; text: T.stop; danger: true; clicked => { root.stop(); } }
+                                    Btn { y: 7px; text: T.send; show-icon: true; icon: @image-url("icons/send.svg"); primary: true; enabled: root.has-chat && root.state != "running" && (root.draft != "" || Att.items.length > 0); clicked => { root.send(root.draft); } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- pages over the main area (below the header): a new chat, and the panels that come in later steps ----
+        if root.new-open: Rectangle {
+            x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px;
+            background: Theme.surface;
+            TouchArea { }
+            ScrollView {
+                VerticalLayout {
+                    padding-left: max(24px, (root.hw - 1280px) / 2 + 24px); padding-right: max(24px, (root.hw - 1280px) / 2 + 24px); padding-top: 32px; padding-bottom: 28px; spacing: 6px; alignment: start;
+                    Text { text: T.tr("nc_title"); font-size: 28px; font-weight: 600; color: Theme.on-surface; }
+                    WText { text: T.tr("nc_sub"); size: 14px; fg: Theme.on-var; }
+                    VerticalLayout { padding-top: 14px; padding-bottom: 18px; Rectangle { height: 1px; background: Theme.hairline; } }
+                    if root.hw >= 1000px: HorizontalLayout {
+                        spacing: 18px; alignment: start;
+                        NewChatCard {
+                            horizontal-stretch: 1; min-width: 300px; preferred-width: 500px; cwd <=> root.new-cwd; name <=> root.new-name; acct <=> root.new-acct; perm <=> root.new-perm; prov <=> root.new-prov; container <=> root.new-container; worktree <=> root.new-worktree; picking: root.picking;
+                            pick-folder => { root.pick-folder(); }
+                            open-import => { Imp.acct = root.new-acct; Imp.open = true; Imp.scan(Imp.acct, Acct.names.length > 1 ? Acct.names[Imp.acct] : ""); }
+                            cancel => { root.new-open = false; }
+                            start(a, b, c, d, e, f, g, h, i) => { root.new-chat(a, b, c, d, e, f, g, h, i); }
+                        }
+                        AccountsManage { horizontal-stretch: 1; min-width: 300px; preferred-width: 500px; }
+                    }
+                    if root.hw < 1000px: VerticalLayout {
+                        spacing: 18px;
+                        NewChatCard {
+                            cwd <=> root.new-cwd; name <=> root.new-name; acct <=> root.new-acct; perm <=> root.new-perm; prov <=> root.new-prov; container <=> root.new-container; worktree <=> root.new-worktree; picking: root.picking;
+                            pick-folder => { root.pick-folder(); }
+                            open-import => { Imp.acct = root.new-acct; Imp.open = true; Imp.scan(Imp.acct, Acct.names.length > 1 ? Acct.names[Imp.acct] : ""); }
+                            cancel => { root.new-open = false; }
+                            start(a, b, c, d, e, f, g, h, i) => { root.new-chat(a, b, c, d, e, f, g, h, i); }
+                        }
+                        AccountsManage { }
+                    }
+                    Rectangle {
+                        height: 44px; border-radius: 10px; background: Theme.low; border-width: 1px; border-color: Theme.hairline;
+                        HorizontalLayout { padding-left: 16px; padding-right: 16px; spacing: 10px; Text { text: "ⓘ"; color: Theme.primary-soft; font-size: 14px; vertical-alignment: center; } Text { text: T.tr("nc_info"); color: Theme.on-var; font-size: 12px; vertical-alignment: center; horizontal-alignment: left; overflow: elide; horizontal-stretch: 1; } }
+                    }
+                }
+            }
+        }
+        if root.new-open && Imp.open: ImportPanel { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; }
+        if !root.new-open && root.side == 1: MemPanel { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; }
+        if !root.new-open && root.side == 2: SkillsPanel { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; }
+        if !root.new-open && root.side == 6: TeamPage { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; lead: root.model-name; }
+        if !root.new-open && root.side == 7: VhdbPage { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; }
+        if !root.new-open && (root.side == 3 || root.side == 5): SchedPanel { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; zoom-pct: root.zoom-pct; zoom(d) => { root.zoom(d); } }
+        if !root.new-open && root.side == 4: FilesPanel { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; }
+
+        // ---- the worktree card under the header chip; a click outside closes it ----
+        if Wt.open && root.has-chat && Wt.show: Rectangle {
+            TouchArea { clicked => { Wt.open = false; } }
+            WtCard { x: root.width - self.width - 16px; y: 62px; width: 400px; }
+        }
+
+        // ---- the usage-limits card under the header chip; a click outside closes it ----
+        if Usage.open: Rectangle {
+            TouchArea { clicked => { Usage.open = false; } }
+            UsageCard { x: root.width - self.width - 16px; y: 62px; width: 340px; }
+        }
+
+        // ---- the team-mode card under the header chip; a click outside closes it ----
+        if Team.open && root.has-chat && Team.show: Rectangle {
+            TouchArea { clicked => { Team.open = false; } }
+            TeamCard { x: root.width - self.width - 16px; y: 62px; width: 360px; }
+        }
+
+        // ---- the command palette: type to narrow, Up/Down to pick, Enter to run, Esc to close ----
+        if Pal.open: Rectangle {
+            background: #00000070;
+            TouchArea { clicked => { Pal.open = false; root.refocus(); } }
+            pal-scope := FocusScope {
+                capture-key-pressed(event) => {
+                    if (event.text == Key.Escape) { Pal.open = false; root.refocus(); return accept; }
+                    if (event.text == Key.DownArrow) { Pal.sel = min(Pal.sel + 1, Pal.rows.length - 1); return accept; }
+                    if (event.text == Key.UpArrow) { Pal.sel = max(Pal.sel - 1, 0); return accept; }
+                    if (event.text == Key.Return) { if (Pal.rows.length > 0) { Pal.run(Pal.sel); } return accept; }
+                    return reject;
+                }
+                Rectangle {
+                    y: min(120px, root.height * 0.15);
+                    width: min(560px, root.width * 0.92);
+                    height: min(pcol.preferred-height, root.height * 0.7);
+                    background: Theme.container; border-radius: 12px; border-width: 1px; border-color: Theme.hairline;
+                    drop-shadow-blur: 24px; drop-shadow-color: #000000a0; clip: true;
+                    TouchArea { }
+                    pcol := VerticalLayout {
+                        HorizontalLayout {
+                            padding: 12px; spacing: 10px;
+                            Text { text: "⌘"; color: Theme.outline; font-size: 15px; vertical-alignment: center; }
+                            pal-input := LineEdit {
+                                horizontal-stretch: 1; height: 34px; font-size: 14px; placeholder-text: T.tr("pal_placeholder");
+                                init => { self.focus(); }
+                                edited(t) => { Pal.sel = 0; Pal.filter(t); }
+                            }
+                        }
+                        Rectangle { height: 1px; background: Theme.hairline; }
+                        if Pal.rows.length == 0: Rectangle { height: 48px; Text { text: T.tr("pal_none"); color: Theme.outline; font-size: 13px; } }
+                        ScrollView {
+                            height: min(Pal.rows.length * 40px + 12px, 360px);
+                            VerticalLayout {
+                                alignment: start; padding: 6px; spacing: 2px;
+                                for r[i] in Pal.rows: Rectangle {
+                                    height: 38px; border-radius: 8px; background: i == Pal.sel ? Theme.primary.with-alpha(0.16) : (pa.has-hover ? Theme.high : transparent);
+                                    HorizontalLayout {
+                                        padding-left: 12px; padding-right: 12px; spacing: 8px;
+                                        Text { text: r.label; color: Theme.on-surface; font-size: 14px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                                        if r.hint != "": VerticalLayout { alignment: center; Badge { text: r.hint; } }
+                                    }
+                                    pa := TouchArea { mouse-cursor: pointer; clicked => { Pal.run(i); } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- a question from a panel: Esc or Cancel says no; the permission dialog below stays on top of it ----
+        if Dialog.visible: Rectangle {
+            background: #00000080;
+            TouchArea { }
+            FocusScope {
+                init => { self.focus(); }
+                key-pressed(event) => {
+                    if (event.text == Key.Escape) { Dialog.answer(false); return accept; }
+                    return reject;
+                }
+                Rectangle {
+                    width: min(520px, root.width * 0.9);
+                    height: ask.preferred-height;
+                    background: Theme.container; border-radius: 12px; border-width: 1px; border-color: Theme.hairline;
+                    drop-shadow-blur: 20px; drop-shadow-color: #00000080;
+                    ask := VerticalLayout {
+                        padding: 18px; spacing: 12px;
+                        if Dialog.title != "": WText { text: Dialog.title; size: 16px; weight: 600; }
+                        // A long text scrolls instead of running past the card (its height is worked out from the text, not the layout).
+                        ScrollView {
+                            height: min(ab.preferred-height, max(60px, root.height * 0.9 - 150px));
+                            ab := VerticalLayout { alignment: start; WText { text: Dialog.body; size: 14px; } }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px; alignment: end;
+                            Btn { text: T.cancel; clicked => { Dialog.answer(false); } }
+                            Btn { text: Dialog.ok; primary: !Dialog.danger; danger: Dialog.danger; clicked => { Dialog.answer(true); } }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- the permission dialog (Stitch): modal, Esc denies, Enter allows once unless the reason box has focus ----
+        if root.perm.visible: Rectangle {
+            background: #000000a8;
+            TouchArea { }
+            perm-scope := FocusScope {
+                init => { self.focus(); }
+                key-pressed(event) => {
+                    if (event.text == Key.Escape) { root.answer-perm(root.perm.request-id, false, false, root.deny-text); return accept; }
+                    if (event.text == Key.Return && !reason.has-focus) { root.answer-perm(root.perm.request-id, true, false, ""); return accept; }
+                    return reject;
+                }
+                Rectangle {
+                    width: min(720px, root.width * 0.92);
+                    height: min(dialog.preferred-height, root.height * 0.94);
+                    background: Theme.container;
+                    border-radius: 12px;
+                    border-width: 1px;
+                    border-color: Theme.hairline;
+                    drop-shadow-blur: 24px;
+                    drop-shadow-color: #000000a0;
+                    clip: true;
+                    Rectangle { y: 0px; height: 2px; background: Theme.primary; }
+                    dialog := VerticalLayout {
+                        padding-top: 2px;
+                        // header
+                        HorizontalLayout {
+                            padding: 20px; spacing: 14px;
+                            Rectangle {
+                                width: 44px; height: 44px; border-radius: 10px; background: Theme.high; y: 0px;
+                                Image { source: @image-url("icons/shield.svg"); width: 22px; height: 22px; colorize: Theme.primary-soft; }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: T.tr("perm_head"); color: Theme.on-surface; font-size: 18px; font-weight: 600; vertical-alignment: center; overflow: elide; }
+                                    VerticalLayout { alignment: center; Badge { text: "● " + T.tr("perm_waiting"); tone: "ok"; mono: false; } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    if root.perm.more != "": VerticalLayout { alignment: center; Badge { text: root.perm.more; tone: "warn"; mono: false; } }
+                                    VerticalLayout { alignment: center; Badge { text: root.perm.sid; } }
+                                }
+                                WText { text: T.tr("perm_intro"); size: 13px; fg: Theme.on-var; }
+                            }
+                        }
+                        // everything between the header and the buttons scrolls as one
+                        ScrollView {
+                            height: min(pb.preferred-height, max(80px, root.height * 0.94 - 250px));
+                            pb := VerticalLayout {
+                                alignment: start; spacing: 12px; padding-left: 20px; padding-right: 20px; padding-bottom: 12px;
+                                HorizontalLayout {
+                                    Label { text: root.perm.command != "" ? T.tr("perm_cmd") : T.tr("perm_input"); vertical-alignment: center; horizontal-stretch: 1; }
+                                    if root.perm.command != "": Text { text: root.perm.tool == "PowerShell" ? "powershell -Command" : "bash -c"; color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+                                }
+                                Rectangle {
+                                    background: Theme.lowest; border-radius: 8px;
+                                    height: il.preferred-height;
+                                    il := HorizontalLayout {
+                                        padding: 12px; spacing: 8px;
+                                        if root.perm.command != "": Text { text: ">"; color: Theme.ok; font-family: Theme.mono; font-size: 13px; font-weight: 600; vertical-alignment: top; }
+                                        SelText { horizontal-stretch: 1; text: root.perm.command != "" ? root.perm.command : root.perm.input; size: 13px; mono: true; chars: true; }
+                                        IconBtn { width: 26px; height: 26px; icon: @image-url("icons/copy.svg"); clicked => { root.copy(root.perm.command != "" ? root.perm.command : root.perm.input); } }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    Rectangle {
+                                        horizontal-stretch: 1; background: Theme.low; border-radius: 8px; height: kc.preferred-height;
+                                        kc := VerticalLayout {
+                                            padding: 12px; spacing: 8px;
+                                            HorizontalLayout { Label { text: T.tr("perm_kind"); vertical-alignment: center; horizontal-stretch: 1; } Badge { text: root.perm.tool; tone: "primary"; } }
+                                            Label { text: T.tr("perm_cwd"); }
+                                            Rectangle {
+                                                background: Theme.lowest; border-radius: 6px; height: 30px;
+                                                HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 6px; Image { source: @image-url("icons/folder.svg"); width: 14px; height: 14px; y: (parent.height - 14px) / 2; colorize: Theme.outline; } Text { text: root.perm.cwd; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; overflow: elide; vertical-alignment: center; } }
+                                            }
+                                        }
+                                    }
+                                    if root.perm.file != "": Rectangle {
+                                        horizontal-stretch: 1; background: Theme.low; border-radius: 8px; height: fc.preferred-height;
+                                        fc := VerticalLayout {
+                                            padding: 12px; spacing: 8px;
+                                            Label { text: T.tr("perm_files"); }
+                                            HorizontalLayout {
+                                                spacing: 8px;
+                                                Rectangle { width: 6px; height: 6px; y: (parent.height - 6px) / 2; border-radius: 3px; background: root.perm.file-state == "modified" ? Theme.ok : Theme.info; }
+                                                Text { text: root.perm.file; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                                                Label { text: root.perm.file-state == "modified" ? T.tr("perm_modified") : T.tr("perm_read"); vertical-alignment: center; }
+                                            }
+                                        }
+                                    }
+                                }
+                                if root.perm.description != "": Rectangle {
+                                    background: Theme.low; border-radius: 8px; height: pc.preferred-height;
+                                    pc := HorizontalLayout {
+                                        padding: 12px; spacing: 10px;
+                                        Text { text: "ⓘ"; color: Theme.info; font-size: 18px; vertical-alignment: top; }
+                                        VerticalLayout { horizontal-stretch: 1; spacing: 2px; Label { text: T.tr("perm_purpose"); } WText { text: root.perm.description; size: 13px; } }
+                                    }
+                                }
+                                if root.perm.warn || root.perm.blocked != "": Rectangle {
+                                    background: Theme.error.with-alpha(0.1); border-radius: 8px; border-width: 1px; border-color: Theme.error.with-alpha(0.35); height: wc.preferred-height;
+                                    wc := HorizontalLayout {
+                                        padding: 12px; spacing: 10px;
+                                        Text { text: "⚠"; color: Theme.error; font-size: 18px; vertical-alignment: top; }
+                                        VerticalLayout {
+                                            horizontal-stretch: 1; spacing: 4px;
+                                            Text { text: T.tr("perm_caution"); color: Theme.error; font-size: 13px; font-weight: 600; }
+                                            WText { text: T.tr("perm_caution_text"); size: 13px; fg: Theme.on-var; }
+                                            if root.perm.blocked != "": WText { text: T.perm-blocked + ": " + root.perm.blocked; size: 12px; fg: Theme.on-surface; mono: true; }
+                                        }
+                                    }
+                                }
+                                if root.perm.grant-note != "": WText { text: root.perm.grant-note; size: 11px; fg: Theme.on-var; }
+                                if root.perm.suggestions != "": VerticalLayout {
+                                    spacing: 6px;
+                                    Label { text: T.perm-suggest; }
+                                    Rectangle {
+                                        background: Theme.lowest; border-radius: 8px; height: sl.preferred-height;
+                                        sl := VerticalLayout { padding: 10px; SelText { text: root.perm.suggestions; size: 11px; mono: true; chars: true; fg: Theme.on-var; } }
+                                    }
+                                }
+                            }
+                        }
+                        // footer: the reason for denying, the keys, the buttons
+                        Rectangle {
+                            background: Theme.low; height: ft.preferred-height;
+                            ft := VerticalLayout {
+                                padding: 14px; padding-left: 20px; padding-right: 20px; spacing: 10px;
+                                reason := LineEdit { placeholder-text: T.deny-reason; text <=> root.deny-text; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    HorizontalLayout {
+                                        spacing: 6px; alignment: start;
+                                        VerticalLayout { alignment: center; KeyHint { text: "Esc"; } }
+                                        Text { text: T.tr("perm_hint_deny"); color: Theme.on-var; font-size: 12px; vertical-alignment: center; }
+                                        Text { text: "·"; color: Theme.outline; vertical-alignment: center; }
+                                        VerticalLayout { alignment: center; KeyHint { text: "⏎"; } }
+                                        Text { text: T.tr("perm_hint_ok"); color: Theme.on-var; font-size: 12px; vertical-alignment: center; }
+                                    }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    Btn { text: "✕  " + T.deny; clicked => { root.answer-perm(root.perm.request-id, false, false, root.deny-text); } }
+                                    if root.perm.grant-session != "": Btn { text: T.tr("perm_allow_session") + ": " + root.perm.grant-session; clicked => { root.grant-perm(root.perm.request-id, "session"); } }
+                                    if root.perm.grant-always != "": Btn { text: T.tr("perm_allow_always") + ": " + root.perm.grant-always; clicked => { root.grant-perm(root.perm.request-id, "always"); } }
+                                    if root.perm.can-remember: Btn { text: T.allow-chat; clicked => { root.answer-perm(root.perm.request-id, true, true, ""); } }
+                                    Btn { text: "✓  " + T.allow-once; primary: true; clicked => { root.answer-perm(root.perm.request-id, true, false, ""); } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.toast-text != "": Rectangle {
+            x: root.width - self.width - 16px;
+            y: root.height - self.height - 16px;
+            width: toast-row.preferred-width;
+            height: 38px;
+            background: Theme.container;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.hairline;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000070;
+            Rectangle { x: 0; width: 3px; background: Theme.primary; }
+            toast-row := HorizontalLayout {
+                padding-left: 14px; padding-right: root.toast-action != "" ? 6px : 14px; spacing: 10px;
+                Text { text: root.toast-text; color: Theme.on-surface; font-size: 13px; vertical-alignment: center; }
+                if root.toast-action != "": Btn { y: 5px; height: 28px; text: root.toast-action; clicked => { root.toast-act(); } }
+            }
+        }
+    }
+}

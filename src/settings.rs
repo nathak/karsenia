@@ -51,6 +51,9 @@ pub struct Settings {
     pub container_runtime: Option<String>,
     #[serde(default)]
     pub container_image: Option<String>,
+    /// Where chats that start in their own git worktree are made (an absolute path; default `~/tenrec-worktrees`). Only the person sets it.
+    #[serde(default)]
+    pub worktree_root: Option<PathBuf>,
 }
 
 pub struct SettingsStore {

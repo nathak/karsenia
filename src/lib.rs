@@ -1,9 +1,16 @@
 //! Tenrec: runs `claude` headless and serves a chat UI for it on this machine only.
+pub mod accounts;
+pub mod cli_sessions;
 pub mod claude;
 pub mod extract;
 pub mod index;
 pub mod mcp;
+pub mod view;
+pub mod platform;
+pub mod plugins;
+pub mod proc_group;
 pub mod propose;
+pub mod realm;
 pub mod memory;
 pub mod private;
 pub mod providers;
@@ -15,6 +22,8 @@ pub mod server;
 pub mod session;
 pub mod settings;
 pub mod skills;
+pub mod usage;
+pub mod worktree;
 
 /// `n` random bytes as lower-case hex.
 pub fn random_hex(n: usize) -> String {

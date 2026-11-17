@@ -38,6 +38,11 @@ pub struct SpawnOpts {
     pub pinned_url: Option<String>,
     /// Run inside a container (a provider chat only; EXPERIMENTAL, see `container`).
     pub container: Option<Spec>,
+    /// The permission mode chosen when the chat was made; the default adds no argument.
+    pub permission_mode: crate::claude::perm::PermMode,
+    /// The name a person gave the chat: passed as `--name`, so it is the CLI's own display name of the session too (its `/resume` picker
+    /// and terminal title; measured: it is written to the session file as a `custom-title`). None for a chat nobody named.
+    pub name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -50,7 +55,7 @@ pub enum ProcEvent {
 
 pub struct ClaudeProcess {
     stdin: mpsc::UnboundedSender<String>,
-    pid: Option<u32>,
+    group: Option<Arc<crate::proc_group::Group>>,
     /// False once stdout has ended: a line queued after that would never be read.
     alive: Arc<AtomicBool>,
     /// The runtime and the container's name: killing the client of `docker run` does not stop the container, `rm -f` does.
@@ -66,6 +71,12 @@ pub fn args(opts: &SpawnOpts) -> Vec<String> {
         .iter()
         .map(|a| (*a).to_owned())
         .collect();
+    if let Some(name) = opts.name.as_ref().filter(|n| !n.is_empty()) {
+        args.extend(["--name".to_owned(), name.clone()]);
+    }
+    if let Some(mode) = opts.permission_mode.cli_arg() {
+        args.extend(["--permission-mode".to_owned(), mode.to_owned()]);
+    }
     if let Some(model) = &opts.model {
         args.extend(["--model".to_owned(), model.clone()]);
     }
@@ -89,13 +100,24 @@ pub fn args(opts: &SpawnOpts) -> Vec<String> {
     args
 }
 
+/// The ids a container runs as. Containers are not available on Windows.
+#[cfg(unix)]
+fn own_ids() -> Result<(u32, u32)> {
+    // SAFETY: getuid and getgid only read the process's own ids.
+    Ok(unsafe { (libc::getuid(), libc::getgid()) })
+}
+
+#[cfg(not(unix))]
+fn own_ids() -> Result<(u32, u32)> {
+    anyhow::bail!("a container is not available on Windows")
+}
+
 impl ClaudeProcess {
     pub fn spawn(opts: &SpawnOpts) -> Result<(Self, mpsc::UnboundedReceiver<ProcEvent>)> {
         let (program, argv) = match &opts.container {
             Some(spec) => {
                 let names: Vec<String> = opts.env.set.iter().map(|(name, _)| name.clone()).filter(|name| name != "CLAUDE_CONFIG_DIR").collect();
-                // SAFETY: getuid and getgid only read the process's own ids.
-                let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+                let (uid, gid) = own_ids()?;
                 (spec.runtime.program.as_os_str().to_owned(), container::run_args(spec, &opts.cwd, &names, &args(opts), uid, gid).map_err(|e| anyhow::anyhow!(e))?)
             }
             None => (std::ffi::OsString::from(&opts.bin), args(opts)),
@@ -107,8 +129,8 @@ impl ClaudeProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .process_group(0);
+            .kill_on_drop(true);
+        crate::proc_group::configure(&mut command);
         for name in &opts.env.remove {
             command.env_remove(name);
         }
@@ -121,7 +143,17 @@ impl ClaudeProcess {
             command.env(name, value);
         }
         let mut child = command.spawn().with_context(|| format!("could not start {}", program.to_string_lossy()))?;
-        let pid = child.id();
+        let group = match child.id() {
+            Some(pid) => match crate::proc_group::adopt(pid) {
+                Some(group) => Some(Arc::new(group)),
+                None => {
+                    let _ = child.start_kill();
+                    anyhow::bail!("could not put the program in a group it can be ended with");
+                }
+            },
+            None => None,
+        };
+        let reader_group = group.clone();
         let stdin = child.stdin.take().context("no stdin")?;
         let stdout = child.stdout.take().context("no stdout")?;
         let stderr = child.stderr.take().context("no stderr")?;
@@ -178,7 +210,7 @@ impl ClaudeProcess {
             }
             reader_alive.store(false, Ordering::SeqCst);
             if too_long {
-                kill_group(pid);
+                kill_group(reader_group.as_ref());
             }
             let code = wait_for(&mut child).await;
             let tail_text = tail.await.unwrap_or_default();
@@ -191,7 +223,7 @@ impl ClaudeProcess {
         });
 
         let container = opts.container.as_ref().map(|spec| (spec.runtime.program.clone(), spec.name.clone()));
-        Ok((Self { stdin: line_tx, pid, alive, container }, event_rx))
+        Ok((Self { stdin: line_tx, group, alive, container }, event_rx))
     }
 
     /// Queues one line for stdin; false when the process is gone.
@@ -201,11 +233,8 @@ impl ClaudeProcess {
 
     /// SIGKILL to the whole group now, for a host that is exiting and cannot wait three seconds.
     pub fn kill_now(&self) {
-        if let Some(pid) = self.pid {
-            // SAFETY: killpg with a process group id this host created (process_group(0) at spawn).
-            unsafe {
-                libc::killpg(pid as i32, libc::SIGKILL);
-            }
+        if let Some(group) = &self.group {
+            group.kill();
         }
         if let Some((program, name)) = &self.container {
             container::remove(program, name, Duration::ZERO);
@@ -214,7 +243,7 @@ impl ClaudeProcess {
 
     /// Ends the process and everything it started: SIGTERM to its group, SIGKILL after three seconds.
     pub fn stop(&self) {
-        kill_group(self.pid);
+        kill_group(self.group.as_ref());
         if let Some((program, name)) = self.container.clone() {
             // The client passes SIGTERM on; whatever is left after three seconds is removed with the container.
             tokio::spawn(async move {
@@ -227,7 +256,7 @@ impl ClaudeProcess {
 
 impl Drop for ClaudeProcess {
     fn drop(&mut self) {
-        kill_group(self.pid);
+        kill_group(self.group.as_ref());
         if let Some((program, name)) = self.container.take() {
             // Started here and not waited for: the host may be ending, and the command goes on without it.
             container::remove(&program, &name, Duration::ZERO);
@@ -235,19 +264,13 @@ impl Drop for ClaudeProcess {
     }
 }
 
-fn kill_group(pid: Option<u32>) {
-    let Some(pid) = pid else { return };
-    let group = pid as i32;
-    // SAFETY: killpg with a process group id this host created (process_group(0) at spawn).
-    unsafe {
-        libc::killpg(group, libc::SIGTERM);
-    }
+fn kill_group(group: Option<&Arc<crate::proc_group::Group>>) {
+    let Some(group) = group else { return };
+    group.term();
+    let group = group.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(3)).await;
-        // SAFETY: as above; a group that already ended makes this a no-op.
-        unsafe {
-            libc::killpg(group, libc::SIGKILL);
-        }
+        group.kill();
     });
 }
 
@@ -261,10 +284,10 @@ async fn wait_for(child: &mut Child) -> Option<i32> {
 /// True when the path exists and is a directory the host may run a session in: not `/`, not the home folder itself.
 pub fn is_safe_cwd(path: &Path) -> bool {
     let Ok(real) = path.canonicalize() else { return false };
-    if !real.is_dir() || real == Path::new("/") {
+    if !real.is_dir() || real.parent().is_none() {
         return false;
     }
-    match std::env::var_os("HOME").map(PathBuf::from).and_then(|home| home.canonicalize().ok()) {
+    match crate::platform::home_dir().and_then(|home| home.canonicalize().ok()) {
         Some(home) => real != home,
         None => true,
     }
@@ -273,10 +296,11 @@ pub fn is_safe_cwd(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::claude::perm::PermMode;
 
     #[test]
     fn the_arguments_include_the_permission_prompt_tool_and_resume() {
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()), env: EnvPlan::default(), pinned_url: None, container: None };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()), env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
         assert!(a.windows(2).any(|w| w == ["--model", "haiku"]));
@@ -291,7 +315,7 @@ mod tests {
     #[test]
     fn a_provider_chat_pins_its_address_and_skips_project_settings_and_no_secret_is_in_the_arguments() {
         let env = EnvPlan { set: vec![("ANTHROPIC_AUTH_TOKEN".into(), "tok-secret-xyz".into())], remove: vec![] };
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env, pinned_url: Some("https://gw.example.com/x".into()), container: None };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env, pinned_url: Some("https://gw.example.com/x".into()), container: None, permission_mode: Default::default(), name: None };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--setting-sources", "user"]));
         let settings = a.windows(2).find(|w| w[0] == "--settings").map(|w| w[1].clone()).unwrap();
@@ -308,5 +332,24 @@ mod tests {
             assert!(!is_safe_cwd(Path::new(&home)));
         }
         assert!(is_safe_cwd(Path::new("/tmp")));
+    }
+
+    #[test]
+    fn a_name_a_person_gave_is_passed_as_the_clis_own_session_name() {
+        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None };
+        assert!(!args(&base).iter().any(|a| a == "--name"));
+        assert!(args(&SpawnOpts { name: Some(String::new()), ..base.clone() }).iter().all(|a| a != "--name"), "a blank name is none");
+        assert!(args(&SpawnOpts { name: Some("내 작업".into()), ..base }).windows(2).any(|w| w == ["--name", "내 작업"]));
+    }
+
+    #[test]
+    fn a_chosen_permission_mode_is_passed_and_the_default_adds_nothing() {
+        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None };
+        assert!(!args(&base).iter().any(|x| x == "--permission-mode" || x == "--dangerously-skip-permissions"), "a chat that never chose has the arguments it always had");
+        let accept = args(&SpawnOpts { permission_mode: PermMode::AcceptEdits, ..base.clone() });
+        assert!(accept.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
+        let bypass = args(&SpawnOpts { permission_mode: PermMode::Bypass, ..base });
+        assert!(bypass.windows(2).any(|w| w == ["--permission-mode", "bypassPermissions"]));
+        assert!(!bypass.iter().any(|x| x == "--dangerously-skip-permissions" || x == "--allow-dangerously-skip-permissions"), "one way of saying it, and no mid-session switch is enabled");
     }
 }

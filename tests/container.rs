@@ -123,7 +123,7 @@ async fn a_container_chat_runs_through_the_runtime_with_only_its_folders_and_no_
     let fx = fixture(true).await;
     let id = remote(&fx);
     let folder = project(&fx);
-    let chat = fx.server.registry.create_in(folder.to_str().unwrap(), None, Some(&id), true).unwrap();
+    let chat = fx.server.registry.create_in(folder.to_str().unwrap(), None, Some(&id), true, None).unwrap();
     turn(&chat).await;
 
     let run = calls(&fx).into_iter().find(|c| c.starts_with("CALL [run]")).expect("the runtime was asked to run");
@@ -156,7 +156,7 @@ async fn a_container_chat_runs_through_the_runtime_with_only_its_folders_and_no_
 async fn the_container_is_removed_by_name_when_the_chat_is_stopped_or_killed_and_leftovers_are_swept_at_start() {
     let fx = fixture(true).await;
     let id = remote(&fx);
-    let chat = fx.server.registry.create_in(project(&fx).to_str().unwrap(), None, Some(&id), true).unwrap();
+    let chat = fx.server.registry.create_in(project(&fx).to_str().unwrap(), None, Some(&id), true, None).unwrap();
     turn(&chat).await;
     let name = calls(&fx).iter().find_map(|c| c.split("[--name] [").nth(1).map(|r| r.split(']').next().unwrap().to_owned())).unwrap();
     assert!(name.starts_with(&format!("tenrec-{}-", chat.sid)));
@@ -165,7 +165,7 @@ async fn the_container_is_removed_by_name_when_the_chat_is_stopped_or_killed_and
     wait_for("the kill to remove the container", || calls(&fx).iter().any(|c| *c == format!("CALL [rm] [-f] [{name}]"))).await;
 
     // Stop removes it after the client had its chance to pass the signal on.
-    let second = fx.server.registry.create_in(project(&fx).to_str().unwrap(), None, Some(&id), true).unwrap();
+    let second = fx.server.registry.create_in(project(&fx).to_str().unwrap(), None, Some(&id), true, None).unwrap();
     turn(&second).await;
     let second_name = calls(&fx).iter().rev().find_map(|c| c.split("[--name] [").nth(1).map(|r| r.split(']').next().unwrap().to_owned())).unwrap();
     assert_ne!(second_name, name, "every start has a name of its own");
@@ -190,21 +190,21 @@ async fn a_container_chat_needs_a_provider_a_reachable_address_and_the_persons_s
     let folder = project(&fx);
     let folder = folder.to_str().unwrap();
     let registry = &fx.server.registry;
-    assert!(registry.create_in(folder, None, Some(&id), true).is_err(), "no runtime and image are set");
+    assert!(registry.create_in(folder, None, Some(&id), true, None).is_err(), "no runtime and image are set");
     registry.settings().update(|s| {
         s.container_runtime = Some(fx.runtime.display().to_string());
         s.container_image = Some(IMAGE.into());
     });
-    assert!(registry.create_in(folder, None, None, true).is_err(), "an account chat cannot run in a container: its credentials would have to go in");
+    assert!(registry.create_in(folder, None, None, true, None).is_err(), "an account chat cannot run in a container: its credentials would have to go in");
     let local = registry.providers().save(Form { name: "Local".into(), base_url: "http://127.0.0.1:11434".into(), ..Default::default() }, 1).unwrap();
-    assert!(registry.create_in(folder, None, Some(&local), true).is_err(), "a container's localhost is not this computer's");
+    assert!(registry.create_in(folder, None, Some(&local), true, None).is_err(), "a container's localhost is not this computer's");
     // What the container is given must not hold the data folder (the key, the transcripts) or be inside it.
     let data = fx.root.join("data");
     std::fs::create_dir_all(data.join("chatcfg")).unwrap();
     for exposed in [fx.root.clone(), data.clone(), data.join("chatcfg")] {
-        assert!(registry.create_in(exposed.to_str().unwrap(), None, Some(&id), true).is_err(), "{} would expose the data folder", exposed.display());
+        assert!(registry.create_in(exposed.to_str().unwrap(), None, Some(&id), true, None).is_err(), "{} would expose the data folder", exposed.display());
     }
-    let chat = registry.create_in(folder, None, Some(&id), true).unwrap();
+    let chat = registry.create_in(folder, None, Some(&id), true, None).unwrap();
 
     // The settings are checked again at every start: a changed or emptied setting stops the chat, it does not fall back to no container.
     registry.settings().update(|s| s.container_image = Some("--privileged".into()));
@@ -282,7 +282,7 @@ async fn a_link_put_in_place_of_the_project_folder_after_the_chat_was_made_does_
     let fx = fixture(true).await;
     let id = remote(&fx);
     let folder = project(&fx);
-    let chat = fx.server.registry.create_in(folder.to_str().unwrap(), None, Some(&id), true).unwrap();
+    let chat = fx.server.registry.create_in(folder.to_str().unwrap(), None, Some(&id), true, None).unwrap();
     // Another chat's command replaces the folder with a link to somewhere that holds the data folder.
     std::fs::remove_dir_all(&folder).unwrap();
     std::os::unix::fs::symlink(&fx.root, &folder).unwrap();

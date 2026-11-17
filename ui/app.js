@@ -1,6 +1,9 @@
 import { marked } from './vendor/marked.js'
 import DOMPurify from './vendor/purify.js'
-import { baseName, chatHost, checkImage, isLocalHost, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, parseSites, pathsInText, resultBlocks, skillMd, toolSummary } from './util.js'
+import { initFiles } from './files.js'
+import { initTerm } from './term.js'
+import { initWt } from './wt.js'
+import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, wtText, accountName, accountOf, forAccount, inContext, viewOf, attn, permChoices, permNeedsConfirm, permOf, grantButtons, modelChoices, withAccount, baseName, chatHost, checkImage, isLocalHost, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, parseSites, pathsInText, resultBlocks, skillMd, toolSummary, dayKey, clock, ago, modelLabel, turnLine, codeLines, tailPath } from './util.js'
 // The reason the host gives a web task made before sites were listed (src/sched_store.rs NEEDS_DOMAINS); shown translated.
 const NEEDS_SITES = 'needs the sites it may open: edit the task and list them'
 
@@ -9,11 +12,29 @@ const TEXT = {
   ko: {
     newChat: '＋ 새 대화', folder: '프로젝트 폴더 (절대 경로)', model: '모델', create: '만들기', cancel: '취소', empty: '왼쪽에서 대화를 고르거나 새 대화를 만드세요.',
     placeholder: '메시지를 입력하세요 (Enter 전송, Shift+Enter 줄바꿈). 이미지는 붙여넣기·끌어놓기', send: '보내기', stop: '중단', attach: '이미지 첨부',
-    idle: '대기', running: '작업 중', exited: '종료됨', connected: '연결됨', reconnecting: '다시 연결하는 중…', untitled: '(새 대화)',
+    idle: '대기', running: '작업 중', exited: '종료됨', connected: '연결됨', reconnecting: '다시 연결하는 중…', untitled: '(새 대화)', acctNoChats: '이 계정에는 대화가 없습니다.',
+    plugTitle: '플러그인', plugIntro: '기본 계정에 설치된 플러그인 중 이 계정에 없는 것입니다. 계정마다 설정 폴더가 따로라 직접 설치해야 합니다.', plugNone: '설치할 플러그인이 없습니다.', plugInstall: '설치', plugBusy: '설치 중…', plugConfirm: '{p} 플러그인을 이 계정에 설치합니다. 플러그인은 코드를 실행할 수 있습니다. 계속할까요?', plugDone: '설치했습니다', plugFailed: '설치하지 못했습니다',
+    chatName: '대화 이름 (선택)', renameBtn: '이름 변경', renamePrompt: '새 이름 (60자까지)', deleteBtn: '삭제', deleteConfirm: '이 대화를 삭제합니다. 기록이 모두 지워지고 되돌릴 수 없습니다. 계속할까요?',
+    modelDefault: '기본 모델', modelNow: '모델 변경', modelNote: '다음 메시지부터 이어서 이 모델로 실행합니다',
+    perm: '권한 모드', permTag: '권한',
+    permM_default: '기본 (읽기만 자동 허용)', permN_default: '읽기만 묻지 않고 실행합니다. 나머지는 매번 묻습니다.',
+    permM_acceptEdits: '편집 자동 허용 (acceptEdits)', permN_acceptEdits: '읽기·파일 수정·mkdir/touch/mv/cp는 묻지 않습니다.',
+    permM_plan: '계획만 (plan)', permN_plan: '읽기 전용으로 계획만 세웁니다.',
+    permM_auto: '자동 검토 (auto)', permN_auto: '분류기가 동작을 검토합니다. Claude Code가 지원하는 모델·요금제가 필요하며, 아니면 기본처럼 동작합니다.',
+    permM_dontAsk: '묻지 않고 거부 (dontAsk)', permN_dontAsk: '미리 허용된 도구만 실행하고, 나머지는 묻지 않고 거부합니다.',
+    permM_bypassPermissions: '모든 확인 건너뛰기 (--dangerously-skip-permissions)', permN_bypassPermissions: '모든 동작을 묻지 않고 실행합니다. deny/ask 규칙, 훅, 보호 경로 삭제 확인은 남습니다. root/sudo로 실행하면 Claude Code가 거부합니다.',
+    permBypassConfirm: '이 대화는 파일 수정과 명령 실행을 포함해 모든 도구를 묻지 않고 실행합니다. 되돌릴 수 없는 작업도 포함됩니다. 대화를 만든 뒤에는 권한 모드를 바꿀 수 없습니다. 계속할까요?', acctAttn: '확인 필요',
+    allowSession: '이번 실행 동안 허용', allowAlways: '이 프로젝트에서 항상 허용', grantSessionNote: 'Claude Code가 이 프로세스에서 기억합니다. 다시 시작하거나 모델을 바꾸면 사라질 수 있습니다.', grantAlwaysNote: 'Claude Code가 프로젝트의 .claude/settings.local.json에 규칙을 씁니다. 이 폴더의 모든 대화에 적용되며 앱에서 지우는 기능은 아직 없습니다.', grantExact: '정확히 이 명령만 허용합니다.', grantWild: '이 규칙은 와일드카드(*)를 포함합니다.', grantRules: 'Claude가 제안한 규칙',
     allowOnce: '이번만 허용', deny: '거절', denyReason: '거절 사유 (선택)', permTitle: '도구 사용 승인', blocked: '막힌 경로', suggestions: 'Claude가 제안한 규칙 (참고용, 적용하지 않음)',
     allowed: '허용했습니다', denied: '거절했습니다', cancelled: '승인 요청이 취소되었습니다', running_tool: '실행 중', done: '완료', failed: '오류', more: '더 있음',
     imgType: '이미지는 png, jpeg, gif, webp만 됩니다', imgSize: '이미지는 장당 5MB까지입니다', imgCount: '이미지는 5장까지입니다', thinking: '생각', interrupted: '중단했습니다',
     noSession: '먼저 대화를 만들거나 고르세요.', input: '입력', result: '결과',
+    cvThinkSecs: '{s}초', cvThinkTok: '약 {n}토큰', cvThinkSum: '생각 · {s}초 · {n}자', cvThinkSumNoTime: '생각 · {n}자', cvThinkRedacted: '생각 (가려짐)', cvThinking: '생각하는 중…',
+    cvCopy: '복사', cvCopied: '복사했습니다', cvShowAll: '전체 보기 ({n}줄)', cvLines: '{n}줄',
+    cvHookCode: '훅 {name}: 종료 코드 {code}', cvHookOutcome: '훅 {name}: {outcome}', cvVhdbInject: 'VHDB 기록이 프롬프트에 붙었습니다', cvRate: '사용량 {window} {pct}% · {at} 재설정', cvRateState: '사용량 {window}: {status}', cvWin_five_hour: '5시간', cvWin_seven_day: '7일',
+    cvGuardTeam: '팀 모드가 막음', cvGuardVhdb: 'VHDB가 한 번 막음', cvGuardTip: '사용자가 거부한 것이 아니라 플러그인 규칙이 막았습니다', cvChipTeam: '팀 플러그인', cvChipVhdb: 'VHDB', cvChipTip: '이 대화에 플러그인이 연결되어 있습니다. 켜져 있는지는 이 화면에서 알 수 없습니다',
+    cvRawInput: '원본 입력', cvDiffTooBig: '너무 커서 변경 내용을 비교하지 않았습니다', cvCutChars: '… {n}자에서 잘렸습니다', cvMs: '{n}ms', cvSubTools: '도구 {n}개',
+    cvSessions: '대화 목록', cvYou: '나', cvHint: 'Enter 전송 · Shift+Enter 줄바꿈', cvLastTurn: '마지막 결과의 비용과 토큰', cvThemeDark: '다크 테마 (누르면 라이트)', cvThemeLight: '라이트 테마 (누르면 시스템 설정)', cvThemeAuto: '시스템 설정 따름 (누르면 다크)', cvAttach: '이미지', cvDefaultModel: '기본 모델', cvProvAnthropic: 'Claude 로그인으로 실행', cvJustNow: '방금', cvToday: '오늘',
     searchPh: '모든 대화에서 검색', noResults: '결과가 없습니다', searchFailed: '검색할 수 없습니다', allowChat: '이 대화에서 이 도구 허용 (읽기 전용)',
     roleUser: '나', roleAssistant: 'Claude', roleTool: '도구', roleResult: '결과',
     tabChats: '대화', tabMemory: '메모리', memAuto: '자동 저장', memAutoOff: '끔', memAutoProject: '이 프로젝트 메모만', memAutoBoth: '프로젝트 + 나에 대한 메모',
@@ -48,16 +69,59 @@ const TEXT = {
     provSave: '저장', provEdit: '수정', provDelete: '삭제', provDeleteConfirm: '이 제공자를 삭제할까요? 이 제공자의 대화 {n}개는 기록만 남고 더 이어 갈 수 없습니다.', provHasKey: '키 있음', provNoKey: '키 없음', provChats: '대화', provNoProviders: '아직 제공자가 없습니다.',
     provBanner: '이 대화의 내용은 {host} 로 갑니다 (Claude 계정이 아님). 기억, 스킬, 기록 검색, 자동 저장은 이 대화에 쓰이지 않습니다.', provVia: '→',
     ctrUse: '컨테이너 안에서 실행 (실험)', ctrTitle: '컨테이너 (실험)', ctrIntro: '제공자를 쓰는 대화의 claude를 docker 또는 podman 컨테이너 안에서 실행합니다. 컨테이너는 프로젝트 폴더(읽기·쓰기)와 이 대화의 설정 폴더만 보고, 홈 폴더, 데이터 폴더, Claude 계정 인증 정보는 보지 못합니다. 프로젝트 폴더 자체는 보호하지 않고 네트워크는 열려 있으며, 이 컴퓨터의 주소(localhost)는 컨테이너에서 닿지 않습니다. 이미지에는 claude가 들어 있어야 하고, 실제 docker·podman으로는 아직 검증하지 못했습니다.',
+    fsOffline: '서버와 연결이 끊겨 있습니다. 다시 연결된 뒤에 시도하세요.', fsSaving: '저장하는 중입니다. 끝난 뒤에 옮기세요.', fsRealPath: '실제 파일',
+    tabFiles: '파일', fsIntro: '이 대화의 프로젝트 폴더 안에서만 보고 고칩니다.', fsRefresh: '새로 고침', fsNoChat: '먼저 왼쪽 대화 탭에서 대화를 고르세요.', fsLoading: '불러오는 중…', fsEmpty: '(비어 있음)', fsTruncated: '항목이 너무 많아 일부만 보입니다.', fsUnreadable: '이름을 읽을 수 없는 항목 {n}개는 숨겼습니다.', fsOther: '열 수 없는 항목입니다 (프로젝트 밖으로 나가는 링크, 소켓 등).',
+    termOpen: '터미널 (이 대화의 프로젝트 폴더)', termNoChat: '먼저 대화를 고르세요.', termTooLong: '한 번에 보낼 수 있는 입력이 너무 깁니다.', termEnded: '셸이 끝났습니다 (코드 {code}). 닫고 다시 열면 새로 시작합니다.', termOffline: '연결이 끊겨 터미널이 끝났습니다. 닫고 다시 여세요.', termLeave: '이 대화의 터미널이 끝납니다 (실행 중인 명령도 멈춥니다). 계속할까요?', termPaste: '여러 줄을 붙여 넣었습니다. 각 줄이 명령으로 바로 실행됩니다. 보낼까요?', termInt: '중단 (Ctrl+C)', termEof: '입력 끝 (Ctrl+D)', termHide: '채팅으로', termClose: '터미널 끝내기', termSend: '보내기',
+    fsTag_secret: '비밀', fsTag_guarded: '확인', fsTag_blocked: '읽기 전용', fsTag_heavy: '큼', fsTag_trash: '휴지통', fsTip_trash: '삭제한 항목이 여기에 있습니다. 항목의 ⋯ 메뉴에서 복원합니다. 이 폴더 안에서 지우면 영구 삭제입니다. 이 프로젝트의 채팅이 읽을 수 있습니다.', fsTip_secret: '비밀이 들어 있을 수 있는 파일입니다. 내용은 이 화면에만 보이고 어디에도 저장되지 않습니다.', fsTip_guarded: '나중에 Claude Code 대화가 읽거나 실행하는 파일입니다. 저장하기 전에 한 번 더 확인합니다.', fsTip_blocked: '이 안의 파일은 저장할 수 없습니다 (git이 프로그램을 실행할 수 있는 곳). 보기만 됩니다.', fsTip_heavy: '큰 폴더입니다. 누를 때만 펼칩니다.',
+    fsDiskReloaded: '디스크의 파일이 바뀌어 다시 불러왔습니다.', fsDiskChanged: '디스크의 파일이 바뀌었습니다. 지금 저장하면 어떻게 할지 묻습니다.',
+    fsNewFile: '새 파일', fsNewFolder: '새 폴더', fsNewFileTitle: '새 파일', fsNewFolderTitle: '새 폴더', fsNamePh: '이름', fsCreate: '만들기', fsCreated: '만들었습니다.', fsMore: '이름 바꾸기 · 삭제', fsEntryIntro: '새 이름이나 새 경로를 쓰거나 삭제하세요. 폴더가 다르면 옮깁니다. 이미 있는 폴더로만 옮길 수 있고, 같은 이름이 있으면 하지 않습니다.', fsPathPh: '새 경로 (프로젝트 안)', fsTrashAsk: "'{path}'을(를) .tenrec-trash로 옮길까요? 그곳에서 복원할 수 있습니다. 휴지통에서 지울 때까지 디스크에 남아 있고, 이 프로젝트의 채팅이 읽을 수 있습니다.", fsPurgeAsk: "휴지통의 '{path}'을(를) 영구 삭제할까요? 되돌릴 수 없습니다.", fsPurge: '영구 삭제', fsPurgeTitle: '영구 삭제', fsPurgeIntro: '아래 내용을 지웁니다. 되돌릴 수 없습니다.', fsPurgeBody: "'{path}'을(를) 영구 삭제합니다: 항목 {items}개, {size}. 링크는 따라가지 않고 링크만 지웁니다.", fsEmptyTrash: '휴지통 비우기', fsEmptyBody: '휴지통의 항목 {entries}개(안의 {items}개, {size})를 영구 삭제합니다. 링크는 따라가지 않고 링크만 지웁니다.', fsPurgeLeft: '이 중 {left}개는 지울 수 없어 남습니다 (쓸 수 없는 폴더나 다른 사용자의 것).', fsPurgeGo: '영구 삭제', fsPurged: '영구 삭제했습니다.', fsPurgedLeft: '{removed}개를 지웠고 {left}개는 남겼습니다 (쓸 수 없는 폴더나 다른 사용자의 것).', fsTipTrashMenu: '휴지통 폴더는 지우지 않고 안을 비웁니다.', fsTrashed: '휴지통으로 옮겼습니다.', fsUndo: '되돌리기', fsRestore: '복원', fsRestored: '복원했습니다.', fsFrom: '원래 위치', fsRename: '이름 바꾸기', fsRenamed: '이름을 바꿨습니다.', fsDelete: '삭제', fsDeleted: '삭제했습니다.', fsDeleteAsk: "'{path}'을(를) 삭제할까요? 되돌릴 수 없습니다.", fsDeleteDirAsk: "빈 폴더 '{path}'을(를) 삭제할까요?", fsChangeConfirmBody: '이 위치는 나중에 Claude Code 대화가 읽거나 실행합니다. 그래도 바꿀까요?', fsChangeConfirm: '바꾸기',
+    fsSave: '저장', fsSaved: '저장했습니다.', fsReload: '다시 불러오기', fsBack: '대화로', fsDirty: '바뀜', fsDiscard: '저장하지 않은 변경이 있습니다. 버리고 계속할까요?', fsReadonlyMixed: '줄바꿈이 섞여 있어 그대로 저장할 수 없습니다. 보기만 됩니다.', fsReadonlyBlocked: '이 파일은 저장할 수 없습니다. 보기만 됩니다.', fsGuardedNote: '이 파일은 나중에 Claude Code 대화가 읽거나 실행합니다. 저장하면 한 번 더 확인합니다.',
+    fsConfirmTitle: '이 파일을 저장할까요?', fsConfirmBody: '나중에 이 폴더에서 연 Claude Code 대화가 이 파일을 읽거나 실행합니다 (설정, 훅, 환경 변수 등). 바뀌는 내용을 읽고 정하세요.', fsConfirmSave: '확인하고 저장',
+    fsConflictTitle: '파일이 그사이 바뀌었습니다', fsConflictBody: 'Claude나 다른 프로그램이 이 파일을 고쳤습니다. 아래는 디스크의 내용(빨강)과 내가 쓴 내용(초록)의 차이입니다.', fsConflictReload: '디스크 내용 불러오기 (내 변경 버림)', fsConflictOverwrite: '내 내용으로 덮어쓰기', fsDiffTooBig: '파일이 커서 차이를 보여 줄 수 없습니다.',
     ctrRuntime: '실행 파일 (절대 경로, docker 또는 podman)', ctrImage: '이미지 (미리 받아 둔 것, 자동으로 받지 않습니다)', ctrReady: '컨테이너 대화를 만들 수 있습니다.', ctrNotReady: '실행 파일과 이미지를 모두 적어야 컨테이너 대화를 만들 수 있습니다.', ctrBanner: '이 대화는 컨테이너 안에서 실행됩니다.', ctrTag: '컨테이너',
+    acct: '계정', acctDefault: '기본 계정 (개인)', acctNote: '고른 계정의 로그인으로 실행되고, 그 계정의 메모·스킬·대화 기록만 씁니다. 계정은 새 대화를 만들 때만 고를 수 있고 바꿀 수 없습니다.', acctView: '보는 계정', acctTag: '계정',
+    acctTitle: '계정 (개인·회사 분리)', acctIntro: '로그인을 계정별로 나눕니다. 기본 계정은 이 컴퓨터의 claude가 이미 쓰는 로그인이고, 추가한 계정은 설정 폴더와 메모·스킬·대화 기록 색인이 따로 생겨 서로 보이지 않습니다. 격리가 아니라 용도 분리입니다. 같은 사용자가 실행하는 명령은 두 계정의 폴더를 모두 읽을 수 있습니다. 예약 실행은 기본 계정으로만 돕니다.',
+    acctNew: '＋ 새 계정', acctName: '이름 (예: 회사)', acctAdd: '추가', acctCheck: '로그인 상태 확인', acctLogin: '로그인 명령 복사', acctHow: '로그인 방법', acctLoginNote: '아래 명령을 터미널에서 직접 실행해 로그인하세요. 이 앱은 토큰이나 인증 코드를 보지도 저장하지도 않습니다.', acctCopied: '복사했습니다.',
+    acctRename: '이름 변경', acctDelete: '삭제', acctRenamePrompt: '새 이름', acctDeleteConfirm: '이 계정을 삭제할까요? 이 계정의 로그인, 메모, 스킬, 기록 색인이 지워집니다. 이 계정의 대화 {n}개는 기록만 남고 더 이어 갈 수 없습니다.',
+    acctLoggedIn: '로그인됨', acctLoggedOut: '로그인 안 됨', acctUnknown: '상태를 확인하지 못했습니다', acctChats: '대화', acctNone: '추가한 계정이 없습니다.', acctClosed: '열리지 않음 (폴더를 확인하세요)', acctDefaultRow: '기본 계정', acctChecking: '확인하는 중…',
+    acctW_logout_failed: '로그아웃을 확인하지 못했습니다. claude에서 직접 로그아웃해 두세요.', acctW_folder_left: '일부 폴더를 지우지 못했습니다. 데이터 폴더에서 직접 지워야 합니다.', acctNeedsLogin: '이 계정은 아직 로그인되어 있지 않습니다. 계정 패널의 명령으로 로그인하세요.',
+    wtUse: '격리된 worktree에서 시작 (새 git 브랜치)', wtUseNote: '원본 폴더의 현재 커밋에서 새 브랜치를 만듭니다. 커밋 안 된 변경과 .env 같은 무시된 파일은 따라오지 않습니다.', wtTag: 'worktree', wtGone: 'worktree 정리됨', wtBelowTop: '프로젝트 안의 하위 폴더가 아니라 worktree의 맨 위 폴더에서 시작했습니다.',
+    wtBanner: 'worktree · 브랜치 {branch} ← {base} · 원본 {repo}', wtHint: '원본 폴더를 고치라는 요청은 거절하세요. 변경은 이 worktree에서만 하고, 끝나면 병합하세요.', wtCheck: '병합 점검', wtRemoveBtn: '정리', wtRemoved: 'worktree가 정리된 채팅입니다 (기록만 볼 수 있음).',
+    wtSummary: '커밋 {n}개 · 파일 {f}개 +{a} −{d} · {base}가 {b}커밋 앞서 있음', wtOk: '병합할 수 있습니다.', wtMerge: '병합', wtMerged: '병합했습니다.',
+    wtB_uncommitted: '이 worktree에 커밋 안 된 변경이 있습니다. 먼저 커밋하세요.', wtB_nothing: '병합할 커밋이 없습니다.', wtB_wrong_branch: '원본 폴더가 {base}가 아닌 {main} 브랜치에 있습니다. {base}로 되돌리세요.', wtB_main_dirty: '원본 폴더에 커밋 안 된 변경이 있습니다. 거기서 먼저 커밋하거나 보관하세요.', wtB_mid_merge: '원본 폴더가 병합 도중입니다. 먼저 끝내거나 취소하세요.', wtB_conflict: '충돌: {files}', wtB_missing: 'worktree 폴더가 없습니다. 정리하세요.',
+    wtMergeConfirm: '{branch}의 커밋 {n}개를 {repo}의 {base} 브랜치에 병합 커밋으로 합칩니다. 원본 폴더를 편집기에서 열어 두었다면 파일 내용이 바뀝니다. 계속할까요?',
+    wtRemove1: 'worktree 폴더 {path}를 지웁니다. 이 채팅은 더 이어갈 수 없습니다. 계속할까요?', wtRemoveLoss: ' 커밋 안 된 변경 {n}건이 사라집니다.', wtRemove2: '{base}에 없는 커밋 {n}개가 있습니다. 브랜치 {branch}도 지울까요? 취소하면 브랜치는 남습니다.', wtDone: 'worktree를 정리했습니다.', wtKept: ' 브랜치 {branch}는 남겼습니다 (병합되지 않은 커밋이 있음).',
+    wtE_stale: '그사이 브랜치가 바뀌었습니다. 다시 점검했습니다.', wtE_blocked: '병합할 수 없는 상태입니다. 다시 점검했습니다.', wtE_conflict: '병합하면 충돌합니다. 원본 폴더는 그대로입니다.', wtE_not_owned: '이 앱이 만든 worktree가 아니어서 아무것도 건드리지 않았습니다.', wtE_busy: '턴이 실행 중입니다. 먼저 멈추세요.', wtE_uncommitted: '커밋 안 된 변경이 있습니다.', wtE_removed: '이미 정리된 worktree입니다.', wtE_abort_failed: '병합을 되돌리지 못했습니다. 원본 폴더에서 git merge --abort 를 실행하세요.',
+    wtCfgIntro: '이 프로젝트의 git 설정 중 프로그램을 실행할 수 있는 것(필터, 병합·diff 드라이버, include, attributes 등)이 이 채팅을 만든 뒤 바뀌었습니다. 이 채팅의 명령이 바꿨을 수 있습니다. 확인하기 전에는 점검도 병합도 하지 않습니다.', wtCfgAccept: '이 설정을 받아들임', wtCfgConfirm: '위 설정을 읽어 보았고, 이 설정으로 git이 실행되어도 괜찮습니까?', wtCfgDone: '설정을 받아들였습니다.',
+    wtRemove2b: '{base}에 같은 내용이 이미 들어 있는 것으로 보이지만 (squash 등) 커밋 {n}개는 기록에 없습니다. 브랜치 {branch}도 지울까요? 취소하면 브랜치는 남습니다.', wtW_folder_left: '폴더 일부를 지우지 못했습니다. 직접 지우세요.', wtW_branch_not_deleted: '브랜치를 지우지 못해 남겼습니다.', wtW_forgotten: '(폴더와 git 등록이 이미 없었습니다.)',
+    wtE_config_changed: '프로젝트의 git 설정이 바뀌었습니다.', wtE_unexpected_result: '병합 결과가 점검한 것과 달라 취소했습니다.',
   },
   en: {
     newChat: '＋ New chat', folder: 'Project folder (absolute path)', model: 'Model', create: 'Create', cancel: 'Cancel', empty: 'Pick a chat on the left or start a new one.',
     placeholder: 'Message (Enter to send, Shift+Enter for a new line). Paste or drop images', send: 'Send', stop: 'Stop', attach: 'Attach image',
-    idle: 'idle', running: 'working', exited: 'ended', connected: 'connected', reconnecting: 'reconnecting…', untitled: '(new chat)',
+    idle: 'idle', running: 'working', exited: 'ended', connected: 'connected', reconnecting: 'reconnecting…', untitled: '(new chat)', acctNoChats: 'No chats under this account.',
+    plugTitle: 'Plugins', plugIntro: 'Plugins the default account has and this account lacks. Each account has its own settings folder, so they are installed here separately.', plugNone: 'Nothing to install.', plugInstall: 'Install', plugBusy: 'Installing…', plugConfirm: 'Install the plugin {p} into this account? A plugin can run code. Continue?', plugDone: 'Installed', plugFailed: 'Could not install',
+    chatName: 'Chat name (optional)', renameBtn: 'Rename', renamePrompt: 'New name (60 characters at most)', deleteBtn: 'Delete', deleteConfirm: 'Delete this chat? Its whole history is erased and this cannot be undone. Continue?',
+    modelDefault: 'default model', modelNow: 'Model changed', modelNote: 'the next message continues the chat with this model',
+    perm: 'Permission mode', permTag: 'permission',
+    permM_default: 'Default (only reads run without asking)', permN_default: 'Only reads run without asking. Everything else asks each time.',
+    permM_acceptEdits: 'Accept edits (acceptEdits)', permN_acceptEdits: 'Reads, file edits and mkdir/touch/mv/cp run without asking.',
+    permM_plan: 'Plan only (plan)', permN_plan: 'Read-only planning.',
+    permM_auto: 'Auto review (auto)', permN_auto: 'A classifier reviews each action. It needs a model and plan Claude Code supports; otherwise it acts as the default.',
+    permM_dontAsk: 'Deny without asking (dontAsk)', permN_dontAsk: 'Only pre-approved tools run; everything else is denied without asking.',
+    permM_bypassPermissions: 'Skip every check (--dangerously-skip-permissions)', permN_bypassPermissions: 'Everything runs without asking (deny/ask rules, hooks and protected-path delete checks still apply). Claude Code refuses it when run as root/sudo.',
+    permBypassConfirm: 'This chat runs every tool, including file edits and commands, without asking. That includes things that cannot be undone. The permission mode cannot be changed after the chat is made. Continue?', acctAttn: 'needs you',
+    allowSession: 'Allow for this run', allowAlways: 'Always allow in this project', grantSessionNote: 'Claude Code remembers it in this process. It may be gone after a restart or a model change.', grantAlwaysNote: 'Claude Code writes the rule into the project\'s .claude/settings.local.json. It applies to every chat of this folder, and this app cannot remove it yet.', grantExact: 'Allows exactly this command only.', grantWild: 'This rule contains a wildcard (*).', grantRules: 'Rule Claude suggested',
     allowOnce: 'Allow once', deny: 'Deny', denyReason: 'Reason (optional)', permTitle: 'Approve tool use', blocked: 'Blocked path', suggestions: 'Rules Claude suggested (for information, not applied)',
     allowed: 'allowed', denied: 'denied', cancelled: 'the approval request was cancelled', running_tool: 'running', done: 'done', failed: 'error', more: 'more',
     imgType: 'Only png, jpeg, gif and webp images', imgSize: 'An image can be 5 MB at most', imgCount: 'Up to 5 images', thinking: 'thinking', interrupted: 'stopped',
     noSession: 'Create or pick a chat first.', input: 'input', result: 'result',
+    cvThinkSecs: '{s}s', cvThinkTok: '~{n} tokens', cvThinkSum: 'thinking · {s}s · {n} chars', cvThinkSumNoTime: 'thinking · {n} chars', cvThinkRedacted: 'thinking (hidden)', cvThinking: 'thinking…',
+    cvCopy: 'copy', cvCopied: 'copied', cvShowAll: 'show all ({n} lines)', cvLines: '{n} lines',
+    cvHookCode: 'hook {name}: exit code {code}', cvHookOutcome: 'hook {name}: {outcome}', cvVhdbInject: 'VHDB history was added to the prompt', cvRate: 'usage {window} {pct}% · resets {at}', cvRateState: 'usage {window}: {status}', cvWin_five_hour: '5 hours', cvWin_seven_day: '7 days',
+    cvGuardTeam: 'held by team mode', cvGuardVhdb: 'held once by VHDB', cvGuardTip: 'a plug-in rule held this, not the user', cvChipTeam: 'team plug-in', cvChipVhdb: 'VHDB', cvChipTip: 'plug-in connected to this chat; whether it is switched on is not known here',
+    cvRawInput: 'raw input', cvDiffTooBig: 'too large to compare the changes', cvCutChars: '… cut at {n} characters', cvMs: '{n} ms', cvSubTools: '{n} tools',
+    cvSessions: 'Chats', cvYou: 'you', cvHint: 'Enter to send · Shift+Enter for a new line', cvLastTurn: 'cost and tokens of the last result', cvThemeDark: 'dark theme (click for light)', cvThemeLight: 'light theme (click for system)', cvThemeAuto: 'follows the system (click for dark)', cvAttach: 'image', cvDefaultModel: 'default model', cvProvAnthropic: 'runs on your Claude login', cvJustNow: 'now', cvToday: 'today',
     searchPh: 'Search all chats', noResults: 'No results', searchFailed: 'Search is not available', allowChat: 'Allow this tool in this chat (read-only)',
     roleUser: 'me', roleAssistant: 'Claude', roleTool: 'tool', roleResult: 'result',
     tabChats: 'Chats', tabMemory: 'Memory', memAuto: 'Auto-save', memAutoOff: 'Off', memAutoProject: 'This project only', memAutoBoth: 'Project + about me',
@@ -92,7 +156,32 @@ const TEXT = {
     provSave: 'Save', provEdit: 'Edit', provDelete: 'Delete', provDeleteConfirm: 'Delete this provider? Its {n} chat(s) keep their history and can no longer be continued.', provHasKey: 'key set', provNoKey: 'no key', provChats: 'chats', provNoProviders: 'No providers yet.',
     provBanner: 'This chat\'s content goes to {host} (not your Claude account). Notes, skills, history search and auto-save are not used in this chat.', provVia: '→',
     ctrUse: 'Run inside a container (experimental)', ctrTitle: 'Container (experimental)', ctrIntro: 'Runs the claude of a chat that uses a provider inside a docker or podman container. The container sees the project folder (read-write) and this chat\'s own settings folder, and not your home folder, the data folder or the Claude account\'s credentials. It does not protect the project folder itself, the network is open, and an address on this computer (localhost) cannot be reached from inside. The image must contain claude. It has not been verified with a real docker or podman yet.',
+    fsOffline: 'The connection to the host is down. Try again once it is back.', fsSaving: 'Saving is in progress. Move on when it is done.', fsRealPath: 'Real file',
+    tabFiles: 'Files', fsIntro: 'View and edit inside this chat\'s project folder only.', fsRefresh: 'Refresh', fsNoChat: 'Pick a chat in the Chats tab first.', fsLoading: 'Loading…', fsEmpty: '(empty)', fsTruncated: 'Too many entries: only some are shown.', fsUnreadable: '{n} entries whose names cannot be read are hidden.', fsOther: 'Cannot be opened (a link that leaves the project, a socket, …).',
+    termOpen: 'Terminal (this chat\'s project folder)', termNoChat: 'Pick a chat first.', termTooLong: 'That is too much input to send at once.', termEnded: 'The shell ended (code {code}). Close and open again to start a new one.', termOffline: 'The connection dropped and the terminal ended. Close and open again.', termLeave: 'This chat\'s terminal ends (a running command stops with it). Continue?', termPaste: 'Several lines were pasted. Each line runs as a command at once. Send them?', termInt: 'Interrupt (Ctrl+C)', termEof: 'End of input (Ctrl+D)', termHide: 'Back to chat', termClose: 'End terminal', termSend: 'Send',
+    fsTag_secret: 'secret', fsTag_guarded: 'confirm', fsTag_blocked: 'read-only', fsTag_heavy: 'big', fsTag_trash: 'trash', fsTip_trash: 'Deleted entries are here. Restore one from its ⋯ menu. Deleting inside this folder is for good. A chat of this project can read it.', fsTip_secret: 'May hold secrets. The content is shown on this screen only and kept nowhere.', fsTip_guarded: 'A later Claude Code chat reads or runs this file. Saving asks once more.', fsTip_blocked: 'Files in here cannot be saved (git can run programs from here). View only.', fsTip_heavy: 'A big folder. Opened only when you click it.',
+    fsDiskReloaded: 'The file changed on disk and was read again.', fsDiskChanged: 'The file changed on disk. Saving now asks what to do.',
+    fsNewFile: 'New file', fsNewFolder: 'New folder', fsNewFileTitle: 'New file', fsNewFolderTitle: 'New folder', fsNamePh: 'Name', fsCreate: 'Create', fsCreated: 'Created.', fsMore: 'Rename · delete', fsEntryIntro: 'Type a new name or a new path, or delete it. A different folder moves it. It can only go into a folder that already exists, and never onto an existing name.', fsPathPh: 'New path (inside the project)', fsTrashAsk: "Move '{path}' to .tenrec-trash? You can restore it from there. It stays on disk until it is deleted from the trash, and a chat of this project can read it.", fsPurgeAsk: "Delete '{path}' from the trash for good? This cannot be undone.", fsPurge: 'Delete for good', fsPurgeTitle: 'Delete for good', fsPurgeIntro: 'This is deleted. It cannot be undone.', fsPurgeBody: "Deletes '{path}' for good: {items} entries, {size}. A link is removed as a link, never followed.", fsEmptyTrash: 'Empty trash', fsEmptyBody: 'Deletes {entries} entries of the trash for good ({items} items inside, {size}). A link is removed as a link, never followed.', fsPurgeLeft: '{left} of them cannot be deleted and stay (a folder that cannot be written to, or another user\'s).', fsPurgeGo: 'Delete for good', fsPurged: 'Deleted for good.', fsPurgedLeft: '{removed} deleted, {left} left (a folder that cannot be written to, or another user\'s).', fsTipTrashMenu: 'The trash folder itself is not deleted; what is in it is.', fsTrashed: 'Moved to the trash.', fsUndo: 'Undo', fsRestore: 'Restore', fsRestored: 'Restored.', fsFrom: 'Came from', fsRename: 'Rename', fsRenamed: 'Renamed.', fsDelete: 'Delete', fsDeleted: 'Deleted.', fsDeleteAsk: "Delete '{path}'? This cannot be undone.", fsDeleteDirAsk: "Delete the empty folder '{path}'?", fsChangeConfirmBody: 'A later Claude Code chat reads or runs what is in this place. Change it anyway?', fsChangeConfirm: 'Change',
+    fsSave: 'Save', fsSaved: 'Saved.', fsReload: 'Reload', fsBack: 'Back to chat', fsDirty: 'changed', fsDiscard: 'There are unsaved changes. Discard them and continue?', fsReadonlyMixed: 'The line endings are mixed, so this file cannot be saved as it is. View only.', fsReadonlyBlocked: 'This file cannot be saved. View only.', fsGuardedNote: 'A later Claude Code chat reads or runs this file. Saving asks once more.',
+    fsConfirmTitle: 'Save this file?', fsConfirmBody: 'A Claude Code chat opened later in this folder reads or runs this file (settings, hooks, environment variables, …). Read what changes and decide.', fsConfirmSave: 'Confirm and save',
+    fsConflictTitle: 'The file changed meanwhile', fsConflictBody: 'Claude or another program changed this file. Below, the difference between what is on disk (red) and what you wrote (green).', fsConflictReload: 'Load the disk version (drop my changes)', fsConflictOverwrite: 'Overwrite with mine', fsDiffTooBig: 'The file is too big to show the difference.',
     ctrRuntime: 'Program (absolute path, docker or podman)', ctrImage: 'Image (already pulled; it is never pulled for you)', ctrReady: 'Container chats can be made.', ctrNotReady: 'Both the program and the image are needed before a container chat can be made.', ctrBanner: 'This chat runs inside a container.', ctrTag: 'container',
+    acct: 'Account', acctDefault: 'Default account (personal)', acctNote: 'The chat runs with the chosen account\'s login and uses only that account\'s notes, skills and chat history. An account can only be chosen when a chat is made and cannot be changed.', acctView: 'Account shown', acctTag: 'account',
+    acctTitle: 'Accounts (personal and work apart)', acctIntro: 'Logins are kept apart. The default account is the login the claude on this computer already uses; an added account gets a settings folder, notes, skills and a history index of its own, and none of one is visible from another. This keeps uses apart; it is not isolation: a command run by the same user can read both accounts\' folders. Scheduled runs use the default account only.',
+    acctNew: '＋ New account', acctName: 'Name (for example: Work)', acctAdd: 'Add', acctCheck: 'Check login', acctLogin: 'Copy login command', acctHow: 'How to log in', acctLoginNote: 'Run the command below in your own terminal to log in. This app never sees or stores a token or a code.', acctCopied: 'Copied.',
+    acctRename: 'Rename', acctDelete: 'Delete', acctRenamePrompt: 'New name', acctDeleteConfirm: 'Delete this account? Its login, notes, skills and history index are removed. Its {n} chats stay readable and cannot be continued.',
+    acctLoggedIn: 'Logged in', acctLoggedOut: 'Not logged in', acctUnknown: 'The status could not be read', acctChats: 'chats', acctNone: 'No account was added.', acctClosed: 'Not open (check its folder)', acctDefaultRow: 'Default account', acctChecking: 'Checking…',
+    acctW_logout_failed: 'The logout could not be confirmed. Log out in claude yourself.', acctW_folder_left: 'Some folders could not be removed. Remove them from the data folder yourself.', acctNeedsLogin: 'This account is not logged in yet. Use the command in the Accounts panel.',
+    wtUse: 'Start in an isolated worktree (new git branch)', wtUseNote: 'A new branch is made from the folder\'s current commit. Uncommitted changes and ignored files such as .env are not carried over.', wtTag: 'worktree', wtGone: 'worktree removed', wtBelowTop: 'The chat started at the top of the worktree, not in the folder inside the project.',
+    wtBanner: 'worktree · branch {branch} ← {base} · original {repo}', wtHint: 'Refuse requests to change the original folder. Make changes only in this worktree, then merge.', wtCheck: 'Check merge', wtRemoveBtn: 'Clean up', wtRemoved: 'This chat\'s worktree was removed (history only).',
+    wtSummary: '{n} commits · {f} files +{a} −{d} · {base} is {b} commits ahead', wtOk: 'It can be merged.', wtMerge: 'Merge', wtMerged: 'Merged.',
+    wtB_uncommitted: 'This worktree has uncommitted changes. Commit them first.', wtB_nothing: 'There is nothing to merge.', wtB_wrong_branch: 'The original folder is on {main}, not {base}. Switch it back to {base}.', wtB_main_dirty: 'The original folder has uncommitted changes. Commit or stash them there first.', wtB_mid_merge: 'The original folder is in the middle of a merge. Finish or abort it first.', wtB_conflict: 'Conflicts: {files}', wtB_missing: 'The worktree folder is gone. Clean it up.',
+    wtMergeConfirm: 'Merge {n} commits of {branch} into the {base} branch of {repo} as a merge commit. If you have the original folder open in an editor, its files change. Continue?',
+    wtRemove1: 'The worktree folder {path} will be deleted. This chat cannot continue. Continue?', wtRemoveLoss: ' {n} uncommitted changes will be lost.', wtRemove2: '{n} commits are not in {base}. Delete the branch {branch} too? Cancel keeps the branch.', wtDone: 'The worktree was removed.', wtKept: ' The branch {branch} was kept (it has commits that were not merged).',
+    wtE_stale: 'The branches changed meanwhile. Checked again.', wtE_blocked: 'The merge is blocked. Checked again.', wtE_conflict: 'The merge would conflict. The original folder is unchanged.', wtE_not_owned: 'This is not a worktree this app made, so nothing was touched.', wtE_busy: 'A turn is running. Stop it first.', wtE_uncommitted: 'There are uncommitted changes.', wtE_removed: 'That worktree was already removed.', wtE_abort_failed: 'The merge could not be undone. Run git merge --abort in the original folder.',
+    wtCfgIntro: 'Settings of this project\'s git that can run a program (filters, merge and diff drivers, includes, attributes, ...) changed since this chat was made. A command run in this chat may have changed them. Nothing is checked or merged until you have looked.', wtCfgAccept: 'Accept these settings', wtCfgConfirm: 'You have read the settings above and are fine with git running with them?', wtCfgDone: 'The settings were accepted.',
+    wtRemove2b: '{base} seems to hold the same content already (a squash, for example), but {n} commits are not in its history. Delete the branch {branch} too? Cancel keeps the branch.', wtW_folder_left: 'Part of the folder could not be deleted. Delete it by hand.', wtW_branch_not_deleted: 'The branch could not be deleted and was kept.', wtW_forgotten: '(The folder and git\'s record of it were already gone.)',
+    wtE_config_changed: 'The project\'s git settings changed.', wtE_unexpected_result: 'The merge did not give the checked result and was undone.',
   },
 }
 const LANG = (navigator.language || 'ko').toLowerCase().startsWith('en') ? 'en' : 'ko'
@@ -106,10 +195,21 @@ const el = (tag, cls, text) => {
   if (text !== undefined) node.textContent = text
   return node
 }
+const SVGNS = 'http://www.w3.org/2000/svg'
+/** An icon from the sprite in index.html (`<symbol id="i-name">`), drawn with DOM calls only. */
+const icon = (name, cls) => {
+  const svg = document.createElementNS(SVGNS, 'svg')
+  svg.setAttribute('class', 'ic' + (cls ? ' ' + cls : ''))
+  svg.setAttribute('aria-hidden', 'true')
+  const use = document.createElementNS(SVGNS, 'use')
+  use.setAttribute('href', '#i-' + name)
+  svg.appendChild(use)
+  return svg
+}
 for (const n of document.querySelectorAll('[data-i]')) n.textContent = t(n.dataset.i)
 for (const n of document.querySelectorAll('[data-i-ph]')) n.placeholder = t(n.dataset.iPh)
 for (const n of document.querySelectorAll('[data-i-title]')) n.title = t(n.dataset.iTitle)
-$('new-toggle').textContent = t('newChat')
+$('new-toggle').setAttribute('aria-label', t('newChat'))
 
 // ---- token and storage ----
 const store = {
@@ -124,13 +224,19 @@ try {
 history.replaceState(null, '', location.pathname)
 
 // ---- theme ----
-const applyTheme = mode => { if (mode === 'light' || mode === 'dark') document.documentElement.dataset.theme = mode; else delete document.documentElement.dataset.theme }
-applyTheme(store.get('tenrec-theme'))
+// Dark unless the person picked light or "follow the system" (the design is dark first).
+const THEMES = ['dark', 'light', 'auto']
+const applyTheme = mode => {
+  const m = THEMES.includes(mode) ? mode : 'dark'
+  document.documentElement.dataset.theme = m
+  $('theme').replaceChildren(icon(m === 'dark' ? 'moon' : m === 'light' ? 'sun' : 'half'))
+  $('theme').title = t(m === 'dark' ? 'cvThemeDark' : m === 'light' ? 'cvThemeLight' : 'cvThemeAuto')
+  return m
+}
+let theme = applyTheme(store.get('tenrec-theme'))
 $('theme').addEventListener('click', () => {
-  const now = document.documentElement.dataset.theme
-  const next = now === 'dark' ? 'light' : now === 'light' ? '' : 'dark'
-  store.set('tenrec-theme', next)
-  applyTheme(next)
+  theme = applyTheme(THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length])
+  store.set('tenrec-theme', theme)
 })
 
 // ---- markdown ----
@@ -143,54 +249,123 @@ DOMPurify.addHook('afterSanitizeAttributes', node => {
 const markdown = source => DOMPurify.sanitize(marked.parse(source, { gfm: true, breaks: true }), { FORBID_TAGS: ['style', 'form', 'input', 'button', 'img'], FORBID_ATTR: ['style'] })
 
 // ---- state ----
-const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, skills: null, sched: null, providers: null, pvEditing: null, scEditing: 0, scRunId: 0, skEditing: 0, skHistory: null, skDraft: null, skEditReport: null, images: [], debug: [], connected: false, wasConnected: false }
+const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, liveThink: null, thinkMs: null, sysTurn: new Set(), sysWin: new Map(), curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, skills: null, sched: null, providers: null, pvEditing: null, scEditing: 0, scRunId: 0, skEditing: 0, skHistory: null, skDraft: null, skEditReport: null, images: [], debug: [], connected: false, wasConnected: false, acct: null, accounts: null, acctStatus: new Map(), acctRid: 0, acctHow: new Set(), acctPlug: new Set(), acctPlugins: new Map(), acctPlugBusy: new Set(), acctOps: new Map(), acctReq: 0, curTs: 0, day: '', asstMeta: false, model: null }
 
 const messages = $('messages')
+const files = initFiles({ $, el, t, send: op => wsSend(op), toast: (text, action) => toast(text, action), sid: () => S.cur })
+const term = initTerm({ $, t, send: op => wsSend(op), toast: text => toast(text), sid: () => S.cur })
+const wt = initWt({ $, el, t, send: op => wsSend(op), toast: text => toast(text), sid: () => S.cur, beforeRemove: () => files.leave() && term.leave(null), removed: sid => markRemoved(sid) })
+// A removed worktree: the chat stays to be read, and what was open on its folder is closed.
+function markRemoved(sid) {
+  const s = S.sessions.find(x => x.sid === sid)
+  if (s?.worktree) s.worktree = { ...s.worktree, removed: true }
+  renderSessions()
+  if (sid === S.cur) { files.reset(); term.reset(); wt.show(s) }
+}
+/** True when the editor and the terminal may both be left (called before another chat is opened). */
+function leaveView(target) { return files.leave() && term.leave(target) }
+// Coming back to the page: a file open in the editor may have been changed while the page was away.
+window.addEventListener('focus', () => files.checkDisk())
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') files.checkDisk() })
 function stick() { return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120 }
-function add(node) {
+function add(node, opts = {}) {
   const follow = stick()
   $('empty')?.remove()
-  if (S.curSeq) node.dataset.seq = String(S.curSeq)
+  // A day line or a name line is not a message: a search jump must land on the message itself.
+  if (S.curSeq && opts.seq !== false) node.dataset.seq = String(S.curSeq)
   messages.appendChild(node)
   if (follow) messages.scrollTop = messages.scrollHeight
   return node
 }
+// A line with the day when the next message is on another day than the last one shown.
+function dayMark() {
+  const key = dayKey(S.curTs)
+  if (!key || key === S.day) return
+  S.day = key
+  add(el('div', 'day', (key === dayKey(Date.now()) ? t('cvToday') : key) + ' · ' + clock(S.curTs)), { seq: false })
+}
+// The name line above the first block of an answer (thinking, a tool or text): who answers, and when.
+function asstMeta() {
+  if (S.asstMeta) return
+  S.asstMeta = true
+  dayMark()
+  const meta = el('div', 'mmeta asst')
+  const av = el('span', 'av')
+  av.append(icon('bolt'))
+  meta.append(av, el('span', 'who', modelLabel(S.model || curSession()?.model || '') || 'Claude'))
+  if (clock(S.curTs)) meta.append(el('span', '', clock(S.curTs)))
+  add(meta, { seq: false })
+}
 function resetView() {
+  S.day = ''
+  S.asstMeta = false
+  S.model = null
+  $('turn-pill').hidden = true
   messages.replaceChildren()
   S.tools.clear()
   S.live = null
+  S.liveThink = null
+  S.thinkMs = null
+  S.sysTurn.clear()
+  S.sysWin.clear()
+  showChips({ team: false, vhdb: false })
   S.debug = []
   $('debug').replaceChildren()
 }
 
 // ---- socket ----
-function wsSend(op) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(op)) }
+/** True when the message went out (a closed socket drops it, and the caller may need to know). */
+function wsSend(op) {
+  if (!S.ws || S.ws.readyState !== 1) return false
+  // A message about notes, skills or history names the account the panels show (the host refuses one that does not).
+  S.ws.send(JSON.stringify(withAccount(op, S.acct)))
+  return true
+}
 
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws`)
+  ws.binaryType = 'arraybuffer'
   S.ws = ws
   ws.addEventListener('open', () => {
     ws.send(JSON.stringify({ op: 'auth', token }))
     S.connected = true
     showConn()
   })
-  ws.addEventListener('message', event => { try { onMessage(JSON.parse(event.data)) } catch (error) { debugLog('bad message: ' + error) } })
+  ws.addEventListener('message', event => {
+    // A binary frame is terminal output: it goes to the terminal and nowhere else (not the debug drawer, not a log).
+    if (event.data instanceof ArrayBuffer) { term.onBinary(event.data); return }
+    try { onMessage(JSON.parse(event.data)) } catch (error) { debugLog('bad message: ' + error) }
+  })
   ws.addEventListener('close', () => {
     S.connected = false
     showConn()
+    files.disconnected()
+    term.disconnected()
     setTimeout(connect, 1200)
   })
 }
-function showConn() { $('conn').textContent = S.connected ? t('connected') : t('reconnecting') }
+function showConn() {
+  const c = $('conn')
+  c.classList.toggle('off', !S.connected)
+  c.replaceChildren(el('span', 'cdot'), el('span', 'chost', location.host), el('span', 'cstate', S.connected ? t('connected') : t('reconnecting')))
+}
 
 function onMessage(m) {
+  if (typeof m.kind === 'string' && m.kind.startsWith('fs_')) { files.onMessage(m); return }
+  if (typeof m.kind === 'string' && m.kind.startsWith('term_')) { term.onMessage(m); return }
+  if (typeof m.kind === 'string' && m.kind.startsWith('wt_')) { wt.onMessage(m); return }
   if (m.kind === 'search_results') { showResults(m.data); return }
-  if (m.kind === 'memory') { S.mem = m.data; renderMemory(); return }
-  if (m.kind === 'memory_changed') { askMemory(); return }
+  if (m.kind === 'memory') { if (viewing(m.data)) { S.mem = m.data; renderMemory() } return }
+  if (m.kind === 'memory_changed') { if (m.data.gone && m.data.account === S.acct) setAcct(null); else if (forAccount(m.data, S.acct)) askMemory(); return }
   if (m.kind === 'memory_result') { memResult(m.data); return }
   if (m.kind === 'memory_export') { downloadJson('memories.json', m.data); return }
-  if (m.kind === 'memory_notice') { toast(m.data.text); return }
-  if (m.kind === 'memory_auto') { autoSaved(m.data.items || []); return }
+  if (m.kind === 'memory_notice') { toast(acctPrefix(m.data) + m.data.text); return }
+  if (m.kind === 'memory_auto') { autoSaved(m.data); return }
+  if (m.kind === 'accounts') { S.accounts = m.data; renderAccounts(); return }
+  if (m.kind === 'accounts_changed') { askAccounts(); return }
+  if (m.kind === 'account_result') { acctResult(m.data); return }
+  if (m.kind === 'account_status') { acctStatusIn(m.data); return }
+  if (m.kind === 'account_plugins') { S.acctPlugins.set(m.data.account, m.data); renderAccounts(); return }
   if (m.kind === 'providers') { S.providers = m.data; renderProviders(); return }
   if (m.kind === 'providers_changed') { askProviders(); return }
   if (m.kind === 'provider_result') { pvResult(m.data); return }
@@ -199,60 +374,156 @@ function onMessage(m) {
   if (m.kind === 'sched_result') { scResult(m.data); return }
   if (m.kind === 'sched_run_detail') { showRun(m.data.run); return }
   if (m.kind === 'sched_run') { scAnnounce(m.data); return }
-  if (m.kind === 'skills') { S.skills = m.data; renderSkills(); return }
-  if (m.kind === 'skills_changed') { S.skHistory = null; askSkills(); return }
+  if (m.kind === 'skills') { if (viewing(m.data)) { S.skills = m.data; renderSkills() } return }
+  if (m.kind === 'skills_changed') { if (forAccount(m.data, S.acct)) { S.skHistory = null; askSkills() } return }
   if (m.kind === 'skill_result') { skResult(m.data); return }
   if (m.kind === 'skill_versions') { S.skHistory = m.data; renderSkills(); return }
-  if (m.kind === 'skill_notice') { toast(m.data.text); return }
-  if (m.kind === 'skill_proposed') { toast(`${t('skProposed')}: ${m.data.name}`, { label: t('tabSkills'), run: () => showSide('skills') }); askSkills(); return }
+  if (m.kind === 'skill_notice') { toast(acctPrefix(m.data) + m.data.text); return }
+  if (m.kind === 'skill_proposed') {
+    // Shown at once, whichever account it is about; the button takes the person to that account's skills.
+    toast(`${acctPrefix(m.data)}${t('skProposed')}: ${m.data.name}`, { label: t('tabSkills'), run: () => { setAcct(m.data.account ?? null); showSide('skills') } })
+    if (forAccount(m.data, S.acct)) askSkills()
+    return
+  }
   if (m.kind === 'hello') {
     S.sessions = m.data.sessions || []
+    term.available(!!m.data.terminal)
     renderSessions()
     askMemory()
     askSkills()
     askSched()
     askProviders()
+    askAccounts()
     if (S.cur && S.wasConnected) { S.replaying = true; wsSend({ op: 'attach', sid: S.cur, after_seq: S.lastSeq }) }
     S.wasConnected = true
+    return
+  }
+  if (m.kind === 'deleted') {
+    S.sessions = S.sessions.filter(s => s.sid !== m.sid)
+    if (S.cur === m.sid) { S.cur = null; resetView(); showHead(undefined); showAcctPill(undefined) }
+    renderSessions()
     return
   }
   if (m.kind === 'created') {
     S.sessions = [m.data, ...S.sessions.filter(s => s.sid !== m.sid)]
     openView(m.sid, false)
+    if (m.data.notice === 'below_top') toast(t('wtBelowTop'))
     return
   }
-  if (m.kind === 'attached') { S.replaying = false; showPerm(); doJump(); return }
-  if (m.kind === 'error' && !m.seq) { addNote(m.data.message, true); return }
+  if (m.kind === 'attached') { S.replaying = false; syncPending(); showPerm(); doJump(); files.checkDisk(); return }
+  if (m.kind === 'error' && !m.seq) {
+    addNote(m.data.message, true)
+    // A refused rule leaves the request waiting: its buttons come back.
+    if (dialog.open) for (const b of dialog.querySelectorAll('button')) b.disabled = false
+    return
+  }
+  if (m.kind === 'worktree_removed') { markRemoved(m.sid); if (m.sid !== S.cur) return }
   if (m.sid !== S.cur) { trackOther(m); return }
-  if (typeof m.seq === 'number') { S.lastSeq = Math.max(S.lastSeq, m.seq); S.curSeq = m.seq }
+  if (typeof m.seq === 'number') { S.lastSeq = Math.max(S.lastSeq, m.seq); S.curSeq = m.seq; S.curTs = typeof m.ts === 'number' ? m.ts : 0 }
   handle(m)
 }
 
+/** The open chat's open questions, kept in its list entry (an account shown instead of its own counts it). */
+function syncPending() {
+  const s = curSession()
+  if (s && s.pending !== S.pending.size) { s.pending = S.pending.size; renderAcctBar() }
+}
+
 function trackOther(m) {
-  if (m.kind !== 'state') return
   const s = S.sessions.find(x => x.sid === m.sid)
-  if (s) { s.state = m.data.state; renderSessions() }
+  if (!s) return
+  if (m.kind === 'state') { s.state = m.data.state; renderSessions(); renderAcctBar() }
+  // A question of a chat that is not on screen: the badge of its account shows it.
+  if (m.kind === 'permission') { s.pending = (s.pending || 0) + 1; renderAcctBar() }
+  if (m.kind === 'permission_resolved') { s.pending = Math.max(0, (s.pending || 0) - 1); renderAcctBar() }
+}
+
+// ---- accounts: which account the panels show ----
+/** A change or a listing that names another account than the panel shows is not for this panel (a listing without the key is an error text). */
+const viewing = data => !('account' in data) || forAccount(data, S.acct)
+/** `[name] ` before a text about an account that is not the default one. */
+const acctPrefix = data => (data && data.account ? `[${accountName(data.account, S.accounts?.accounts)}] ` : '')
+const curSession = () => S.sessions.find(x => x.sid === S.cur)
+
+/** The badge in the header of a chat that runs as an extra account: which login this chat is on, in plain sight. */
+/** The badge in the header of a chat whose permission mode is not the default: the mode it runs with, in plain sight. */
+function showPermPill(s) {
+  const pill = $('perm-pill')
+  const mode = permOf(s)
+  pill.hidden = !mode
+  pill.textContent = mode ? `${t('permTag')}: ${mode}` : ''
+  pill.classList.toggle('danger', mode === 'bypassPermissions')
+}
+
+function showAcctPill(s) {
+  showPermPill(s)
+  const pill = $('acct-pill')
+  pill.hidden = !(s && s.account)
+  pill.textContent = s && s.account ? accountName(s.account.id, S.accounts?.accounts, s.account.name) : ''
+}
+
+/** The account whose notes, skills and history the panels and the search are about. */
+function setAcct(id) {
+  const changed = (id ?? null) !== (S.acct ?? null)
+  S.acct = id ?? null
+  S.mem = null
+  S.skills = null
+  if (changed) {
+    // What belongs to the account that was shown is dropped: an answer to its search that is still on the way, and a draft or an
+    // edit in progress (an id is only a number in each account's own file, so another account could have the same one).
+    S.searchReq += 1
+    S.editing = 0
+    S.skEditing = 0
+    S.skDraft = null
+    S.skEditReport = null
+    S.skHistory = null
+  }
+  renderAcctBar()
+  if (changed) {
+    renderSessions()
+    askMemory()
+    askSkills()
+    askAcctStatus(S.acct)
+    if (searchBox.value.trim()) searchBox.dispatchEvent(new Event('input'))
+  }
 }
 
 // ---- sessions ----
+/** Every account id the host listed (open or not), or null before the list came. */
+const knownAccounts = () => (S.accounts ? S.accounts.accounts.map(a => a.id) : null)
+
 function renderSessions() {
   const list = $('sessions')
   list.replaceChildren()
-  for (const s of S.sessions) {
+  const known = knownAccounts()
+  // Only the chats of the account being shown are listed: nothing is shown merged (the badge on the others says if one needs you).
+  const shown = S.sessions.filter(s => inContext(s, S.acct, known))
+  if (!shown.length && known && known.length) list.appendChild(el('div', 'muted', t('acctNoChats')))
+  for (const s of shown) {
     const b = el('button', 'sess' + (s.sid === S.cur ? ' on' : ''))
     b.type = 'button'
     const title = el('div', 't')
-    title.append(el('span', 'dot ' + s.state), el('span', '', s.title || t('untitled')))
+    title.append(el('span', 'dot ' + s.state), el('span', 'tn', baseName(s.cwd) || s.cwd), el('span', 'when', ago(s.created, Date.now(), t('cvJustNow'))))
     const host = chatHost(s)
-    const detail = el('div', 'd', baseName(s.cwd) + (s.model ? ' · ' + s.model : ''))
-    if (host) detail.append(' · ', el('span', 'via', `${t('provVia')} ${host}${s.container ? ` · ${t('ctrTag')}` : ''}`))
+    const detail = el('div', 'd', (s.title || t('untitled')) + (s.model ? ' · ' + modelLabel(s.model) : ''))
+    const tags = el('div', 'tags')
+    if (host) tags.append(el('span', 'via', `${t('provVia')} ${host}${s.container ? ` · ${t('ctrTag')}` : ''}`))
+    if (s.worktree) tags.append(el('span', 'via', s.worktree.removed ? t('wtGone') : t('wtTag')))
+    // A chat under its own account needs no tag; one whose account was deleted sits under the default account and says whose it was.
+    const perm = permOf(s)
+    if (perm) tags.append(el('span', 'via' + (perm === 'bypassPermissions' ? ' danger' : ''), `${t('permTag')}: ${perm}`))
+    if (s.account && viewOf(s, known) === null) tags.append(el('span', 'via', `${t('acctTag')}: ${accountName(s.account.id, S.accounts?.accounts, s.account.name)}`))
     b.append(title, detail)
-    b.addEventListener('click', () => { S.jumpTo = null; openView(s.sid, true) })
+    if (tags.childNodes.length) b.append(tags)
+    b.addEventListener('click', () => { if (!leaveView(s.sid)) return; S.jumpTo = null; openView(s.sid, true) })
     list.appendChild(b)
   }
 }
 
 function openView(sid, attach) {
+  // What the chat that is left was waiting for is kept in its list entry: the badge of its account counts it.
+  const left = curSession()
+  if (left) left.pending = S.pending.size
   S.cur = sid
   S.lastSeq = 0
   S.curSeq = 0
@@ -261,13 +532,20 @@ function openView(sid, attach) {
   shownAsk = null
   resetView()
   const s = S.sessions.find(x => x.sid === sid)
-  $('title').textContent = s ? (s.title || baseName(s.cwd)) + '  ·  ' + s.cwd : ''
+  showHead(s)
+  showAcctPill(s)
+  // The panels follow the chat: its account's notes, skills and history are what is shown.
+  setAcct(viewOf(s, knownAccounts()))
   const via = chatHost(s)
   $('prov-banner').hidden = !via
   $('prov-banner').textContent = via ? t('provBanner').replace('{host}', via) + (s.container ? ' ' + t('ctrBanner') : '') : ''
+  wt.show(s)
   setState(s ? s.state : 'idle')
   renderSessions()
   if (dialog.open) dialog.close('switched')
+  files.reset()
+  term.reset()
+  if (S.side === 'files') files.shown()
   if (attach) wsSend({ op: 'attach', sid, after_seq: 0 })
   $('input').focus()
 }
@@ -276,26 +554,54 @@ function openView(sid, attach) {
 function updateNewChat() {
   const p = (S.providers?.providers || []).find(x => x.id === $('new-provider').value)
   $('new-prov-note').hidden = !p
+  // A chat is of an account or of a provider, not both: choosing one turns the other off.
+  const picked = Boolean($('new-account').value)
+  if (p) $('new-account').value = ''
+  $('new-account').disabled = Boolean(p)
+  $('new-provider').disabled = picked
+  $('new-acct-note').hidden = !($('new-account').value)
   const offer = Boolean(p && S.providers?.container?.ready && !isLocalHost(p.host))
   $('new-ctr-row').hidden = !offer
   if (!offer) $('new-container').checked = false
+  fillPerm()
 }
+
+/** The permission modes the new chat may start with: the list follows the kind of chat, and a choice that is no longer offered goes back to the default. */
+function fillPerm() {
+  const select = $('new-perm')
+  const keep = select.value || 'default'
+  const choices = permChoices({ provider: Boolean($('new-provider').value), container: $('new-container').checked })
+  select.replaceChildren(...choices.map(m => Object.assign(el('option', '', t('permM_' + m)), { value: m })))
+  select.value = choices.includes(keep) ? keep : 'default'
+  $('new-perm-note').textContent = t('permN_' + select.value)
+}
+$('new-perm').addEventListener('change', () => { $('new-perm-note').textContent = t('permN_' + $('new-perm').value) })
 $('new-provider').addEventListener('change', updateNewChat)
+$('new-account').addEventListener('change', updateNewChat)
 $('new-toggle').addEventListener('click', () => {
   $('new-form').hidden = !$('new-form').hidden
   // A form opened again starts on the Claude account: a chat is never put on a third party by what was chosen last time.
-  if (!$('new-form').hidden) $('new-provider').value = ''
+  // The account shown is the one a new chat starts on (when it can be chosen).
+  // The permission mode starts on the default every time: a chat never skips its checks because the last one did.
+  $('new-perm').replaceChildren()
+  $('new-name').value = ''
+  if (!$('new-form').hidden) { $('new-provider').value = ''; $('new-account').value = [...$('new-account').options].some(o => o.value === (S.acct || '')) ? (S.acct || '') : ''; $('new-worktree').checked = false }
   updateNewChat()
   $('new-cwd').value = store.get('tenrec-cwd') || ''
   $('new-cwd').focus()
 })
+$('new-worktree').addEventListener('change', () => { if ($('new-worktree').checked) $('new-container').checked = false; fillPerm() })
+$('new-container').addEventListener('change', () => { if ($('new-container').checked) $('new-worktree').checked = false; fillPerm() })
 $('new-cancel').addEventListener('click', () => { $('new-form').hidden = true })
 $('new-form').addEventListener('submit', event => {
   event.preventDefault()
   const cwd = $('new-cwd').value.trim()
-  if (!cwd) return
+  const mode = $('new-perm').value || 'default'
+  // Skipping every check is only sent after the person said yes to it (asked before anything is left), and says so in the request too.
+  if (cwd && permNeedsConfirm(mode) && !confirm(t('permBypassConfirm'))) return
+  if (!cwd || !leaveView()) return
   store.set('tenrec-cwd', cwd)
-  wsSend({ op: 'new', cwd, model: $('new-model').value || undefined, provider: $('new-provider').value || undefined, container: $('new-container').checked || undefined })
+  wsSend({ op: 'new', cwd, name: $('new-name').value.trim() || undefined, permission: mode === 'default' ? undefined : mode, confirm_bypass: permNeedsConfirm(mode) ? true : undefined, model: $('new-model').value || undefined, provider: $('new-provider').value || undefined, account: $('new-account').value || undefined, container: $('new-container').checked || undefined, worktree: $('new-worktree').checked || undefined })
   $('new-form').hidden = true
 })
 
@@ -305,20 +611,32 @@ function setState(state) {
   pill.textContent = t(state)
   pill.className = 'pill ' + state
   $('send').disabled = state === 'running'
+  $('chat-model').disabled = state === 'running'
   $('stop').hidden = state !== 'running'
   const s = S.sessions.find(x => x.sid === S.cur)
   if (s) { s.state = state; renderSessions() }
+  showFoot(s)
 }
 
 // ---- events ----
 function handle(m) {
   const d = m.data
   switch (m.kind) {
-    case 'user': titleFrom(d.text); return addUser(d)
+    case 'user': S.sysTurn.clear(); titleFrom(d.text); return addUser(d)
     case 'claude': return handleClaude(d)
-    case 'permission': S.pending.set(d.request_id, d); if (!S.replaying) showPerm(); return
-    case 'permission_resolved': S.pending.delete(d.request_id); showPerm(); if (!S.replaying) addNote(t(d.outcome)); return
+    case 'permission': S.pending.set(d.request_id, d); syncPending(); if (!S.replaying) showPerm(); return
+    case 'permission_resolved': S.pending.delete(d.request_id); syncPending(); showPerm(); if (!S.replaying) addNote(t(d.outcome)); return
     case 'state': return setState(d.state)
+    case 'renamed': {
+      const cur = curSession()
+      if (cur) { cur.title = d.title; $('title').textContent = d.title; renderSessions() }
+      return
+    }
+    case 'model': {
+      const cur = curSession()
+      if (cur) { cur.model = d.model || undefined; showModelPicker(cur) }
+      return addNote(`${t('modelNow')}: ${d.model || t('modelDefault')} — ${t('modelNote')}`)
+    }
     case 'memory_used': return addNote(`${t('memUsed')}: ${d.ids.length} (${fmtBytes(d.bytes)})`)
     case 'skills_given': return addNote(`${t('skGiven')}: ${d.names.join(', ')}`)
     case 'stderr': debugLog(d.text); return addNote(String(d.text).trim().slice(-300), true)
@@ -327,12 +645,59 @@ function handle(m) {
   }
 }
 
+// The header: the project folder in a PWD pill, then the chat's title. The sidebar's foot and the composer show its model.
+/** The model picker in the header: for a chat of the Claude account (a provider chat's models are its provider's), only between turns. */
+function showModelPicker(s) {
+  const pick = $('chat-model')
+  pick.hidden = !s || Boolean(s.provider)
+  $('chat-rename').hidden = $('chat-delete').hidden = !s
+  if (!s) return
+  pick.replaceChildren(...modelChoices(s.model || '').map(m => Object.assign(el('option', '', m || t('modelDefault')), { value: m })))
+  pick.value = s.model || ''
+  pick.disabled = S.state === 'running'
+  pick.title = t('modelNote')
+  $('chat-rename').textContent = '✎ ' + t('renameBtn')
+  $('chat-delete').textContent = '🗑 ' + t('deleteBtn')
+}
+$('chat-rename').addEventListener('click', () => {
+  const s = curSession()
+  const name = s && prompt(t('renamePrompt'), s.title || '')
+  if (name && name.trim()) wsSend({ op: 'rename', sid: S.cur, title: name.trim() })
+})
+$('chat-delete').addEventListener('click', () => {
+  if (S.cur && S.state !== 'running' && confirm(t('deleteConfirm'))) wsSend({ op: 'delete', sid: S.cur })
+})
+$('chat-model').addEventListener('change', () => {
+  if (S.cur) wsSend({ op: 'set_model', sid: S.cur, model: $('chat-model').value || 'default' })
+})
+
+function showHead(s) {
+  $('title').textContent = s ? (s.title || baseName(s.cwd)) : ''
+  $('pwd').hidden = !s
+  $('pwd-sep').hidden = !s
+  $('pwd-path').textContent = s ? tailPath(s.cwd) : ''
+  $('pwd').title = s ? s.cwd : ''
+  showModelPicker(s)
+  showFoot(s)
+}
+function showFoot(s) {
+  const model = s ? (S.model || s.model) : null
+  const name = model ? modelLabel(model) : t('cvDefaultModel')
+  $('foot-model').textContent = name
+  const host = s ? chatHost(s) : null
+  $('foot-prov').textContent = host ? `${t('provVia')} ${host}` : s && s.account ? `${t('acctTag')}: ${accountName(s.account.id, S.accounts?.accounts, s.account.name)}` : t('cvProvAnthropic')
+  $('foot-tag').hidden = !s || s.state !== 'running'
+  $('foot-tag').textContent = 'ACTIVE'
+  $('model-chip').hidden = !s
+  $('model-chip').textContent = name
+}
+
 // The first message names the chat, as the server does.
 function titleFrom(text) {
   const s = S.sessions.find(x => x.sid === S.cur)
   if (!s || s.title || !text) return
   s.title = text.slice(0, 60)
-  $('title').textContent = s.title + '  ·  ' + s.cwd
+  $('title').textContent = s.title
   renderSessions()
 }
 
@@ -341,16 +706,24 @@ function handleClaude(d) {
     case 'stream_event': {
       if (S.replaying || d.parent_tool_use_id) return
       const ev = d.event || {}
-      if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') appendLive(ev.delta.text)
+      const delta = ev.delta || {}
+      if (ev.type === 'content_block_start' && ev.content_block && ev.content_block.type === 'thinking') startLiveThink()
+      else if (ev.type === 'content_block_delta' && delta.type === 'thinking_delta' && typeof delta.thinking === 'string') appendLiveThink(delta.thinking, delta.estimated_tokens)
+      else if (ev.type === 'content_block_stop') stopLiveThink()
+      else if (ev.type === 'content_block_delta' && delta.type === 'text_delta') appendLive(delta.text)
       return
     }
     case 'assistant': {
-      endLive()
-      const sub = Boolean(d.parent_tool_use_id)
+      const parentId = d.parent_tool_use_id || ''
+      // A sub-agent's event leaves the main answer's live text alone (and has no thinking time of the main one to take).
+      if (!parentId) endLive()
+      const thinkMs = parentId ? null : S.thinkMs
+      if (!parentId) S.thinkMs = null
       for (const block of (d.message && d.message.content) || []) {
-        if (block.type === 'text' && block.text) addAssistant(block.text, sub)
-        else if (block.type === 'tool_use') addTool(block, sub)
-        else if (block.type === 'thinking' && block.thinking) addThinking(block.thinking)
+        if (block.type === 'text' && block.text) addAssistant(block.text, parentId)
+        else if (block.type === 'tool_use') addTool(block, parentId)
+        else if (block.type === 'thinking') addThinking(block.thinking || '', thinkMs, parentId)
+        else if (block.type === 'redacted_thinking') addThinking(null, null, parentId)
       }
       return
     }
@@ -359,7 +732,20 @@ function handleClaude(d) {
       return
     }
     case 'result': {
+      if (!S.replaying) files.checkDisk()
       endLive()
+      S.thinkMs = null
+      S.asstMeta = false
+      const turn = turnLine(d)
+      if (turn) {
+        const pill = $('turn-pill')
+        pill.replaceChildren()
+        if (turn.cost) pill.append(el('span', 'cost', turn.cost))
+        if (turn.cost && turn.tokens) pill.append(el('span', 'dim', '·'))
+        if (turn.tokens) pill.append(el('span', '', turn.tokens + ' tkn'))
+        pill.title = t('cvLastTurn')
+        pill.hidden = false
+      }
       const line = fmtTurn(d)
       if (d.subtype === 'error_during_execution') addNote(t('interrupted') + (line ? ' · ' + line : ''))
       else if (d.is_error) addNote(String(d.result || d.subtype), true)
@@ -367,14 +753,27 @@ function handleClaude(d) {
       return
     }
     case 'system':
-      if (d.subtype === 'init' && d.model) $('title').title = d.model
+      if (d.subtype === 'init') {
+        if (d.model) { $('title').title = d.model; S.model = d.model; showFoot(curSession()) }
+        showChips(initChips(d))
+      }
+      sysNote(d)
       return debugLog(`${d.type}/${d.subtype || ''}`)
+    case 'rate_limit_event':
+      sysNote(d)
+      return debugLog(d.type)
     default:
       debugLog(JSON.stringify(d).slice(0, 300))
   }
 }
 
 function addUser(d) {
+  S.asstMeta = false
+  dayMark()
+  const meta = el('div', 'mmeta user')
+  meta.append(el('span', 'who', t('cvYou')))
+  if (clock(S.curTs)) meta.append(el('span', '', clock(S.curTs)))
+  add(meta, { seq: false })
   const box = el('div', 'msg user')
   if (d.images && d.images.length) {
     const row = el('div', 'imgs')
@@ -392,7 +791,7 @@ function addUser(d) {
 
 let liveFrame = 0
 function appendLive(text) {
-  if (!S.live) S.live = { buf: '', node: add(el('div', 'msg asst live')) }
+  if (!S.live) { asstMeta(); S.live = { buf: '', node: add(el('div', 'msg asst live')) } }
   S.live.buf += text
   if (!liveFrame) liveFrame = requestAnimationFrame(() => {
     liveFrame = 0
@@ -405,50 +804,214 @@ function appendLive(text) {
 function endLive() {
   if (liveFrame) { cancelAnimationFrame(liveFrame); liveFrame = 0 }
   if (S.live) { S.live.node.remove(); S.live = null }
+  endLiveThink()
 }
 
-function addAssistant(text, sub) {
-  const box = el('div', 'msg asst' + (sub ? ' sub' : ''))
+// Thinking as it streams: the text only ever goes in as textContent (it is the model's, not ours).
+let thinkFrame = 0
+const thinkLabel = (chars, ms) => {
+  const s = thinkSummary(chars, ms)
+  // The CLI may send the block with no text (only a token estimate): the line then says it was hidden, and how long it took.
+  if (!s.chars) return t('cvThinkRedacted') + (s.secs == null ? '' : ' · ' + wtText(t('cvThinkSecs'), { s: s.secs }))
+  return s.secs == null ? wtText(t('cvThinkSumNoTime'), { n: s.chars }) : wtText(t('cvThinkSum'), { s: s.secs, n: s.chars })
+}
+function startLiveThink() {
+  if (S.liveThink) return
+  asstMeta()
+  const node = el('details', 'think live')
+  node.open = true
+  const body = el('div', 'tbody')
+  node.append(el('summary', '', t('cvThinking')), body)
+  S.liveThink = { buf: '', node, body, t0: Date.now(), ms: null }
+  add(node)
+}
+function appendLiveThink(text, tokens) {
+  if (!S.liveThink) startLiveThink()
+  S.liveThink.buf += text
+  if (Number.isFinite(tokens) && tokens > 0) S.liveThink.tokens = tokens
+  if (!thinkFrame) thinkFrame = requestAnimationFrame(() => {
+    thinkFrame = 0
+    const lt = S.liveThink
+    if (!lt || lt.ms != null) return
+    const follow = stick()
+    lt.node.firstChild.textContent = t('cvThinking') + (lt.tokens ? ' · ' + wtText(t('cvThinkTok'), { n: lt.tokens }) : '')
+    lt.body.textContent = lt.buf
+    lt.body.scrollTop = lt.body.scrollHeight
+    if (follow) messages.scrollTop = messages.scrollHeight
+  })
+}
+function stopLiveThink() {
+  const lt = S.liveThink
+  if (!lt || lt.ms != null) return
+  lt.ms = Date.now() - lt.t0
+  lt.node.classList.remove('live')
+  lt.node.open = false
+  lt.node.firstChild.textContent = thinkLabel(lt.buf.length, lt.ms)
+  lt.body.textContent = lt.buf
+}
+function endLiveThink() {
+  if (thinkFrame) { cancelAnimationFrame(thinkFrame); thinkFrame = 0 }
+  const lt = S.liveThink
+  if (!lt) return
+  S.thinkMs = lt.ms ?? Date.now() - lt.t0
+  lt.node.remove()
+  S.liveThink = null
+}
+
+function addAssistant(text, parentId) {
+  if (!parentId) asstMeta()
+  const box = el('div', 'msg asst')
   box.innerHTML = markdown(text)
-  add(box)
+  decorateCode(box)
+  place(box, parentId)
 }
 
-function addThinking(text) {
+// A language tag, a copy button and a fold for long blocks, put on after the text was sanitised (DOM calls only, no markup is parsed here).
+function decorateCode(box) {
+  for (const code of box.querySelectorAll('pre > code')) {
+    const pre = code.parentElement
+    const info = foldInfo(code.textContent)
+    const head = el('div', 'cb-head')
+    const copy = el('button', 'cb-copy', t('cvCopy'))
+    copy.type = 'button'
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(code.textContent); toast(t('cvCopied'), undefined, 2000) } catch { /* no clipboard here */ }
+    }
+    const lang = codeLang(code.className)
+    const ic = el('span', 'cb-ic')
+    ic.append(icon('code'))
+    copy.prepend(icon('copy'))
+    head.append(ic, el('span', 'cb-lang', lang), el('span', 'cb-lines', wtText(t('cvLines'), { n: info.lines })), copy)
+    // One frame for the bar and the code; the lines are numbered by CSS, and the text (what is copied) stays the same.
+    const frame = el('div', 'cb')
+    pre.before(frame)
+    frame.append(head, pre)
+    const lines = codeLines(code.textContent, lang)
+    if (lines) {
+      code.replaceChildren(...lines.map(l => el('span', 'ln' + (l.kind ? ' ' + l.kind : ''), l.text + '\n')))
+      pre.classList.add('lined')
+    }
+    if (info.folded) {
+      pre.classList.add('cb-fold')
+      const more = el('button', 'cb-more', wtText(t('cvShowAll'), { n: info.lines }))
+      more.type = 'button'
+      more.onclick = () => { pre.classList.remove('cb-fold'); more.remove() }
+      pre.after(more)
+    }
+  }
+}
+
+// Inside the card of the sub-agent that made it, else on its own with an indent (an old history, or the parent card is not there).
+function place(node, parentId) {
+  const parent = parentId ? S.tools.get(parentId) : null
+  if (!parent || !parent.kids) {
+    if (parentId) node.classList.add('sub')
+    return add(node)
+  }
+  const follow = stick()
+  if (S.curSeq) node.dataset.seq = String(S.curSeq)
+  parent.kids.appendChild(node)
+  if (follow) messages.scrollTop = messages.scrollHeight
+  return node
+}
+
+// No text (hidden by the model, or not sent by the CLI): only the fact is shown, never any data.
+function addThinking(text, ms, parentId) {
+  if (!parentId) asstMeta()
   const box = el('details', 'think')
-  box.append(el('summary', '', t('thinking')), el('div', '', text))
-  add(box)
+  if (!text) box.append(el('summary', '', thinkLabel(0, ms)))
+  else box.append(el('summary', '', thinkLabel(text.length, ms)), el('div', 'tbody', text))
+  place(box, parentId)
 }
 
 // ---- tools and images ----
-function addTool(block, sub) {
-  const card = el('details', 'tool' + (sub ? ' sub' : ''))
+function addTool(block, parentId) {
+  const known = S.tools.get(block.id)
+  if (!parentId && !known) asstMeta()
+  const card = el('details', 'tool')
   const head = el('summary')
   const status = el('span', 'st', t('running_tool'))
-  head.append(el('span', 'name', block.name), el('span', 'sum', toolSummary(block.name, block.input)), status)
+  const badge = toolBadge(block.name, block.input)
+  const th = toolHead(block.name, block.input)
+  head.append(el('span', 'name', block.name))
+  if (badge) head.append(el('span', 'tbadge ' + badge.kind, badge.text))
+  head.append(el('span', 'sum', th ? th.text || th.extra : toolSummary(block.name, block.input)))
+  if (th && th.text && th.extra) head.append(el('span', 'extra', th.extra))
+  const diff = editDiff(block.name, block.input)
+  if (diff) {
+    const stat = el('span', 'dstat')
+    stat.append(el('span', 'a', `+${diff.add}`), ' ', el('span', 'd', `−${diff.del}`))
+    head.append(stat)
+  }
+  let kids = null
+  let kcount = null
+  if (isAgentCall(block.name)) { kids = el('div', 'kids'); kcount = el('span', 'kcount'); head.append(kcount) }
+  head.append(status)
   const body = el('div', 'body')
-  body.append(el('div', 'muted', t('input')), el('pre', '', JSON.stringify(block.input, null, 2)))
+  const raw = el('pre', '', JSON.stringify(block.input, null, 2))
+  if (diff) {
+    body.append(diff.rows ? diffRows(diff.rows) : el('div', 'muted', t('cvDiffTooBig')))
+    const more = el('details', 'raw')
+    more.append(el('summary', '', t('cvRawInput')), raw)
+    body.append(more)
+  } else if (block.name === 'TodoWrite' && todoItems(block.input).length) {
+    const list = el('ul', 'todo')
+    for (const it of todoItems(block.input)) list.append(el('li', 'st-' + it.status, it.text))
+    body.append(list)
+  } else body.append(el('div', 'muted', t('input')), raw)
   const result = el('div')
   const shots = el('div', 'imgs')
   body.append(result, shots)
+  if (kids) body.append(kids)
   card.append(head, body)
-  const known = S.tools.get(block.id)
-  if (known) known.card.replaceWith(card)
-  else add(card)
-  S.tools.set(block.id, { card, status, result, shots })
+  if (known) {
+    if (kids && known.kids) kids.append(...known.kids.childNodes)
+    known.card.replaceWith(card)
+  } else place(card, parentId)
+  const count = known ? known.count : 0
+  S.tools.set(block.id, { card, status, result, shots, kids, kcount, count, t0: known ? known.t0 : S.replaying ? null : Date.now() })
+  if (kcount && count) kcount.textContent = wtText(t('cvSubTools'), { n: count })
+  const parent = !known && parentId ? S.tools.get(parentId) : null
+  if (parent && parent.kcount) {
+    parent.count += 1
+    parent.kcount.textContent = wtText(t('cvSubTools'), { n: parent.count })
+  }
   for (const path of imagePaths(block.input)) loadShot(path, shots, card)
+}
+
+// The changed lines of an edit, drawn like a skill's diff (text only).
+function diffRows(rows) {
+  const box = el('div', 'skdiff tdiff')
+  for (const r of rows) box.append(el('div', 'line' + (r.t === '+' ? ' add' : r.t === '-' ? ' del' : r.t === '…' ? ' gap' : ''), r.t === '…' ? '…' : r.t + ' ' + r.text))
+  return box
 }
 
 function setToolResult(block) {
   const tool = S.tools.get(block.tool_use_id)
   if (!tool) return
   tool.card.dataset.resultSeq = String(S.curSeq)
+  const guard = block.is_error ? guardKind(block.content) : null
   tool.card.classList.add(block.is_error ? 'err' : 'done')
-  tool.status.textContent = block.is_error ? t('failed') : t('done')
+  if (guard) {
+    // Held by a plug-in rule (team mode or VHDB): said so, not shown as a plain failure.
+    tool.card.classList.add('guard', 'guard-' + guard)
+    tool.status.textContent = t(guard === 'team' ? 'cvGuardTeam' : 'cvGuardVhdb')
+    tool.status.title = t('cvGuardTip')
+  } else tool.status.textContent = (block.is_error ? t('failed') : t('done')) + (!S.replaying && tool.t0 && Date.now() - tool.t0 >= 100 ? ' · ' + wtText(t('cvMs'), { n: Date.now() - tool.t0 }) : '')
   tool.result.replaceChildren()
   for (const part of resultBlocks(block.content)) {
     if (part.type === 'text') {
       if (!tool.result.childNodes.length) tool.result.appendChild(el('div', 'muted', t('result')))
-      tool.result.appendChild(el('pre', '', part.text.length > 20000 ? part.text.slice(0, 20000) + '\n…' : part.text))
+      const fold = foldText(part.text)
+      const pre = el('pre', '', fold.folded ? fold.head : fold.full)
+      tool.result.appendChild(pre)
+      if (fold.folded) {
+        const more = el('button', 'res-more', wtText(t('cvShowAll'), { n: fold.lines }))
+        more.type = 'button'
+        more.onclick = () => { pre.textContent = fold.full; more.remove() }
+        tool.result.appendChild(more)
+      }
+      if (fold.cut) tool.result.appendChild(el('div', 'muted', wtText(t('cvCutChars'), { n: 20000 })))
       for (const path of pathsInText(part.text)) loadShot(path, tool.shots, tool.card)
     } else {
       const img = new Image()
@@ -490,12 +1053,41 @@ document.addEventListener('click', event => {
 
 function addNote(text, isError) { add(el('div', 'note' + (isError ? ' error' : ''), text)) }
 
+// The few system events that matter get one thin line (see systemNote); each is shown once per turn (a hook) or per level (usage).
+function sysNote(d) {
+  const n = systemNote(d)
+  if (!n) return
+  if (n.scope === 'window') { if (S.sysWin.get(n.vars.window) === n.key) return; S.sysWin.set(n.vars.window, n.key) }
+  else { if (S.sysTurn.has(n.key)) return; S.sysTurn.add(n.key) }
+  const win = n.vars.window ? (TEXT[LANG]['cvWin_' + n.vars.window] ?? n.vars.window) : ''
+  const at = n.vars.at ? new Date(n.vars.at * 1000).toLocaleTimeString() : ''
+  const text = n.code === 'rate' ? (n.vars.pct == null ? wtText(t('cvRateState'), { window: win, status: n.vars.status }) : wtText(t('cvRate'), { window: win, pct: n.vars.pct, at }))
+    : n.code === 'vhdb' ? t('cvVhdbInject')
+    : n.code === 'hook' ? wtText(t('cvHookCode'), n.vars) : wtText(t('cvHookOutcome'), n.vars)
+  add(el('div', 'note sys' + (n.level === 'warn' ? ' warn' : ''), text))
+}
+
+// Chips for the plug-ins the chat is wired to (from system/init; the last one wins, and a replay restores it).
+function showChips(c) {
+  const team = $('chip-team')
+  const vhdb = $('chip-vhdb')
+  team.hidden = !c.team
+  vhdb.hidden = !c.vhdb
+  team.textContent = t('cvChipTeam')
+  vhdb.textContent = t('cvChipVhdb')
+  team.title = vhdb.title = t('cvChipTip')
+}
+
 // ---- debug drawer ----
 function debugLog(line) {
   S.debug.push(line)
   if (S.debug.length > 300) S.debug.shift()
   const box = $('debug')
   if (!box.hidden) box.textContent = S.debug.join('\n')
+}
+// The foot's links open the accounts or providers box in the chats pane.
+for (const [button, box] of [['open-acct', 'acct-box'], ['open-prov', 'prov-box']]) {
+  $(button).addEventListener('click', () => { showSide('chats'); $(box).open = true; $(box).scrollIntoView({ block: 'start', behavior: 'smooth' }) })
 }
 $('debug-toggle').addEventListener('click', () => {
   const box = $('debug')
@@ -533,6 +1125,12 @@ function showPerm() {
     dialog.close('answered')
     showPerm()
   }
+  // A rule to remember is answered only when the host accepts it: the request stays on the screen (buttons off) until it is resolved,
+  // and a refusal turns them on again.
+  const grantAnswer = grant => {
+    wsSend({ op: 'permission', sid: S.cur, request_id: first.request_id, allow: true, grant })
+    for (const b of dialog.querySelectorAll('button')) b.disabled = true
+  }
   allow.addEventListener('click', () => answer(true, false))
   deny.addEventListener('click', () => answer(false, false))
   const actions = el('div', 'actions')
@@ -545,7 +1143,22 @@ function showPerm() {
     actions.append(always)
   }
   actions.append(allow)
-  dialog.append(actions)
+  const grants = grantButtons(first)
+  if (grants.length) {
+    const rows = el('div', 'grants')
+    rows.append(el('div', 'sugg', t('grantRules')))
+    for (const g of grants) {
+      const b = el('button', '', `${g.grant === 'always' ? t('allowAlways') : t('allowSession')}: ${g.rule}`)
+      b.type = 'button'
+      b.dataset.grant = g.grant
+      b.addEventListener('click', () => grantAnswer(g.grant))
+      rows.append(b, el('div', 'muted', g.grant === 'always' ? t('grantAlwaysNote') : t('grantSessionNote')))
+    }
+    rows.append(el('div', 'muted', grants[0].exact ? t('grantExact') : t('grantWild')))
+    dialog.append(actions, rows)
+  } else {
+    dialog.append(actions)
+  }
   if (!dialog.open) dialog.showModal()
   deny.focus()
 }
@@ -660,6 +1273,7 @@ function showResults(data) {
 
 // Opens the chat of a result and scrolls to the message (or the nearest one that is drawn).
 function open(hit) {
+  if (!(hit.sid === S.cur && !S.replaying) && !leaveView(hit.sid)) return
   S.jumpTo = { sid: hit.sid, seq: hit.seq }
   if (hit.sid === S.cur && !S.replaying) return doJump()
   openView(hit.sid, true)
@@ -677,6 +1291,7 @@ function doJump() {
   const node = nodes.find(n => Number(n.dataset.seq) === near || Number(n.dataset.resultSeq) === near)
   if (!node) return
   if (node.tagName === 'DETAILS') node.open = true
+  for (let up = node.parentElement && node.parentElement.closest('details'); up; up = up.parentElement && up.parentElement.closest('details')) up.open = true
   node.scrollIntoView({ block: 'center' })
   node.classList.remove('hit')
   void node.offsetWidth
@@ -689,8 +1304,10 @@ function askMemory() { wsSend({ op: 'memory_list', cwd: curCwd() }) }
 // Every request carries an id the answer brings back, so two requests in flight are never mixed up.
 function memSend(op, tag) {
   S.memRid += 1
-  S.memOps.set(S.memRid, tag ? { op: tag } : op)
-  wsSend({ ...op, rid: S.memRid })
+  // The account is fixed when the message is made: an answer comes back to the account it was asked of, even if the panel moved on.
+  const full = withAccount({ ...op, rid: S.memRid }, S.acct)
+  S.memOps.set(S.memRid, tag ? { op: tag, account: full.account } : full)
+  wsSend(full)
 }
 
 function showSide(name) {
@@ -699,6 +1316,8 @@ function showSide(name) {
   $('memory').hidden = name !== 'memory'
   $('skills').hidden = name !== 'skills'
   $('sched').hidden = name !== 'sched'
+  $('files').hidden = name !== 'files'
+  $('tab-files').classList.toggle('on', name === 'files')
   $('tab-sched').classList.toggle('on', name === 'sched')
   $('tab-chats').classList.toggle('on', name === 'chats')
   $('tab-memory').classList.toggle('on', name === 'memory')
@@ -706,11 +1325,14 @@ function showSide(name) {
   if (name === 'memory') askMemory()
   if (name === 'skills') askSkills()
   if (name === 'sched') askSched()
+  if (name === 'files') files.shown()
+  renderAcctBar()
 }
 $('tab-chats').addEventListener('click', () => showSide('chats'))
 $('tab-memory').addEventListener('click', () => showSide('memory'))
 $('tab-skills').addEventListener('click', () => showSide('skills'))
 $('tab-sched').addEventListener('click', () => showSide('sched'))
+$('tab-files').addEventListener('click', () => showSide('files'))
 
 function toast(text, action, ms = 10000) {
   const box = el('div', 'toast')
@@ -735,12 +1357,13 @@ function downloadJson(name, data) {
 }
 
 // What the app saved by itself: shown at once, with a way back.
-function autoSaved(items) {
+function autoSaved(data) {
+  const items = data.items || []
   if (!items.length) return
   const text = items.length === 1 ? items[0].text : `${items.length}`
-  toast(`${t('memAutoSaved')}: ${text}`, {
+  toast(`${acctPrefix(data)}${t('memAutoSaved')}: ${text}`, {
     label: t('memUndo'),
-    run: () => { for (const m of items) memSend({ op: 'memory_delete', id: m.id }, 'memory_delete_quiet') },
+    run: () => { for (const m of items) memSend({ op: 'memory_delete', id: m.id, account: data.account ?? null }, 'memory_delete_quiet') },
   })
 }
 
@@ -754,7 +1377,7 @@ function memResult(d) {
   }
   if (last && last.op === 'memory_add') $('mem-text').value = ''
   if (last && (last.op === 'memory_delete' || last.op === 'memory_reject') && d.undo) {
-    toast(t('memDeleted').split(' (')[0], { label: t('memUndo'), run: () => wsSend({ op: 'memory_undo', id: d.undo }) })
+    toast(t('memDeleted').split(' (')[0], { label: t('memUndo'), run: () => wsSend({ op: 'memory_undo', id: d.undo, account: last.account ?? null }) })
   }
 }
 
@@ -771,6 +1394,7 @@ $('mem-export').addEventListener('click', () => wsSend({ op: 'memory_export' }))
 
 // The chat a note came from, at the message it was taken from.
 function openFromNote(m) {
+  if (!(m.sid === S.cur && !S.replaying) && !leaveView(m.sid)) return
   S.jumpTo = m.seq ? { sid: m.sid, seq: m.seq } : null
   if (m.sid === S.cur && !S.replaying) return doJump()
   openView(m.sid, true)
@@ -875,8 +1499,9 @@ function renderMemory() {
 function askSkills() { wsSend({ op: 'skill_list' }) }
 function skSend(op, tag) {
   S.memRid += 1
-  S.memOps.set(S.memRid, tag ? { op: tag } : op)
-  wsSend({ ...op, rid: S.memRid })
+  const full = withAccount({ ...op, rid: S.memRid }, S.acct)
+  S.memOps.set(S.memRid, tag ? { op: tag, account: full.account } : full)
+  wsSend(full)
 }
 
 function skResult(d) {
@@ -889,7 +1514,7 @@ function skResult(d) {
     return
   }
   if (last && last.op === 'skill_propose') toast(t('skStarted'))
-  if (last && last.op === 'skill_delete' && d.undo) toast(t('skDeleted').split(' (')[0], { label: t('memUndo'), run: () => skSend({ op: 'skill_undo', id: d.undo }) })
+  if (last && last.op === 'skill_delete' && d.undo) toast(t('skDeleted').split(' (')[0], { label: t('memUndo'), run: () => skSend({ op: 'skill_undo', id: d.undo, account: last.account ?? null }) })
   if (last && last.op === 'skill_approve') { S.skEditing = 0; S.skDraft = null; S.skEditReport = null }
 }
 
@@ -897,7 +1522,10 @@ $('sk-auto').addEventListener('change', () => skSend({ op: 'skill_setting', auto
 $('sk-propose').addEventListener('submit', event => {
   event.preventDefault()
   if (!S.cur) return toast(t('noSession'))
-  skSend({ op: 'skill_propose', sid: S.cur, hint: $('sk-hint').value.trim(), target: $('sk-target').value, scope: $('sk-scope').value })
+  // A proposal is read from the chat's own account and kept in its skills: the panel moves to that account first.
+  const chatAccount = accountOf(curSession())
+  setAcct(chatAccount)
+  skSend({ op: 'skill_propose', account: chatAccount, sid: S.cur, hint: $('sk-hint').value.trim(), target: $('sk-target').value, scope: $('sk-scope').value })
 })
 
 function skLines(parent, lines) {
@@ -1336,6 +1964,182 @@ $('prov-form').addEventListener('submit', event => {
     models: { opus: $('pv-opus').value, sonnet: $('pv-sonnet').value, haiku: $('pv-haiku').value },
   })
 })
+
+// ---- accounts: made, renamed and removed here by the person; the login is made in the person's own terminal ----
+function askAccounts() { wsSend({ op: 'account_list' }) }
+function acctSend(op) {
+  S.acctRid += 1
+  S.acctOps.set(S.acctRid, op)
+  wsSend({ ...op, rid: S.acctRid })
+}
+const acctKey = id => id || 'default'
+/** Asks the host what `claude auth status` says for an account (null: the default one). */
+function askAcctStatus(id) {
+  S.acctReq += 1
+  S.acctStatus.set(acctKey(id), { pending: true, req: S.acctReq })
+  wsSend({ op: 'account_status', req: S.acctReq, id: id ?? null })
+  renderAccounts()
+}
+function acctStatusIn(d) {
+  const key = acctKey(d.id)
+  const now = S.acctStatus.get(key)
+  // An answer to an older question is dropped.
+  if (now && now.req && d.req !== now.req) return
+  S.acctStatus.set(key, d.status ? { status: d.status } : { error: d.error || '' })
+  renderAccounts()
+  renderAcctBar()
+}
+function acctStatusText(id) {
+  const st = S.acctStatus.get(acctKey(id))
+  if (!st) return ''
+  if (st.pending) return t('acctChecking')
+  if (st.error !== undefined) return t('acctUnknown')
+  const who = st.status.email ? ` · ${st.status.email}` : ''
+  return (st.status.logged_in ? t('acctLoggedIn') : t('acctLoggedOut')) + who
+}
+/** Asks the host which plugins this account could get (the default account's, minus its own). */
+function askPlugins(id) {
+  S.acctReq += 1
+  wsSend({ op: 'account_plugins', id, req: S.acctReq })
+}
+function acctResult(d) {
+  const last = S.acctOps.get(d.rid)
+  S.acctOps.delete(d.rid)
+  if (last && last.op === 'account_plugin_install') {
+    S.acctPlugBusy.delete(last.id + '/' + last.plugin)
+    toast(d.ok ? `${t('plugDone')}: ${last.plugin}` : `${t('plugFailed')}: ${d.error || ''}`)
+    askPlugins(last.id)
+    renderAccounts()
+    return
+  }
+  if (!d.ok) { if (d.error) toast(d.error); return }
+  if (last && last.op === 'account_add') {
+    $('acct-form').hidden = true
+    $('acct-new').hidden = false
+    $('ac-name').value = ''
+    if (d.account) askAcctStatus(d.account.id)
+  }
+  if (last && last.op === 'account_delete') for (const w of d.warnings || []) toast(t('acctW_' + w))
+}
+function acctRow(a) {
+  const card = el('div', 'mem')
+  const chats = S.sessions.filter(x => x.account && x.account.id === a.id).length
+  card.append(el('div', 't', a.name), el('div', 'd', `${a.open ? acctStatusText(a.id) || t('acctUnknown') : t('acctClosed')} · ${t('acctChats')} ${chats}`))
+  // How to log in is folded away once the account is logged in; it is open while it is not.
+  const how = el('details')
+  const known = S.acctStatus.get(a.id)
+  how.open = S.acctHow.has(a.id) || Boolean(known && known.status && !known.status.logged_in)
+  how.addEventListener('toggle', () => { if (how.open) S.acctHow.add(a.id); else S.acctHow.delete(a.id) })
+  how.append(el('summary', '', t('acctHow')), el('div', 'muted', t('acctLoginNote')), el('code', 'acct-login', a.login))
+  card.append(how)
+  // Plugins of the default account that this account lacks, installed by a click (the host runs Claude Code's own plugin commands as the account).
+  const plug = el('details')
+  plug.open = S.acctPlug.has(a.id)
+  plug.addEventListener('toggle', () => {
+    if (plug.open) { S.acctPlug.add(a.id); askPlugins(a.id) } else S.acctPlug.delete(a.id)
+  })
+  plug.append(el('summary', '', t('plugTitle')))
+  const info = S.acctPlugins.get(a.id)
+  if (plug.open) {
+    plug.append(el('div', 'muted', t('plugIntro')))
+    if (!info) plug.append(el('div', 'muted', t('acctChecking')))
+    else if (info.error) plug.append(el('div', 'muted', info.error))
+    else if (!info.offer.length) plug.append(el('div', 'muted', t('plugNone')))
+    for (const p of info?.offer || []) {
+      const line = el('div', 'row')
+      const busy = S.acctPlugBusy.has(a.id + '/' + p.id)
+      const b = el('button', '', busy ? t('plugBusy') : t('plugInstall'))
+      b.type = 'button'
+      b.disabled = busy
+      b.addEventListener('click', () => {
+        if (!confirm(t('plugConfirm').replace('{p}', p.id))) return
+        S.acctPlugBusy.add(a.id + '/' + p.id)
+        acctSend({ op: 'account_plugin_install', id: a.id, plugin: p.id })
+        renderAccounts()
+      })
+      line.append(el('span', '', `${p.id}${p.version ? ' ' + p.version : ''}`), b)
+      plug.append(line)
+    }
+  }
+  card.append(plug)
+  const row = el('div', 'row')
+  const button = (label, run, cls) => {
+    const b = el('button', cls || '', label)
+    b.type = 'button'
+    b.addEventListener('click', run)
+    row.append(b)
+  }
+  button(t('acctCheck'), () => askAcctStatus(a.id))
+  button(t('acctLogin'), () => { navigator.clipboard?.writeText(a.login).then(() => toast(t('acctCopied')), () => {}) })
+  button(t('acctRename'), () => { const name = prompt(t('acctRenamePrompt'), a.name); if (name && name.trim()) acctSend({ op: 'account_rename', id: a.id, name }) })
+  button(t('acctDelete'), () => { if (confirm(t('acctDeleteConfirm').replace('{n}', String(chats)))) acctSend({ op: 'account_delete', id: a.id, confirm: true }) }, 'danger')
+  card.append(row)
+  return card
+}
+function renderAccounts() {
+  const d = S.accounts
+  if (!d) return
+  const list = $('acct-list')
+  list.replaceChildren()
+  $('acct-notice').hidden = !d.notice
+  $('acct-notice').textContent = d.notice || ''
+  const base = el('div', 'mem')
+  base.append(el('div', 't', t('acctDefaultRow')), el('div', 'd', acctStatusText(null) || ''))
+  const baseRow = el('div', 'row')
+  const check = el('button', '', t('acctCheck'))
+  check.type = 'button'
+  check.addEventListener('click', () => askAcctStatus(null))
+  baseRow.append(check)
+  base.append(baseRow)
+  list.appendChild(base)
+  if (!d.accounts.length) list.appendChild(el('div', 'muted', t('acctNone')))
+  for (const a of d.accounts) list.appendChild(acctRow(a))
+  // The chooser of a new chat: only accounts that are open can be chosen.
+  const row = $('new-acct-row')
+  row.hidden = d.accounts.length === 0
+  const select = $('new-account')
+  const keep = select.value
+  select.replaceChildren(Object.assign(el('option', '', t('acctDefault')), { value: '' }))
+  for (const a of d.accounts) if (a.open) select.append(Object.assign(el('option', '', a.name), { value: a.id }))
+  select.value = d.accounts.some(a => a.open && a.id === keep) ? keep : ''
+  // The account a panel shows is gone: the panels go back to the default account.
+  if (S.acct && !d.accounts.some(a => a.id === S.acct)) setAcct(null)
+  updateNewChat()
+  renderAcctBar()
+  renderSessions()
+  showAcctPill(curSession())
+}
+/** The bar over the search and the two panels: shown only when there is an account besides the default one. */
+function renderAcctBar() {
+  const accounts = S.accounts?.accounts || []
+  $('acct-bar').hidden = accounts.length === 0 || !['chats', 'memory', 'skills'].includes(S.side)
+  const select = $('acct-view')
+  // What waits or runs under an account that is not shown is told on its entry: a chat there is not in the list.
+  const seen = attn(S.sessions, S.acct, knownAccounts())
+  const entries = [['', t('acctDefault')], ...accounts.map(a => [a.id, a.name])].map(([value, name]) => {
+    const e = seen.get(value)
+    return [value, e ? name + (e.wait ? ` · ⚠ ${e.wait} ${t('acctAttn')}` : e.run ? ' · ●' : '') : name]
+  })
+  const same = select.options.length === entries.length && entries.every(([value], i) => select.options[i].value === value)
+  if (same) {
+    // The same accounts: only the words change, in place, so an open drop-down is not closed by an event of another chat.
+    entries.forEach(([, text], i) => { if (select.options[i].textContent !== text) select.options[i].textContent = text })
+  } else {
+    select.replaceChildren(...entries.map(([value, text]) => Object.assign(el('option', '', text), { value })))
+  }
+  select.value = S.acct || ''
+  const st = S.acctStatus.get(acctKey(S.acct))
+  $('acct-who').textContent = st && st.status ? `${st.status.email || ''}${st.status.logged_in ? '' : ' · ' + t('acctLoggedOut')}` : ''
+}
+$('acct-view').addEventListener('change', () => setAcct($('acct-view').value || null))
+$('acct-new').addEventListener('click', () => { $('acct-form').hidden = false; $('acct-new').hidden = true; $('ac-name').focus() })
+$('ac-cancel').addEventListener('click', () => { $('acct-form').hidden = true; $('acct-new').hidden = false })
+$('acct-form').addEventListener('submit', event => {
+  event.preventDefault()
+  const name = $('ac-name').value.trim()
+  if (name) acctSend({ op: 'account_add', name })
+})
+$('acct-box').addEventListener('toggle', () => { if ($('acct-box').open) { askAccounts(); askAcctStatus(null); for (const a of S.accounts?.accounts || []) if (a.open) askAcctStatus(a.id) } })
 
 showConn()
 connect()

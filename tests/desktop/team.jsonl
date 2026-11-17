@@ -1,0 +1,17 @@
+{"$wait": "user"}
+{"type": "system", "subtype": "init", "session_id": "s-team", "model": "claude-sonnet-4-5", "agents": ["general-purpose", "smartworkbench:advisor", "smartworkbench:explorer"], "slash_commands": ["swb", "smartworkbench"], "tools": []}
+{"type": "assistant", "message": {"id": "t1", "content": [{"type": "text", "text": "smartworkbench: Team mode off: lead sonnet (default) · explorer haiku (low) · advisor opus (high). Opus reviews this session: 0.\n/swb team on|off · /swb team <lead|explorer|advisor> <model> [effort]"}]}}
+{"type": "result", "subtype": "success", "is_error": false, "duration_ms": 3, "num_turns": 0, "total_cost_usd": 0, "result": "smartworkbench: Team mode off: lead sonnet (default) · explorer haiku (low) · advisor opus (high). Opus reviews this session: 0.\n/swb team on|off · /swb team <lead|explorer|advisor> <model> [effort]", "session_id": "s-team"}
+{"$wait": "user"}
+{"type": "assistant", "message": {"id": "t2", "content": [{"type": "text", "text": "smartworkbench: Team mode on: lead sonnet (default) builds, explorer haiku (low) explores, advisor opus (high) reviews.\nThe session model is set (team off puts the previous model back)."}]}}
+{"type": "result", "subtype": "success", "is_error": false, "duration_ms": 3, "num_turns": 0, "total_cost_usd": 0, "result": "smartworkbench: Team mode on: lead sonnet (default) builds, explorer haiku (low) explores, advisor opus (high) reviews.\nThe session model is set (team off puts the previous model back).", "session_id": "s-team"}
+{"$wait": "user"}
+{"type": "assistant", "message": {"id": "t3", "content": [{"type": "text", "text": "smartworkbench: Team mode off: no automatic Opus reviews; the model is back to sonnet."}]}}
+{"type": "result", "subtype": "success", "is_error": false, "duration_ms": 3, "num_turns": 0, "total_cost_usd": 0, "result": "smartworkbench: Team mode off: no automatic Opus reviews; the model is back to sonnet.", "session_id": "s-team"}
+{"$wait": "user"}
+{"type": "assistant", "message": {"id": "t4", "content": [{"type": "text", "text": "smartworkbench: Team mode on: lead sonnet (default) builds, explorer haiku (low) explores, advisor opus (high) reviews.\nThe session model is set (team off puts the previous model back)."}]}}
+{"type": "result", "subtype": "success", "is_error": false, "duration_ms": 3, "num_turns": 1, "total_cost_usd": 0.01, "result": "smartworkbench: Team mode on: lead sonnet (default) builds, explorer haiku (low) explores, advisor opus (high) reviews.\nThe session model is set (team off puts the previous model back).", "session_id": "s-team"}
+{"$wait": "user"}
+{"type": "assistant", "message": {"id": "t5", "content": [{"type": "tool_use", "id": "e1", "name": "Edit", "input": {"file_path": "/p/a.txt", "old_string": "a", "new_string": "b"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "e1", "is_error": true, "content": "SmartWorkbench team mode: this edit is not small (more than 6 lines or 400 characters in one edit)"}]}}
+{"type": "result", "subtype": "success", "is_error": false, "duration_ms": 3, "num_turns": 1, "total_cost_usd": 0.02, "result": "done", "session_id": "s-team"}

@@ -62,8 +62,8 @@ async fn live_claude_calls_the_history_search_tool_after_a_click() {
 
     // An earlier chat of the same project, put straight into the index.
     let old = Envelope { v: 1, sid: "earlier".into(), seq: 1, ts: 1_793_800_000_000, kind: "user".into(), data: serde_json::json!({"text": "we decided the codeword is PELICAN-NONCE-7731 for the release"}) };
-    server.registry.index().unwrap().add(&cwd, 0, &old);
-    server.registry.index().unwrap().flush();
+    server.registry.realm(None).unwrap().index.clone().unwrap().add(&cwd, 0, &old);
+    server.registry.realm(None).unwrap().index.clone().unwrap().flush();
 
     let (_, mut rx) = session.subscribe(0).await.unwrap();
     session.send("Use the search_history tool to look for PELICAN-NONCE and tell me, in one sentence, what the excerpt says the codeword is.".into(), vec![]).await.unwrap();
@@ -115,7 +115,7 @@ async fn live_memory_a_stated_preference_is_auto_saved_and_a_new_chat_knows_it()
     first.send("I use pnpm as the package manager in this project. Reply with just OK.".into(), vec![]).await.unwrap();
     until(&mut rx, |e| e.kind == "state" && e.data["state"] == "idle").await;
 
-    let store = server.registry.memory().unwrap();
+    let store = server.registry.realm(None).unwrap().memory.clone().unwrap();
     let cwd = first.info().await.unwrap().meta.cwd.to_string_lossy().into_owned();
     let mut saved = false;
     for _ in 0..120 {
@@ -178,7 +178,7 @@ async fn live_memory_save_is_active_after_the_person_approves_that_exact_note() 
     session.permission(ask.data["request_id"].as_str().unwrap().to_owned(), true, None, false).await.unwrap();
     until(&mut rx, |e| e.kind == "state" && e.data["state"] == "idle").await;
 
-    let store = server.registry.memory().unwrap();
+    let store = server.registry.realm(None).unwrap().memory.clone().unwrap();
     let cwd = session.info().await.unwrap().meta.cwd.to_string_lossy().into_owned();
     let overview = store.overview(Some(&cwd));
     let note = overview.project.iter().find(|m| m.text.to_lowercase().contains("release branch")).unwrap_or_else(|| panic!("the approved note should be active: {overview:?}"));
@@ -205,8 +205,8 @@ async fn live_skills_a_proposal_is_made_and_an_approved_skill_is_listed_and_used
     })
     .await
     .unwrap();
-    let store = server.registry.skills().unwrap();
-    let ctx = server.registry.propose_ctx().unwrap();
+    let store = server.registry.realm(None).unwrap().skills.clone().unwrap();
+    let ctx = server.registry.realm(None).unwrap().propose.clone().unwrap();
 
     // 1. The real proposer makes a valid, pending proposal from a hint alone.
     let chat = server.registry.create(project.to_str().unwrap(), Some("haiku".into()), None).unwrap();

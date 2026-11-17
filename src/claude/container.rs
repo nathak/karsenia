@@ -71,24 +71,36 @@ pub fn container_name(sid: &str, instance: &str, random: &str) -> String {
     format!("{NAME_PREFIX}{sid}-{instance}-{random}")
 }
 
-/// A project folder a container may be given: not the data folder, not a folder that holds it, not the home folder or a folder that
-/// holds it (the account's credentials and `~/.claude.json` are there), and not a place in the home folder that keeps secrets.
-/// Paths are compared as given, so pass canonical ones.
-pub fn project_allowed(project: &Path, data_dir: &Path, home: Option<&Path>, runtime_dir: Option<&Path>) -> Result<(), &'static str> {
-    let data = data_dir.canonicalize().unwrap_or_else(|_| data_dir.to_path_buf());
+/// The project is not the app's data folder, a place inside it, or a folder that holds it (also used by the file editor).
+pub fn holds_data(project: &Path, data_dir: &Path) -> Result<(), &'static str> {
+    let data = crate::platform::canon(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
     if project.starts_with(&data) || data.starts_with(project) {
         return Err("a container cannot be given the app's data folder, or a folder that holds it");
     }
-    // Without a home folder the rules below cannot be applied, so nothing is given away on a guess.
-    let Some(home) = home.and_then(|h| h.canonicalize().ok()) else {
-        return Err("the home folder is not known, so a container chat cannot be checked");
-    };
+    Ok(())
+}
+
+/// The project is not the (canonical) home folder, a folder that holds it, or a place in it that keeps credentials and settings.
+pub fn holds_home(project: &Path, home: &Path) -> Result<(), &'static str> {
     if home.starts_with(project) {
         return Err("a container cannot be given the home folder or a folder that holds it: the account's credentials are there");
     }
     if [".claude", ".ssh", ".aws", ".gnupg", ".config", ".kube", ".docker", ".local"].iter().any(|dir| project.starts_with(home.join(dir))) {
         return Err("a container cannot be given a folder where the home folder keeps credentials and settings");
     }
+    Ok(())
+}
+
+/// A project folder a container may be given: not the data folder, not a folder that holds it, not the home folder or a folder that
+/// holds it (the account's credentials and `~/.claude.json` are there), and not a place in the home folder that keeps secrets.
+/// Paths are compared as given, so pass canonical ones.
+pub fn project_allowed(project: &Path, data_dir: &Path, home: Option<&Path>, runtime_dir: Option<&Path>) -> Result<(), &'static str> {
+    holds_data(project, data_dir)?;
+    // Without a home folder the rules below cannot be applied, so nothing is given away on a guess.
+    let Some(home) = home.and_then(|h| h.canonicalize().ok()) else {
+        return Err("the home folder is not known, so a container chat cannot be checked");
+    };
+    holds_home(project, &home)?;
     // Folders where this user's programs keep sockets (tmux, ssh-agent, gpg-agent, the container runtime's own): a container that runs
     // as the same user could drive them. A project that holds one of them is refused, and so is one inside the run folders.
     let mut sockets: Vec<PathBuf> = ["/tmp", "/var/tmp", "/dev/shm", "/run", "/var/run"].iter().map(PathBuf::from).collect();
@@ -158,7 +170,9 @@ pub fn run_args(spec: &Spec, cwd: &Path, env_names: &[String], claude_args: &[St
 /// `rm -f <name>`: removes the container whether it runs or not. The command is started at once; `wait` is how long to wait for it
 /// (zero: do not wait, which is right when this process may be about to end: the command goes on without it).
 pub fn remove(program: &Path, name: &str, wait: std::time::Duration) {
-    let Ok(mut child) = std::process::Command::new(program).args(["rm", "-f", name]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() else { return };
+    let mut command = std::process::Command::new(program);
+    crate::proc_group::no_window_std(&mut command);
+    let Ok(mut child) = command.args(["rm", "-f", name]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() else { return };
     let start = std::time::Instant::now();
     while start.elapsed() < wait {
         if matches!(child.try_wait(), Ok(Some(_))) {
@@ -177,7 +191,9 @@ pub fn remove(program: &Path, name: &str, wait: std::time::Duration) {
 pub fn sweep(program: &Path, data_hash: &str, instance: &str) {
     let own = format!("-{instance}-");
     for label in [DATA_LABEL, OLD_DATA_LABEL] {
-        let Ok(listing) = std::process::Command::new(program).args(["ps", "-a", "--filter", &format!("label={label}={data_hash}"), "--format", "{{.ID}} {{.Names}}"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output() else { continue };
+        let mut command = std::process::Command::new(program);
+        crate::proc_group::no_window_std(&mut command);
+        let Ok(listing) = command.args(["ps", "-a", "--filter", &format!("label={label}={data_hash}"), "--format", "{{.ID}} {{.Names}}"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output() else { continue };
         for line in String::from_utf8_lossy(&listing.stdout).lines() {
             let mut parts = line.split_whitespace();
             let (Some(id), name) = (parts.next(), parts.next().unwrap_or_default()) else { continue };

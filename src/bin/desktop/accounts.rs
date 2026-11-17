@@ -1,0 +1,389 @@
+//! The Accounts card in Settings and the account the panels show. The card speaks the web page's `account_*` operations;
+//! the panels follow the open chat's account (set when another chat is opened) and can be switched by hand.
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use serde_json::{json, Value};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use tenrec::view::i18n::{fill, tr};
+use tenrec::view::panels::accounts_view;
+
+use crate::{Acct, AcctRow, App, AppWindow, PlugRow};
+
+thread_local! {
+    static LIST: RefCell<Option<Value>> = const { RefCell::new(None) };
+    // Per account ("" for the default one): the number of the last status asked and its answer (None while asking).
+    static STATUS: RefCell<HashMap<String, (u64, Option<Value>)>> = RefCell::new(HashMap::new());
+    static CHATS: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
+    // The picker's entries and the id behind each (None: the default account).
+    static IDS: RefCell<Vec<Option<String>>> = const { RefCell::new(Vec::new()) };
+    // What the header's tabs say (the names with what waits or runs under each).
+    static LABELS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    // The chat whose account the panels were last switched to.
+    static APPLIED_SID: RefCell<Option<String>> = const { RefCell::new(None) };
+    // The login command of each account, for the copy button.
+    static LOGINS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    // Plug-ins: the cards whose section is open, the host's last answer per account, and the installs under way ("account/plugin").
+    static PLUG_OPEN: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static PLUGS: RefCell<HashMap<String, Value>> = RefCell::new(HashMap::new());
+    static PLUG_BUSY: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+}
+
+/// What an account card shows of its plug-ins section: whether it is open, a line of text (checking, nothing, an error) and the offer.
+fn plug_view(id: &str, lang: tenrec::view::i18n::Lang) -> (bool, String, Vec<PlugRow>) {
+    let open = PLUG_OPEN.with(|o| o.borrow().contains(id));
+    if !open {
+        return (false, String::new(), Vec::new());
+    }
+    let Some(info) = PLUGS.with(|p| p.borrow().get(id).cloned()) else { return (true, tr(lang, "plug_checking"), Vec::new()) };
+    if let Some(error) = info["error"].as_str() {
+        return (true, error.to_owned(), Vec::new());
+    }
+    let offer: Vec<PlugRow> = info["offer"].as_array().map(|a| a.iter().filter_map(|p| p["id"].as_str()).map(|p| PlugRow { id: p.into(), busy: PLUG_BUSY.with(|b| b.borrow().contains(&format!("{id}/{p}"))) }).collect()).unwrap_or_default();
+    let note = if offer.is_empty() { tr(lang, "plug_none") } else { String::new() };
+    (true, note, offer)
+}
+
+pub fn render(ui: &AppWindow, app: &App) {
+    let Some(list) = LIST.with(|l| l.borrow().clone()) else { return };
+    let status: HashMap<String, Option<Value>> = STATUS.with(|s| s.borrow().iter().map(|(k, (_, v))| (k.clone(), v.clone())).collect());
+    let (head, rows) = CHATS.with(|c| accounts_view(&list, &status, &c.borrow(), app.lang));
+    let acct = ui.global::<Acct>();
+    acct.set_notice(head.notice.into());
+    acct.set_can_add(head.can_add);
+    LOGINS.with(|l| *l.borrow_mut() = rows.iter().map(|r| (r.id.clone(), r.login.clone())).collect());
+    let slint_rows: Vec<AcctRow> = rows
+        .into_iter()
+        .map(|r| {
+            let (usage, usage_level) = crate::usage::compact(&r.id, app);
+            let (plug_open, plug_note, plugs) = plug_view(&r.id, app.lang);
+            AcctRow { id: r.id.into(), name: r.name.into(), sub: r.sub.into(), state: r.state.into(), chats: r.chats as i32, open: r.open, is_default: r.is_default, usage: usage.into(), usage_level: usage_level.into(), login: r.login.into(), dir: r.dir.into(), plug_open, plug_note: plug_note.into(), plugs: ModelRc::from(std::rc::Rc::new(VecModel::from(plugs))) }
+        })
+        .collect();
+    crate::panels::set_rows(acct.get_rows(), slint_rows, |m| acct.set_rows(m));
+    let names: Vec<SharedString> = head.names.iter().map(|n| n.into()).collect();
+    if NAMES.with(|n| *n.borrow() != head.names) {
+        acct.set_names(ModelRc::from(std::rc::Rc::new(VecModel::from(names))));
+    }
+    NAMES.with(|n| *n.borrow_mut() = head.names);
+    IDS.with(|i| *i.borrow_mut() = head.ids.clone());
+    // An account that is gone is not shown any more.
+    let current = app.bus.account();
+    if current.is_some() && !head.ids.contains(&current) {
+        set_account(ui, app, None);
+    }
+    sync_view(ui, app);
+    crate::show_sessions(ui, app);
+    crate::usage::render(ui, app);
+    // The new chat's picker stays inside the list.
+    if ui.get_new_acct() as usize >= head.ids.len() {
+        ui.set_new_acct(0);
+    }
+}
+
+/// Every account id the host listed, or None before the list came (an extra account's chat is then only under its own account).
+pub fn known() -> Option<Vec<String>> {
+    IDS.with(|i| {
+        let ids = i.borrow();
+        (!ids.is_empty()).then(|| ids.iter().flatten().cloned().collect())
+    })
+}
+
+/// The header's tab names, each with "⚠ n" (a chat there waits for the person) or "●" (one is working) when it is not the account shown.
+pub fn set_labels(ui: &AppWindow, app: &App) {
+    let (view, known) = (app.bus.account(), known());
+    let seen = crate::attention_now(view.as_deref(), known.as_deref());
+    let labels: Vec<String> = NAMES.with(|n| n.borrow().iter().enumerate().map(|(i, name)| {
+        let key = IDS.with(|ids| ids.borrow().get(i).cloned().flatten()).unwrap_or_default();
+        tenrec::view::panels::tab_label(name, seen.get(&key))
+    }).collect());
+    if LABELS.with(|l| *l.borrow() == labels) {
+        return;
+    }
+    ui.global::<Acct>().set_labels(ModelRc::from(std::rc::Rc::new(VecModel::from(labels.iter().map(|l| l.into()).collect::<Vec<SharedString>>()))));
+    LABELS.with(|l| *l.borrow_mut() = labels);
+}
+
+/// Points the panels' picker at the account the panels show.
+fn sync_view(ui: &AppWindow, app: &App) {
+    let current = app.bus.account();
+    let index = IDS.with(|i| i.borrow().iter().position(|id| *id == current)).unwrap_or(0);
+    ui.global::<Acct>().set_view(index as i32);
+}
+
+/// Switches the panels to another account: what was shown of the old one goes, and the open panel asks again.
+pub fn set_account(ui: &AppWindow, app: &App, id: Option<String>) {
+    if !app.bus.set_account(id) {
+        sync_view(ui, app);
+        return;
+    }
+    sync_view(ui, app);
+    crate::show_sessions(ui, app);
+    crate::usage::render(ui, app);
+    crate::panels::account_changed(ui, app);
+}
+
+pub fn ask_status(ui: &AppWindow, app: &App, key: &str) {
+    let id = (!key.is_empty()).then(|| key.to_owned());
+    let n = app.bus.send(json!({"op": "account_status", "id": id}));
+    STATUS.with(|s| s.borrow_mut().insert(key.to_owned(), (n, None)));
+    render(ui, app);
+}
+
+/// Settings opened: the accounts never checked in this run are checked once.
+pub fn panel_open(ui: &AppWindow, app: &App) {
+    app.bus.post_quiet(json!({"op": "account_list"}));
+    let keys: Vec<String> = std::iter::once(String::new()).chain(IDS.with(|i| i.borrow().iter().flatten().cloned().collect::<Vec<_>>())).collect();
+    for key in keys {
+        if STATUS.with(|s| !s.borrow().contains_key(&key)) {
+            ask_status(ui, app, &key);
+        }
+    }
+}
+
+/// The chats of each account changed (from the session list).
+pub fn set_chats(ui: &AppWindow, app: &App, chats: HashMap<String, usize>) {
+    if CHATS.with(|c| *c.borrow() == chats) {
+        return;
+    }
+    CHATS.with(|c| *c.borrow_mut() = chats);
+    render(ui, app);
+}
+
+/// Another chat was opened: the panels follow its account (once; a hand-picked account stays until the next chat).
+pub fn follow_chat(ui: &AppWindow, app: &App, sid: &str, account: Option<String>) {
+    if APPLIED_SID.with(|a| a.borrow().as_deref() == Some(sid)) {
+        return;
+    }
+    APPLIED_SID.with(|a| *a.borrow_mut() = Some(sid.to_owned()));
+    // A chat of an account that was deleted: the panels show the default account, not one that is gone (the list may not have
+    // come yet, then the account is taken as it is and `render` corrects it).
+    let account = account.filter(|id| IDS.with(|ids| ids.borrow().is_empty() || ids.borrow().contains(&Some(id.clone()))));
+    set_account(ui, app, account);
+}
+
+/// The new chat's account from the picker: the index and the name it showed must still agree.
+pub fn chosen(index: i32, name: &str) -> Result<Option<String>, ()> {
+    if name.is_empty() {
+        return Ok(None);
+    }
+    let i = index.max(0) as usize;
+    let same = NAMES.with(|n| n.borrow().get(i).map(String::as_str) == Some(name));
+    if !same {
+        return Err(());
+    }
+    Ok(IDS.with(|ids| ids.borrow().get(i).cloned().flatten()))
+}
+
+pub fn on_reply(ui: &AppWindow, app: &Arc<App>, kind: &str, data: Value) {
+    let lang = app.lang;
+    match kind {
+        "accounts" => {
+            LIST.with(|l| *l.borrow_mut() = Some(data));
+            render(ui, app);
+            // Settings is open and an account has not been checked yet (the list came late, or an account was just added).
+            if ui.get_side() == 5 || ui.get_new_open() {
+                let keys: Vec<String> = IDS.with(|i| i.borrow().iter().flatten().cloned().collect());
+                for key in keys {
+                    if STATUS.with(|s| !s.borrow().contains_key(&key)) {
+                        ask_status(ui, app, &key);
+                    }
+                }
+            }
+        }
+        "accounts_changed" => app.bus.post_quiet(json!({"op": "account_list"})),
+        "account_status" => {
+            let key = data["id"].as_str().unwrap_or_default().to_owned();
+            let req = data["req"].as_u64().unwrap_or(0);
+            let fresh = STATUS.with(|s| s.borrow().get(&key).is_some_and(|(n, _)| *n == req));
+            if fresh {
+                STATUS.with(|s| s.borrow_mut().insert(key, (req, Some(data))));
+                render(ui, app);
+            }
+        }
+        "account_plugins" => {
+            if let Some(id) = data["account"].as_str().map(str::to_owned) {
+                PLUGS.with(|p| p.borrow_mut().insert(id, data));
+                render(ui, app);
+            }
+        }
+        "account_result" => {
+            let op = data["rid"].as_u64().and_then(|rid| app.bus.take(rid)).unwrap_or(Value::Null);
+            if op["op"] == "account_plugin_install" {
+                let (id, plugin) = (op["id"].as_str().unwrap_or_default().to_owned(), op["plugin"].as_str().unwrap_or_default().to_owned());
+                PLUG_BUSY.with(|b| b.borrow_mut().remove(&format!("{id}/{plugin}")));
+                let text = if data["ok"] == true { format!("{}: {plugin}", tr(lang, "plug_done")) } else { format!("{}: {}", tr(lang, "plug_failed"), data["error"].as_str().unwrap_or_default()) };
+                crate::toast(ui, text);
+                // What the account has now: the offer is asked for again.
+                app.bus.post_quiet(json!({"op": "account_plugins", "id": id}));
+                render(ui, app);
+                return;
+            }
+            if data["ok"] != true {
+                if let Some(error) = data["error"].as_str() {
+                    crate::toast(ui, error.to_owned());
+                }
+                return;
+            }
+            let acct = ui.global::<Acct>();
+            match op["op"].as_str() {
+                Some("account_add") => {
+                    acct.set_new_name(SharedString::new());
+                    crate::toast(ui, fill(&tr(lang, "acct_added"), &[("name", op["name"].as_str().unwrap_or_default().to_owned())]));
+                }
+                Some("account_rename") => acct.set_editing(SharedString::new()),
+                Some("account_delete") => {
+                    let warnings: Vec<String> = data["warnings"].as_array().map(|w| w.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default();
+                    let mut text = tr(lang, "acct_deleted");
+                    if !warnings.is_empty() {
+                        text = format!("{text}: {}", warnings.join("; "));
+                    }
+                    crate::toast(ui, text);
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn wire(ui: &AppWindow, app: &Arc<App>) {
+    let acct = ui.global::<Acct>();
+    acct.set_console(cfg!(windows));
+    app.bus.post_quiet(json!({"op": "account_list"}));
+
+    let (a, weak) = (app.clone(), ui.as_weak());
+    acct.on_status(move |id| {
+        if let Some(ui) = weak.upgrade() {
+            ask_status(&ui, &a, &id);
+        }
+    });
+    let a = app.clone();
+    acct.on_add(move |name| a.bus.post(json!({"op": "account_add", "name": name.trim()})));
+    let a = app.clone();
+    acct.on_rename(move |id, name| a.bus.post(json!({"op": "account_rename", "id": id.as_str(), "name": name.trim()})));
+    let (a, weak) = (app.clone(), ui.as_weak());
+    acct.on_delete(move |id| {
+        let Some(ui) = weak.upgrade() else { return };
+        let name = LIST.with(|l| l.borrow().as_ref().and_then(|l| l["accounts"].as_array().and_then(|list| list.iter().find(|x| x["id"] == id.as_str()).map(|x| x["name"].as_str().unwrap_or_default().to_owned())))).unwrap_or_default();
+        let n = CHATS.with(|c| c.borrow().get(id.as_str()).copied().unwrap_or(0));
+        let body = fill(&tr(a.lang, "acct_delete_confirm"), &[("name", name), ("n", n.to_string())]);
+        let (b, id) = (a.clone(), id.to_string());
+        crate::panels::ask(&ui, body, tr(a.lang, "acct_delete"), true, Box::new(move |ok| {
+            if ok {
+                b.bus.post(json!({"op": "account_delete", "id": id, "confirm": true}));
+            }
+        }));
+    });
+    let (a, weak) = (app.clone(), ui.as_weak());
+    acct.on_plugins_toggle(move |id| {
+        let Some(ui) = weak.upgrade() else { return };
+        let id = id.to_string();
+        let opened = PLUG_OPEN.with(|o| {
+            let mut o = o.borrow_mut();
+            if o.remove(&id) { false } else { o.insert(id.clone()) }
+        });
+        if opened {
+            a.bus.post_quiet(json!({"op": "account_plugins", "id": id}));
+        }
+        render(&ui, &a);
+    });
+    let (a, weak) = (app.clone(), ui.as_weak());
+    acct.on_plugin_install(move |id, plugin| {
+        let Some(ui) = weak.upgrade() else { return };
+        let (id, plugin) = (id.to_string(), plugin.to_string());
+        let body = fill(&tr(a.lang, "plug_confirm"), &[("p", plugin.clone())]);
+        let b = a.clone();
+        crate::panels::ask(&ui, body, tr(a.lang, "plug_install"), false, Box::new(move |ok| {
+            if ok {
+                PLUG_BUSY.with(|s| s.borrow_mut().insert(format!("{id}/{plugin}")));
+                b.bus.post(json!({"op": "account_plugin_install", "id": id, "plugin": plugin}));
+                let weak = b.weak.clone();
+                let c = b.clone();
+                let _ = weak.upgrade_in_event_loop(move |ui| render(&ui, &c));
+            }
+        }));
+    });
+    let (a, weak) = (app.clone(), ui.as_weak());
+    acct.on_copy_login(move |id| {
+        let Some(login) = LOGINS.with(|l| l.borrow().get(id.as_str()).cloned()) else { return };
+        if crate::copy_quiet(login) {
+            if let Some(ui) = weak.upgrade() {
+                crate::toast(&ui, tr(a.lang, "acct_copied"));
+            }
+        }
+    });
+    let (a, weak) = (app.clone(), ui.as_weak());
+    acct.on_copy_path(move |path| {
+        if crate::copy_quiet(path.to_string()) {
+            if let Some(ui) = weak.upgrade() {
+                crate::toast(&ui, tr(a.lang, "acct_copied"));
+            }
+        }
+    });
+    let (a, weak) = (app.clone(), ui.as_weak());
+    acct.on_login(move |id| {
+        let Some(ui) = weak.upgrade() else { return };
+        login(&ui, &a, id.to_string());
+    });
+    let (a, weak) = (app.clone(), ui.as_weak());
+    acct.on_view_chosen(move |i| {
+        let Some(ui) = weak.upgrade() else { return };
+        let id = IDS.with(|ids| ids.borrow().get(i.max(0) as usize).cloned().flatten());
+        set_account(&ui, &a, id);
+    });
+}
+
+/// "Open login window": a console of its own runs `claude auth login` for the account; when it closes, the status is checked
+/// again. Nothing it prints passes through the app.
+#[cfg(windows)]
+fn login(ui: &AppWindow, app: &Arc<App>, key: String) {
+    let account = if key.is_empty() {
+        None
+    } else {
+        match app.registry.account_login(&key) {
+            Ok(found) => Some(found),
+            Err(error) => return crate::toast(ui, fill(&tr(app.lang, "acct_login_failed"), &[("e", error)])),
+        }
+    };
+    match open_login(app.registry.bin(), &tr(app.lang, "acct_login_wait"), account) {
+        Ok(mut child) => {
+            crate::toast(ui, tr(app.lang, "acct_login_started"));
+            let a = app.clone();
+            std::thread::spawn(move || {
+                let _ = child.wait();
+                let b = a.clone();
+                let _ = a.weak.upgrade_in_event_loop(move |ui| ask_status(&ui, &b, &key));
+            });
+        }
+        Err(error) => crate::toast(ui, fill(&tr(app.lang, "acct_login_failed"), &[("e", error.to_string())])),
+    }
+}
+
+#[cfg(not(windows))]
+fn login(ui: &AppWindow, app: &Arc<App>, _key: String) {
+    crate::toast(ui, fill(&tr(app.lang, "acct_login_failed"), &[("e", "Windows only".to_owned())]));
+}
+
+/// The console's command line is fixed: the program and the account's folder go in as environment variables, never into the
+/// text PowerShell reads, so no path needs quoting.
+#[cfg(windows)]
+fn open_login(bin: &str, wait: &str, account: Option<(std::path::PathBuf, tenrec::claude::env::EnvPlan)>) -> std::io::Result<std::process::Child> {
+    use std::os::windows::process::CommandExt;
+    let ps = std::env::var_os("SystemRoot").map(|r| std::path::PathBuf::from(r).join(r"System32\WindowsPowerShell\v1.0\powershell.exe")).unwrap_or_else(|| "powershell.exe".into());
+    let mut cmd = std::process::Command::new(ps);
+    cmd.args(["-NoLogo", "-NoProfile", "-Command", "& $env:TENREC_LOGIN_BIN auth login; if (-not $?) { Read-Host $env:TENREC_LOGIN_WAIT }"]).env("TENREC_LOGIN_BIN", bin).env("TENREC_LOGIN_WAIT", wait);
+    if let Some((dir, env)) = account {
+        for name in &env.remove {
+            cmd.env_remove(name);
+        }
+        for (name, value) in &env.set {
+            cmd.env(name, value);
+        }
+        cmd.current_dir(dir);
+    }
+    cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE);
+    cmd.spawn()
+}

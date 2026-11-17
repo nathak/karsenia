@@ -1,0 +1,330 @@
+// The Schedule panel (src/view/sched.rs makes its rows; src/bin/desktop/sched.rs answers its callbacks). The task form is made of
+// plain properties on the global, set once when a task is opened for editing and read once when it is saved, so a new listing
+// never wipes what is being typed.
+import { ScrollView, LineEdit, TextEdit, CheckBox, ComboBox, AboutSlint } from "std-widgets.slint";
+import { Theme, T, Pill, Btn, SelText, WText, Label, Badge, Toggle, SegTabs, IconBtn } from "base.slint";
+import { Card, PageTitle, Segment, Field, Prefs, Mem, Sk, About, ProvidersCard } from "panels.slint";
+
+export struct SchedHeadV { available: bool, on: bool, notice: string, unseen: int, count: int, full: bool }
+export struct SchedTask { id: int, name: string, profile: string, summary: string, state: string, detail: string, tools: string, next: string, enabled: bool, running: bool, paused-note: string }
+export struct SchedRun { id: int, status: string, tone: int, name: string, when: string, unseen: bool }
+
+export global Sched {
+    in property <SchedHeadV> head;
+    in property <[SchedTask]> tasks;
+    in property <[SchedRun]> runs;
+    // 0 closed, -1 a new task, otherwise the id of the task being edited.
+    in-out property <int> editing;
+    in-out property <string> f-name;
+    in-out property <string> f-prompt;
+    in-out property <bool> f-web;
+    in-out property <string> f-cwd;
+    in-out property <string> f-sites;
+    in-out property <bool> f-daily: true;
+    in-out property <string> f-time;
+    in-out property <[bool]> f-days;
+    in-out property <string> f-every;
+    in-out property <int> f-model;
+    in-out property <string> f-turns;
+    in-out property <string> f-budget;
+    in-out property <string> f-timeout;
+    in property <[string]> day-names;
+    in property <bool> picking;
+    // The result of one run, in an overlay.
+    in-out property <bool> run-open;
+    in property <string> run-title;
+    in property <string> run-meta;
+    in property <string> run-note;
+    in property <bool> run-external;
+    in property <string> run-denied;
+    in property <string> run-result;
+    in property <string> run-def;
+    callback switch(bool);
+    callback new-task();
+    callback edit(int);
+    callback save();
+    callback cancel();
+    callback day(int, bool);
+    callback pick();
+    callback run-now(int);
+    callback stop(int);
+    callback enable(int, bool);
+    callback delete(int);
+    callback open-run(int);
+    callback close-run();
+    callback seen-all();
+    callback copy-result();
+}
+
+component TaskCard inherits Rectangle {
+    in property <SchedTask> t;
+    height: tl.preferred-height;
+    background: Theme.low;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: t.running ? Theme.primary.with-alpha(0.5) : Theme.hairline;
+    tl := VerticalLayout {
+        padding: 16px; spacing: 8px;
+        HorizontalLayout {
+            spacing: 10px;
+            VerticalLayout { alignment: center; Badge { text: t.running ? T.tr("st_running") : t.enabled ? T.tr("sc_state_on") : T.tr("sc_state_off"); tone: t.running ? "ok" : t.enabled ? "info" : "neutral"; mono: false; } }
+            Text { text: t.name; color: Theme.on-surface; font-size: 15px; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            VerticalLayout { alignment: center; Toggle { checked: t.enabled; toggled(on) => { Sched.enable(t.id, on); } } }
+        }
+        WText { text: t.summary + (t.next != "" ? "   ·   " + T.tr("sc_next") + ": " + t.next : ""); fg: Theme.on-var; size: 13px; mono: true; }
+        if t.paused-note != "": Rectangle {
+            background: Theme.error.with-alpha(0.1); border-radius: 8px; border-width: 1px; border-color: Theme.error.with-alpha(0.35); height: pn.preferred-height;
+            pn := HorizontalLayout { padding: 10px; spacing: 8px; Text { text: "⚠"; color: Theme.error; font-size: 14px; vertical-alignment: top; } WText { horizontal-stretch: 1; text: t.paused-note; fg: Theme.primary-soft; size: 12px; } }
+        }
+        Rectangle { height: 1px; background: Theme.hairline; }
+        HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout { alignment: center; Badge { text: t.profile == "web" ? T.tr("sc_web") : T.tr("sc_files"); tone: t.profile == "web" ? "info" : "neutral"; mono: false; } }
+            WText { horizontal-stretch: 1; text: t.detail; fg: Theme.outline; size: 11px; mono: true; }
+        }
+        WText { text: T.tr("sc_tools") + ": " + t.tools; fg: Theme.outline; size: 11px; mono: true; }
+        HorizontalLayout {
+            spacing: 6px; alignment: end; padding-top: 2px;
+            Btn { text: T.tr("sc_edit"); height: 28px; clicked => { Sched.edit(t.id); } }
+            Btn { text: T.tr("sc_delete"); height: 28px; danger: true; clicked => { Sched.delete(t.id); } }
+            if t.running: Btn { text: T.tr("sc_stop"); height: 28px; danger: true; clicked => { Sched.stop(t.id); } }
+            Btn { text: T.tr("sc_run_now"); height: 28px; primary: true; enabled: !t.running; clicked => { Sched.run-now(t.id); } }
+        }
+    }
+}
+
+component TaskForm inherits Rectangle {
+    height: fl.preferred-height;
+    background: Theme.low;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.hairline;
+    fl := VerticalLayout {
+        padding: 18px; spacing: 10px;
+        HorizontalLayout {
+            spacing: 10px;
+            Text { text: "⊕"; color: Theme.primary; font-size: 20px; vertical-alignment: center; }
+            Text { text: Sched.editing > 0 ? T.tr("sc_edit_title") : T.tr("sc_new_title"); color: Theme.on-surface; font-size: 18px; font-weight: 600; vertical-alignment: center; horizontal-alignment: left; horizontal-stretch: 1; }
+        }
+        Field { label: T.tr("sc_name"); LineEdit { text <=> Sched.f-name; } }
+        Field { label: T.tr("sc_prompt"); TextEdit { height: 110px; text <=> Sched.f-prompt; } }
+        HorizontalLayout {
+            spacing: 8px;
+            Segment { items: [T.tr("sc_files"), T.tr("sc_web")]; current: Sched.f-web ? 1 : 0; chosen(i) => { Sched.f-web = i == 1; } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        WText { text: T.tr("sc_profile_note"); fg: Theme.outline; size: 11px; }
+        if !Sched.f-web: Field {
+            label: T.tr("sc_folder");
+            HorizontalLayout {
+                spacing: 8px;
+                LineEdit { horizontal-stretch: 1; text <=> Sched.f-cwd; }
+                Btn { text: T.tr("sc_browse"); height: 34px; enabled: !Sched.picking; clicked => { Sched.pick(); } }
+            }
+        }
+        if Sched.f-web: Field { label: T.tr("sc_sites"); TextEdit { height: 80px; text <=> Sched.f-sites; } }
+        if Sched.f-web: WText { text: T.tr("sc_sites_note"); fg: Theme.outline; size: 11px; }
+        HorizontalLayout {
+            spacing: 8px;
+            Segment { items: [T.tr("sc_daily"), T.tr("sc_every")]; current: Sched.f-daily ? 0 : 1; chosen(i) => { Sched.f-daily = i == 0; } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if Sched.f-daily: VerticalLayout {
+            spacing: 8px;
+            Field { label: T.tr("sc_time"); LineEdit { text <=> Sched.f-time; } }
+            HorizontalLayout {
+                spacing: 2px; alignment: start;
+                for on[i] in Sched.f-days: CheckBox { text: Sched.day-names[i]; checked: on; toggled => { Sched.day(i, self.checked); } }
+            }
+        }
+        if !Sched.f-daily: Field { label: T.tr("sc_minutes"); LineEdit { text <=> Sched.f-every; } }
+        HorizontalLayout {
+            spacing: 12px;
+            Field { horizontal-stretch: 1; label: T.tr("sc_model"); ComboBox { model: ["sonnet", "haiku", "opus"]; current-index <=> Sched.f-model; } }
+            Field { horizontal-stretch: 1; label: T.tr("sc_turns"); LineEdit { text <=> Sched.f-turns; } }
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            Field { horizontal-stretch: 1; label: T.tr("sc_budget"); LineEdit { text <=> Sched.f-budget; } }
+            Field { horizontal-stretch: 1; label: T.tr("sc_timeout"); LineEdit { text <=> Sched.f-timeout; } }
+        }
+        HorizontalLayout {
+            spacing: 8px; alignment: end;
+            Btn { text: Sched.editing > 0 ? T.cancel : T.tr("sc_reset"); clicked => { Sched.cancel(); } }
+            Btn { text: T.tr("sc_save"); primary: true; clicked => { Sched.save(); } }
+        }
+    }
+}
+
+// The left column: the registered tasks, then the latest runs.
+component SchedLeft inherits VerticalLayout {
+    spacing: 12px;
+    alignment: start;
+    HorizontalLayout {
+        spacing: 10px;
+        Text { text: "◷"; color: Theme.primary; font-size: 20px; vertical-alignment: center; }
+        Text { text: T.tr("sc_registered"); color: Theme.on-surface; font-size: 18px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+        if Sched.head.available: Text { text: T.tr("sc_total_pre") + Sched.head.count + T.tr("sc_total_post"); color: Theme.outline; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; }
+    }
+    if Sched.head.notice != "": WText { text: Sched.head.notice; fg: Theme.primary-soft; size: 13px; }
+    if Sched.head.available: HorizontalLayout {
+        spacing: 10px;
+        Toggle { checked: Sched.head.on; toggled(on) => { Sched.switch(on); } }
+        WText { horizontal-stretch: 1; text: T.tr("sc_switch"); size: 13px; fg: Theme.on-var; }
+    }
+    if Sched.head.available && Sched.tasks.length == 0: Text { text: T.tr("sc_no_tasks"); color: Theme.outline; font-size: 13px; }
+    for t in Sched.tasks: TaskCard { t: t; }
+    if Sched.runs.length > 0: HorizontalLayout {
+        spacing: 10px; padding-top: 8px;
+        Label { text: T.tr("sc_runs"); vertical-alignment: center; }
+        Rectangle { horizontal-stretch: 1; }
+        if Sched.head.unseen > 0: Btn { text: T.tr("sc_seen_all"); height: 26px; clicked => { Sched.seen-all(); } }
+    }
+    for r in Sched.runs: Rectangle {
+        height: 38px;
+        background: run-area.has-hover ? Theme.high : Theme.low;
+        border-radius: 8px;
+        border-width: 1px; border-color: Theme.hairline;
+        HorizontalLayout {
+            padding-left: 10px; padding-right: 10px; spacing: 10px;
+            Rectangle { width: 8px; VerticalLayout { alignment: center; if r.unseen: Rectangle { width: 7px; height: 7px; border-radius: 3.5px; background: Theme.primary; } } }
+            VerticalLayout { alignment: center; Badge { text: r.status; tone: r.tone == 1 ? "ok" : r.tone == 2 ? "err" : "neutral"; mono: false; } }
+            Text { text: r.name; color: Theme.on-surface; font-size: 13px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            Text { text: r.when; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+        }
+        run-area := TouchArea { mouse-cursor: pointer; clicked => { Sched.open-run(r.id); } }
+    }
+}
+
+// The right column: the form for a task, then the app's settings.
+component SchedRight inherits VerticalLayout {
+    in property <int> zoom-pct;
+    callback zoom(int);
+    spacing: 14px;
+    alignment: start;
+    if Sched.head.available: TaskForm { }
+    Rectangle {
+        background: Theme.low; border-radius: 12px; border-width: 1px; border-color: Theme.hairline;
+        height: st.preferred-height;
+        st := VerticalLayout {
+            padding: 18px; spacing: 12px;
+            HorizontalLayout {
+                spacing: 10px;
+                Image { source: @image-url("icons/settings.svg"); width: 22px; height: 22px; y: (parent.height - 22px) / 2; colorize: Theme.primary; }
+                Text { text: T.tr("tab_settings"); color: Theme.on-surface; font-size: 18px; font-weight: 600; vertical-alignment: center; }
+            }
+            Text { text: T.tr("st_look"); color: Theme.on-var; font-size: 14px; font-weight: 600; }
+            HorizontalLayout {
+                spacing: 12px;
+                Text { text: T.tr("pref_title"); color: Theme.outline; font-size: 13px; vertical-alignment: center; width: 90px; }
+                SegTabs { horizontal-stretch: 1; items: ["한국어", "English"]; current: Prefs.lang; chosen(i) => { Prefs.lang-chosen(i); } }
+            }
+            if Prefs.changed: WText { text: T.tr("pref_restart"); fg: Theme.primary-soft; size: 12px; }
+            HorizontalLayout {
+                spacing: 12px;
+                Text { text: T.tr("st_theme"); color: Theme.outline; font-size: 13px; vertical-alignment: center; width: 90px; }
+                SegTabs { horizontal-stretch: 1; items: [T.tr("st_dark"), T.tr("st_light"), T.tr("st_system")]; current: Theme.mode; chosen(i) => { Theme.mode = i; Prefs.theme-chosen(i); } }
+            }
+            WText { text: T.tr("st_theme_note"); fg: Theme.outline; size: 11px; }
+            HorizontalLayout {
+                spacing: 6px;
+                Text { text: T.zoom; color: Theme.outline; font-size: 13px; vertical-alignment: center; width: 90px; }
+                Btn { text: "−"; width: 34px; height: 30px; enabled: root.zoom-pct > 80; clicked => { root.zoom(-1); } }
+                Rectangle { width: 56px; height: 30px; Text { text: root.zoom-pct + "%"; color: Theme.on-surface; font-size: 13px; font-family: Theme.mono; } TouchArea { mouse-cursor: pointer; clicked => { root.zoom(0); } } }
+                Btn { text: "+"; width: 34px; height: 30px; enabled: root.zoom-pct < 160; clicked => { root.zoom(1); } }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Rectangle { height: 1px; background: Theme.hairline; }
+            ProvidersCard { }
+            Rectangle { height: 1px; background: Theme.hairline; }
+            Text { text: T.tr("st_ai"); color: Theme.on-var; font-size: 14px; font-weight: 600; }
+            if Mem.head.available: HorizontalLayout {
+                spacing: 10px;
+                Text { text: T.tr("st_mem_auto"); color: Theme.on-surface; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                Toggle { checked: Mem.head.auto > 0; toggled(on) => { Mem.auto(on ? 1 : 0); } }
+            }
+            if Sk.head.available: HorizontalLayout {
+                spacing: 10px;
+                Text { text: T.tr("st_sk_auto"); color: Theme.on-surface; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                Toggle { checked: Sk.head.auto; toggled(on) => { Sk.auto(on); } }
+            }
+            Rectangle { height: 1px; background: Theme.hairline; }
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: "Tenrec"; font-size: 16px; font-weight: 600; color: Theme.on-surface; vertical-alignment: center; }
+                VerticalLayout { alignment: center; Badge { text: About.version; } }
+            }
+            WText { text: T.tr("about_text"); fg: Theme.on-var; size: 12px; }
+            WText { text: T.tr("about_slint"); fg: Theme.on-var; size: 12px; }
+            HorizontalLayout { alignment: start; AboutSlint { } }
+        }
+    }
+}
+
+export component SchedPanel inherits Rectangle {
+    in property <int> zoom-pct: 100;
+    callback zoom(int);
+    // Set when the panel is sized (a binding on the width would loop through the layout).
+    property <bool> wide: root.width >= 1000px;
+    background: Theme.surface;
+    TouchArea { }
+    ScrollView {
+        VerticalLayout {
+            padding-left: max(24px, (root.width - 1280px) / 2 + 24px); padding-right: max(24px, (root.width - 1280px) / 2 + 24px); padding-top: 28px; padding-bottom: 28px; spacing: 6px; alignment: start;
+            Text { text: T.tr("sc_title"); font-size: 28px; font-weight: 600; color: Theme.on-surface; }
+            WText { text: T.tr("sc_sub"); size: 14px; fg: Theme.on-var; }
+            VerticalLayout { padding-top: 14px; padding-bottom: 16px; Rectangle { height: 1px; background: Theme.hairline; } }
+            if root.wide: HorizontalLayout {
+                spacing: 18px; alignment: start;
+                SchedLeft { horizontal-stretch: 1; min-width: 300px; preferred-width: 500px; }
+                SchedRight { horizontal-stretch: 1; min-width: 300px; preferred-width: 500px; zoom-pct: root.zoom-pct; zoom(d) => { root.zoom(d); } }
+            }
+            if !root.wide: VerticalLayout {
+                spacing: 18px;
+                SchedLeft { }
+                SchedRight { zoom-pct: root.zoom-pct; zoom(d) => { root.zoom(d); } }
+            }
+        }
+    }
+    if Sched.run-open: Rectangle {
+        background: #000000a0;
+        TouchArea { clicked => { Sched.close-run(); } }
+        FocusScope {
+            init => { self.focus(); }
+            key-pressed(event) => {
+                if (event.text == Key.Escape) { Sched.close-run(); return accept; }
+                return reject;
+            }
+            Rectangle {
+                width: min(780px, root.width * 0.92);
+                height: root.height * 0.88;
+                background: Theme.container; border-radius: 12px; border-width: 1px; border-color: Theme.hairline;
+                drop-shadow-blur: 20px; drop-shadow-color: #00000080;
+                TouchArea { }
+                VerticalLayout {
+                    padding: 18px; spacing: 10px;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text { text: Sched.run-title; color: Theme.on-surface; font-size: 16px; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        Btn { text: T.tr("sc_copy"); height: 28px; clicked => { Sched.copy-result(); } }
+                        Btn { text: T.tr("sc_close"); height: 28px; primary: true; clicked => { Sched.close-run(); } }
+                    }
+                    WText { text: Sched.run-meta; fg: Theme.outline; size: 12px; mono: true; }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 10px; alignment: start;
+                            if Sched.run-note != "": WText { text: Sched.run-note; fg: Theme.on-var; size: 12px; }
+                            if Sched.run-external: WText { text: T.tr("sc_external"); fg: Theme.primary-soft; size: 12px; }
+                            if Sched.run-denied != "": Text { text: T.tr("sc_denied"); color: Theme.outline; font-size: 11px; }
+                            if Sched.run-denied != "": SelText { text: Sched.run-denied; size: 11px; mono: true; chars: true; fg: Theme.on-var; }
+                            Rectangle { background: Theme.lowest; border-radius: 8px; height: res.height + 24px; res := SelText { x: 12px; y: 12px; width: parent.width - 24px; text: Sched.run-result; size: 13px; } }
+                            if Sched.run-def != "": Text { text: T.tr("sc_def"); color: Theme.outline; font-size: 11px; }
+                            if Sched.run-def != "": SelText { text: Sched.run-def; size: 11px; mono: true; chars: true; fg: Theme.on-var; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -143,7 +143,7 @@ async fn a_saved_note_is_active_only_when_the_person_approved_that_exact_text() 
     let fx = fixture(CHAT, EXTRACTED, quick()).await;
     let session = fx.server.registry.create(project(&fx, "a").to_str().unwrap(), None, None).unwrap();
     turn(&session, "hello").await;
-    let store = fx.server.registry.memory().unwrap();
+    let store = fx.server.registry.realm(None).unwrap().memory.clone().unwrap();
     let mut mcp = Mcp::for_chat(&fx, &session.sid).await;
 
     // No dialog approval: the note waits.
@@ -186,7 +186,7 @@ async fn saves_are_checked_rate_limited_and_search_sees_this_project_and_the_use
     let fx = fixture(CHAT, EXTRACTED, quick()).await;
     let session = fx.server.registry.create(project(&fx, "a").to_str().unwrap(), None, None).unwrap();
     turn(&session, "hello").await;
-    let store = fx.server.registry.memory().unwrap();
+    let store = fx.server.registry.realm(None).unwrap().memory.clone().unwrap();
     let cwd = session_cwd(&session).await;
     let mut mcp = Mcp::for_chat(&fx, &session.sid).await;
 
@@ -264,7 +264,7 @@ async fn the_chat_wide_allow_covers_read_only_tools_and_never_the_save_tool() {
 async fn a_new_chat_gets_the_notes_through_a_private_file_and_not_through_argv() {
     let fx = fixture(CHAT, EXTRACTED, quick()).await;
     let folder = project(&fx, "a");
-    let store = fx.server.registry.memory().unwrap();
+    let store = fx.server.registry.realm(None).unwrap().memory.clone().unwrap();
     let cwd = folder.to_string_lossy().into_owned();
     let note = |scope: &'static str, cwd: Option<&str>, text: &str, status: &'static str| {
         store.add(tenrec::memory::NewMem { scope, cwd: cwd.map(Into::into), kind: "fact".into(), text: text.into(), source: "manual", sid: None, seq: None, status, instr: false, allow_secret: false })
@@ -323,7 +323,7 @@ async fn auto_save_reads_only_the_persons_messages_and_saves_by_the_setting() {
     }
     assert!(!run.contains("--mcp-config") && !run.contains("--resume"));
 
-    let store = fx.server.registry.memory().unwrap();
+    let store = fx.server.registry.realm(None).unwrap().memory.clone().unwrap();
     wait_for("the note", || !store.overview(Some(&folder.to_string_lossy())).project.is_empty()).await;
     let overview = store.overview(Some(&folder.to_string_lossy()));
     assert_eq!(overview.project.len(), 1);
@@ -364,7 +364,7 @@ async fn with_auto_save_off_nothing_is_read_and_a_bad_answer_discards_the_run() 
     let read = log_text(&fx).lines().find(|l| l.starts_with("EXTRACT_IN")).unwrap().to_owned();
     assert!(read.contains("prefer tabs") && !read.contains("I use pnpm in this project"), "what was said while auto-save was off stays unread: {read}");
     wait_for("the notice", || matches!(heard.try_recv(), Ok(e) if e["kind"] == "memory_notice")).await;
-    let store = fx.server.registry.memory().unwrap();
+    let store = fx.server.registry.realm(None).unwrap().memory.clone().unwrap();
     assert_eq!(store.counts(), (0, 0), "nothing was saved from an answer that could not be trusted");
 }
 
@@ -385,7 +385,7 @@ async fn a_note_about_the_person_that_auto_save_found_waits_for_a_click() {
     let folder = project(&fx, "a");
     let session = fx.server.registry.create(folder.to_str().unwrap(), None, None).unwrap();
     turn(&session, "I use pnpm and I prefer Korean replies").await;
-    let store = fx.server.registry.memory().unwrap();
+    let store = fx.server.registry.realm(None).unwrap().memory.clone().unwrap();
     wait_for("the notes", || store.counts().0 + store.counts().1 >= 3).await;
     let overview = store.overview(Some(&folder.to_string_lossy()));
     assert!(overview.user.is_empty(), "a note that would reach every project is not used before a click");

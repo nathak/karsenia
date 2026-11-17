@@ -1,12 +1,21 @@
 //! The HTTP and WebSocket server: static UI files, one WebSocket for everything a conversation needs, a path-checked image endpoint.
 //! It binds 127.0.0.1 only and every request must carry the run's token (see `auth`).
+pub mod account_ops;
 pub mod auth;
 pub mod files;
 pub mod mcp_host;
+pub mod fs_ops;
 pub mod memory_ops;
+pub mod project_fs;
 pub mod provider_ops;
 pub mod sched_ops;
 pub mod skill_ops;
+#[cfg(unix)]
+pub mod term_ops;
+#[cfg(not(unix))]
+#[path = "term_ops_stub.rs"]
+pub mod term_ops;
+pub mod wt_ops;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -40,6 +49,10 @@ pub struct AppState {
     pub registry: Arc<Registry>,
     pub token: Arc<String>,
     pub port: u16,
+    /// The terminal tab is on (a start option, never a setting a page can change).
+    pub terminal: bool,
+    /// How many terminals are open in the whole app.
+    pub term_slots: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 pub struct Config {
@@ -71,10 +84,15 @@ impl Running {
     }
 }
 
+/// Starts the app; the terminal tab is on only when TENREC_TERMINAL=1.
 pub async fn start(config: Config) -> anyhow::Result<Running> {
-    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], config.port))).await?;
-    let addr = listener.local_addr()?;
-    let token = random_hex(32);
+    let terminal = std::env::var("TENREC_TERMINAL").map(|v| v == "1").unwrap_or(false);
+    start_with(config, terminal).await
+}
+
+/// Opens the data folder and starts what `claude` reaches the app through (the MCP socket, a named pipe on Windows). Used by the
+/// web server and by the desktop app, which has no network listener at all. Needs a running tokio runtime.
+pub fn start_core(config: Config) -> anyhow::Result<Arc<Registry>> {
     let registry = Arc::new(Registry::open_full(config.data_dir, config.bin, config.mcp_bin, config.extract, config.propose, config.sched)?);
     if let Some(gate) = registry.gate() {
         match mcp_host::listen(&gate) {
@@ -84,7 +102,15 @@ pub async fn start(config: Config) -> anyhow::Result<Running> {
             Err(error) => tracing::warn!("the MCP socket is off: {error}"),
         }
     }
-    let state = AppState { registry: registry.clone(), token: Arc::new(token.clone()), port: addr.port() };
+    Ok(registry)
+}
+
+pub async fn start_with(config: Config, terminal: bool) -> anyhow::Result<Running> {
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], config.port))).await?;
+    let addr = listener.local_addr()?;
+    let token = random_hex(32);
+    let registry = start_core(config)?;
+    let state = AppState { registry: registry.clone(), token: Arc::new(token.clone()), port: addr.port(), terminal, term_slots: Default::default() };
     let app = Router::new()
         .route("/ws", get(ws_upgrade))
         .route("/api/file", get(file))
@@ -106,13 +132,19 @@ macro_rules! asset {
     };
 }
 
-const ASSETS: [(&str, &str, &[u8]); 6] = [
+const ASSETS: [(&str, &str, &[u8]); 12] = [
     asset!("index.html", "text/html; charset=utf-8"),
     asset!("app.js", "text/javascript; charset=utf-8"),
     asset!("theme.css", "text/css; charset=utf-8"),
     asset!("util.js", "text/javascript; charset=utf-8"),
+    asset!("files.js", "text/javascript; charset=utf-8"),
+    asset!("term.js", "text/javascript; charset=utf-8"),
+    asset!("wt.js", "text/javascript; charset=utf-8"),
     asset!("vendor/marked.js", "text/javascript; charset=utf-8"),
     asset!("vendor/purify.js", "text/javascript; charset=utf-8"),
+    asset!("vendor/fonts/pretendard-400.otf", "font/otf"),
+    asset!("vendor/fonts/pretendard-600.otf", "font/otf"),
+    asset!("vendor/fonts/jetbrains-mono-400.woff2", "font/woff2"),
 ];
 
 async fn static_file(uri: axum::http::Uri) -> Response {
@@ -169,6 +201,18 @@ pub(crate) fn plain(kind: &str, sid: Option<&str>, data: Value) -> String {
     json!({"v": 1, "kind": kind, "sid": sid, "data": data}).to_string()
 }
 
+/// The realm a message names: `"account": "<id>"` for an extra account, `"account": null` for the default one. A message without the key
+/// is refused, so no page acts on an account it did not choose, and an id that is not open is refused rather than answered from the
+/// default account.
+pub(crate) fn realm_of(state: &AppState, op: &Value) -> Result<std::sync::Arc<crate::realm::Realm>, String> {
+    match op.get("account") {
+        None => Err("account is required".to_owned()),
+        Some(Value::Null) => state.registry.realm(None),
+        Some(Value::String(id)) => state.registry.realm(Some(id)),
+        Some(_) => Err("account must be an id or null".to_owned()),
+    }
+}
+
 async fn connection(socket: WebSocket, state: AppState) {
     let (mut sink, mut stream) = socket.split();
 
@@ -185,35 +229,25 @@ async fn connection(socket: WebSocket, state: AppState) {
     }
 
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
+    // Terminal output rides a small bounded channel of its own: a page that reads slowly makes the shell wait, nothing piles up.
+    let (bin_tx, mut bin_rx) = mpsc::channel::<Vec<u8>>(32);
     let writer = tokio::spawn(async move {
-        while let Some(text) = out_rx.recv().await {
-            if sink.send(Message::Text(text)).await.is_err() {
+        loop {
+            let message = tokio::select! {
+                text = out_rx.recv() => match text { Some(text) => Message::Text(text), None => break },
+                frame = bin_rx.recv() => match frame { Some(frame) => Message::Binary(frame), None => break },
+            };
+            if sink.send(message).await.is_err() {
                 break;
             }
         }
     });
 
-    // What every page should hear (a note changed, an auto-save happened) goes to this one too.
-    let mut heard = state.registry.events.subscribe();
-    let forward = {
-        let out = out_tx.clone();
-        tokio::spawn(async move {
-            loop {
-                match heard.recv().await {
-                    Ok(value) => {
-                        if out.send(value.to_string()).is_err() {
-                            break;
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(_) => break,
-                }
-            }
-        })
-    };
-    let mut attached: std::collections::HashMap<String, JoinHandle<()>> = std::collections::HashMap::new();
+    // Subscribed before hello, so nothing said in between is missed.
+    let mut conn = Conn::open(state.clone(), out_tx.clone(), true);
+    let mut terms = term_ops::Terms::default();
     let sessions = serde_json::to_value(state.registry.list().await).unwrap_or(Value::Null);
-    let _ = out_tx.send(plain("hello", None, json!({"sessions": sessions})));
+    let _ = out_tx.send(plain("hello", None, json!({"sessions": sessions, "terminal": state.terminal})));
 
     while let Some(Ok(message)) = stream.next().await {
         let Message::Text(text) = message else {
@@ -226,18 +260,100 @@ async fn connection(socket: WebSocket, state: AppState) {
             let _ = out_tx.send(plain("error", None, json!({"message": "not JSON"})));
             continue;
         };
-        handle_op(&state, &op, &out_tx, &mut attached).await;
+        match op["op"].as_str() {
+            Some(name) if name.starts_with("term_") => term_ops::handle(&state, name, &op, &out_tx, &bin_tx, &mut terms).await,
+            _ => conn.dispatch(&op).await,
+        }
     }
-
-    for (_, task) in attached {
-        task.abort();
-    }
-    forward.abort();
+    // Every shell this page opened ends with it.
+    drop(terms);
+    drop(conn);
     writer.abort();
     // A closed page does not stop the sessions or answer what waits: permissions stay pending until a person answers.
 }
 
-async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<String>, attached: &mut std::collections::HashMap<String, JoinHandle<()>>) {
+/// One page's link to the app: where its replies go, the chats it follows and the app-wide events forwarded to it. Shared by
+/// the WebSocket and the desktop window's in-process link, so both are answered by the same code.
+struct Conn {
+    state: AppState,
+    out: mpsc::UnboundedSender<String>,
+    /// None: this link does not follow chats (the desktop window reads them from the registry itself).
+    attached: Option<std::collections::HashMap<String, JoinHandle<()>>>,
+    forward: JoinHandle<()>,
+}
+
+impl Conn {
+    fn open(state: AppState, out: mpsc::UnboundedSender<String>, follows: bool) -> Self {
+        // What every page should hear (a note changed, an auto-save happened) goes to this one too.
+        let mut heard = state.registry.events.subscribe();
+        let forward = {
+            let out = out.clone();
+            tokio::spawn(async move {
+                loop {
+                    match heard.recv().await {
+                        Ok(value) => {
+                            if out.send(value.to_string()).is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            })
+        };
+        Conn { state, out, attached: follows.then(Default::default), forward }
+    }
+
+    async fn dispatch(&mut self, op: &Value) {
+        match op["op"].as_str() {
+            Some(name) if name.starts_with("wt_") => wt_ops::handle(&self.state, name, op, &self.out),
+            _ => handle_op(&self.state, op, &self.out, self.attached.as_mut()).await,
+        }
+    }
+}
+
+impl Drop for Conn {
+    fn drop(&mut self) {
+        for (_, task) in self.attached.take().unwrap_or_default() {
+            task.abort();
+        }
+        self.forward.abort();
+    }
+}
+
+/// The desktop window's link to the app: the same operations and replies as a page's WebSocket, with no socket, token or
+/// terminal, and no chat following (the window reads chats from the registry). It ends when every sender is dropped. Needs a
+/// running tokio runtime.
+pub fn local(registry: Arc<Registry>) -> (mpsc::UnboundedSender<Value>, mpsc::UnboundedReceiver<String>) {
+    let (op_tx, out_rx, _bin) = local_with_terminal(registry, false);
+    (op_tx, out_rx)
+}
+
+/// `local`, and the terminal's output frames (see `term_ops`) when `terminal` is true. The caller decides that from the start
+/// options only (TENREC_TERMINAL=1), never from anything a chat or a file says; with it off every `term_*` operation is refused.
+/// The shells end when the operation sender is dropped.
+pub fn local_with_terminal(registry: Arc<Registry>, terminal: bool) -> (mpsc::UnboundedSender<Value>, mpsc::UnboundedReceiver<String>, mpsc::Receiver<Vec<u8>>) {
+    let (op_tx, mut op_rx) = mpsc::unbounded_channel::<Value>();
+    let (out_tx, out_rx) = mpsc::unbounded_channel::<String>();
+    // The same small bounded channel the socket uses: a window that reads slowly makes the shell wait.
+    let (bin_tx, bin_rx) = mpsc::channel::<Vec<u8>>(32);
+    // The token never meets HTTP here; a random one rather than an empty one all the same.
+    let state = AppState { registry, token: Arc::new(random_hex(32)), port: 0, terminal, term_slots: Default::default() };
+    tokio::spawn(async move {
+        let mut conn = Conn::open(state.clone(), out_tx.clone(), false);
+        let mut terms = term_ops::Terms::default();
+        while let Some(op) = op_rx.recv().await {
+            match op["op"].as_str() {
+                Some(name) if name.starts_with("term_") => term_ops::handle(&state, name, &op, &out_tx, &bin_tx, &mut terms).await,
+                _ => conn.dispatch(&op).await,
+            }
+        }
+    });
+    (op_tx, out_rx, bin_rx)
+}
+
+async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<String>, attached: Option<&mut std::collections::HashMap<String, JoinHandle<()>>>) {
     let name = op["op"].as_str().unwrap_or_default();
     let sid = op["sid"].as_str().unwrap_or_default().to_owned();
     let fail = |message: &str| {
@@ -246,25 +362,56 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
     match name {
         "list" => {
             let sessions = serde_json::to_value(state.registry.list().await).unwrap_or(Value::Null);
-            let _ = out.send(plain("hello", None, json!({"sessions": sessions})));
+            let _ = out.send(plain("hello", None, json!({"sessions": sessions, "terminal": state.terminal})));
         }
         "new" => {
             let cwd = op["cwd"].as_str().unwrap_or_default();
             let model = op["model"].as_str().map(str::to_owned);
             let provider = op["provider"].as_str().filter(|id| !id.is_empty());
             let container = op["container"].as_bool() == Some(true);
-            match state.registry.create_in(cwd, model, provider, container) {
-                Ok(handle) => {
+            let isolated = op["worktree"].as_bool() == Some(true);
+            let account = op["account"].as_str().filter(|id| !id.is_empty());
+            // The permission mode: absent is the default; present, it is one of the six names exactly (a client cannot make another
+            // one up), and skipping every check also needs the request to say it was confirmed, so a bare message cannot choose it.
+            let mode = match op.get("permission") {
+                None | Some(Value::Null) => Ok(crate::claude::perm::PermMode::Default),
+                Some(Value::String(name)) => match crate::claude::perm::PermMode::parse(name) {
+                    Some(crate::claude::perm::PermMode::Bypass) if op["confirm_bypass"].as_bool() != Some(true) => Err("skipping every permission check needs confirm_bypass".to_owned()),
+                    Some(mode) => Ok(mode),
+                    None => Err("unknown permission mode".to_owned()),
+                },
+                Some(_) => Err("unknown permission mode".to_owned()),
+            };
+            let chat_name = op["name"].as_str().map(str::to_owned);
+            let made = match mode {
+                Err(message) => Err(message),
+                Ok(_) if isolated && container => Err("a chat in a worktree cannot also run in a container".to_owned()),
+                Ok(mode) if isolated => state.registry.create_isolated_mode(cwd, model, provider, account, mode).await,
+                Ok(mode) => state.registry.create_in_mode(cwd, model, provider, container, account, mode).map(|handle| (handle, None)),
+            };
+            match made {
+                Ok((handle, notice)) => {
+                    // A name given when the chat is made: a first message does not replace it.
+                    if let Some(name) = chat_name.filter(|n| !n.trim().is_empty()) {
+                        let _ = handle.rename(name).await;
+                    }
                     let info = handle.info().await;
-                    let _ = out.send(plain("created", Some(&handle.sid), serde_json::to_value(info).unwrap_or(Value::Null)));
-                    attach(&handle, 0, out, attached).await;
+                    let mut data = serde_json::to_value(info).unwrap_or(Value::Null);
+                    if let (Some(map), Some(notice)) = (data.as_object_mut(), notice) {
+                        map.insert("notice".into(), json!(notice));
+                    }
+                    let _ = out.send(plain("created", Some(&handle.sid), data));
+                    if let Some(attached) = attached {
+                        attach(&handle, 0, out, attached).await;
+                    }
                 }
                 Err(message) => fail(&message),
             }
         }
-        "attach" => match state.registry.get(&sid) {
-            Some(handle) => attach(&handle, op["after_seq"].as_u64().unwrap_or(0), out, attached).await,
-            None => fail("no such session"),
+        "attach" => match (state.registry.get(&sid), attached) {
+            (_, None) => fail("this connection does not follow chats"),
+            (Some(handle), Some(attached)) => attach(&handle, op["after_seq"].as_u64().unwrap_or(0), out, attached).await,
+            (None, _) => fail("no such session"),
         },
         "send" => match state.registry.get(&sid) {
             Some(handle) => {
@@ -275,14 +422,57 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
             }
             None => fail("no such session"),
         },
+        "rename" => match state.registry.get(&sid) {
+            Some(handle) => {
+                if let Err(message) = handle.rename(op["title"].as_str().unwrap_or_default().to_owned()).await {
+                    fail(&message);
+                }
+            }
+            None => fail("no such session"),
+        },
+        "delete" => match state.registry.delete(&sid).await {
+            Ok(()) => {
+                let _ = out.send(plain("deleted", Some(&sid), json!({})));
+            }
+            Err(message) => fail(&message),
+        },
+        "set_model" => match state.registry.get(&sid) {
+            Some(handle) => {
+                let name = op["model"].as_str().unwrap_or_default();
+                // Blank or "default" is the CLI's default; anything else must be a plain model name.
+                match (crate::registry::clean_model(name), name.trim() == "default" || name.trim().is_empty()) {
+                    (None, false) => fail("not a model name"),
+                    (model, _) => {
+                        if let Err(message) = handle.set_model(model).await {
+                            fail(&message);
+                        }
+                    }
+                }
+            }
+            None => fail("no such session"),
+        },
         "permission" => match state.registry.get(&sid) {
             Some(handle) => {
                 let request_id = op["request_id"].as_str().unwrap_or_default().to_owned();
                 let allow = op["allow"].as_bool() == Some(true);
                 let message = op["message"].as_str().map(str::to_owned);
                 let remember = op["remember"].as_bool() == Some(true);
-                if let Err(message) = handle.permission(request_id, allow, message, remember).await {
-                    fail(&message);
+                // What to ask Claude Code to remember besides this call: one of two names or nothing; anything else is refused and
+                // changes nothing (the request stays open). The rule itself is never sent by the page: the host builds it.
+                let grant = match op.get("grant") {
+                    None | Some(Value::Null) if remember => Ok(crate::session::Grant::Remember),
+                    None | Some(Value::Null) => Ok(crate::session::Grant::None),
+                    Some(Value::String(name)) if name == "session" => Ok(crate::session::Grant::Session),
+                    Some(Value::String(name)) if name == "always" => Ok(crate::session::Grant::Always),
+                    Some(_) => Err("unknown grant"),
+                };
+                match grant {
+                    Err(message) => fail(message),
+                    Ok(grant) => {
+                        if let Err(message) = handle.answer(request_id, allow, message, grant).await {
+                            fail(&message);
+                        }
+                    }
                 }
             }
             None => fail("no such session"),
@@ -296,16 +486,31 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
                 since: op["since"].as_u64(),
                 limit: op["limit"].as_u64().unwrap_or(30) as usize,
             };
+            // The account whose history is searched is named by the page; a chat named in the query must be of that account.
+            let realm = match realm_of(state, op) {
+                Ok(realm) => realm,
+                Err(error) => return drop(out.send(plain("search_results", None, json!({"req": req, "hits": [], "error": error})))),
+            };
             let (out, registry) = (out.clone(), state.registry.clone());
             // A search can take a moment: it runs beside the socket's other messages.
             tokio::spawn(async move {
-                let found = match registry.index() {
+                if let Some(sid) = &query.sid {
+                    let of_account = match registry.get(sid) {
+                        Some(handle) => handle.info().await.map(|i| i.meta.account.as_ref().map(|a| a.id.clone()) == realm.account && i.meta.provider.is_none()),
+                        None => None,
+                    };
+                    if of_account != Some(true) {
+                        return drop(out.send(plain("search_results", None, json!({"req": req, "hits": [], "error": "that chat belongs to another account"}))));
+                    }
+                }
+                let found = match realm.index.clone() {
                     Some(index) => tokio::task::spawn_blocking(move || index.search(&query)).await.ok().and_then(Result::ok),
                     None => None,
                 };
                 let data = match found {
                     Some(hits) => {
-                        let titles: std::collections::HashMap<String, String> = registry.list().await.into_iter().map(|i| (i.meta.sid, i.meta.title)).collect();
+                        // Titles only of this account's chats: a hit never names a chat of another account.
+                        let titles: std::collections::HashMap<String, String> = registry.list().await.into_iter().filter(|i| i.meta.account.as_ref().map(|a| &a.id) == realm.account.as_ref()).map(|i| (i.meta.sid, i.meta.title)).collect();
                         let hits: Vec<Value> = hits
                             .into_iter()
                             .map(|hit| {
@@ -334,10 +539,12 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
             Some(handle) => handle.stop(),
             None => fail("no such session"),
         },
+        other if other.starts_with("fs_") => fs_ops::handle(state, other, op, out),
         other if other.starts_with("memory_") => memory_ops::handle(state, other, op, out),
         other if other.starts_with("skill_") => skill_ops::handle(state, other, op, out),
         other if other.starts_with("sched_") => sched_ops::handle(state, other, op, out),
         other if other.starts_with("provider_") => provider_ops::handle(state, other, op, out),
+        other if other.starts_with("account_") => account_ops::handle(state, other, op, out),
         _ => fail("unknown op"),
     }
 }

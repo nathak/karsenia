@@ -1,0 +1,239 @@
+// The new-chat page with the accounts beside it (Stitch "새 대화 · 계정 관리"): the left card starts a chat, the right one manages the logins.
+import { ComboBox, CheckBox, LineEdit } from "std-widgets.slint";
+import { Theme, T, Btn, Label, Badge, WText, SelText, IconBtn, Pill } from "base.slint";
+import { Acct, AcctRow, PlugRow, Prov, Usage } from "panels.slint";
+
+// The left card: folder, model, provider, account, options, start.
+export component NewChatCard inherits Rectangle {
+    in-out property <string> cwd;
+    // A name for the chat (blank: its first message names it).
+    in-out property <string> name;
+    in-out property <int> acct;
+    in-out property <int> prov;
+    in-out property <bool> container;
+    in-out property <bool> worktree;
+    // The permission mode as an index into PermMode::ALL (default, acceptEdits, plan, auto, dontAsk, bypassPermissions).
+    in-out property <int> perm;
+    in property <bool> picking;
+    callback pick-folder();
+    callback open-import();
+    callback cancel();
+    // folder, model, account index and name, provider index and name, container, worktree, permission mode index
+    callback start(string, string, int, string, int, string, bool, bool, int);
+    background: Theme.low;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.hairline;
+    height: col.preferred-height;
+    col := VerticalLayout {
+        padding: 22px; spacing: 12px;
+        HorizontalLayout {
+            spacing: 10px;
+            Image { source: @image-url("icons/chat-new.svg"); width: 22px; height: 22px; y: (parent.height - 22px) / 2; colorize: Theme.primary; }
+            Text { text: T.tr("nc_card"); font-size: 18px; font-weight: 600; color: Theme.on-surface; vertical-alignment: center; }
+        }
+        Text { text: T.folder; color: Theme.on-var; font-size: 13px; font-weight: 600; }
+        HorizontalLayout {
+            spacing: 8px;
+            LineEdit { horizontal-stretch: 1; text <=> root.cwd; placeholder-text: T.folder-ph; font-size: 14px; }
+            Btn { text: T.tr("folder_pick"); height: 34px; show-icon: true; icon: @image-url("icons/folder.svg"); enabled: !root.picking; clicked => { root.pick-folder(); } }
+        }
+        WText { text: T.tr("nc_folder_hint"); size: 11px; fg: Theme.outline; }
+        Text { text: T.tr("chat_name_label"); color: Theme.on-var; font-size: 13px; font-weight: 600; }
+        LineEdit { text <=> root.name; placeholder-text: T.tr("chat_name_ph"); font-size: 14px; }
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                horizontal-stretch: 1; spacing: 6px;
+                Text { text: T.tr("nc_model"); color: Theme.on-var; font-size: 13px; font-weight: 600; }
+                model-box := ComboBox { model: ["default", "haiku", "sonnet", "opus"]; current-index: 0; }
+            }
+            if Prov.new-names.length > 1: VerticalLayout {
+                horizontal-stretch: 1; spacing: 6px;
+                Text { text: T.tr("nc_provider"); color: Theme.on-var; font-size: 13px; font-weight: 600; }
+                ComboBox { model: Prov.new-names; current-index <=> root.prov; selected => { if (root.prov == 0) { root.container = false; } } }
+            }
+        }
+        Text { text: T.tr("nc_pick_account"); color: Theme.on-var; font-size: 13px; font-weight: 600; }
+        if root.prov > 0: WText { text: T.tr("nc_provider_note"); size: 12px; fg: Theme.outline; }
+        if root.prov == 0: VerticalLayout {
+            spacing: 8px;
+            for r[i] in Acct.rows: Rectangle {
+                height: 62px;
+                border-radius: 8px;
+                background: i == root.acct ? Theme.primary.with-alpha(0.08) : (ta.has-hover ? Theme.high.with-alpha(0.5) : Theme.container);
+                border-width: 1px;
+                border-color: i == root.acct ? Theme.primary : Theme.hairline;
+                HorizontalLayout {
+                    padding: 10px; padding-left: 12px; spacing: 10px;
+                    Rectangle {
+                        width: 36px; height: 36px; y: 1px; border-radius: 8px; background: r.is-default ? Theme.ok.with-alpha(0.14) : Theme.violet.with-alpha(0.18);
+                        Image { source: r.is-default ? @image-url("icons/team.svg") : @image-url("icons/folder.svg"); width: 18px; height: 18px; colorize: r.is-default ? Theme.ok : Theme.violet; }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1; alignment: center; spacing: 2px;
+                        Text { text: r.name; color: Theme.on-surface; font-size: 14px; font-weight: 600; overflow: elide; }
+                        Text { text: r.sub; color: Theme.outline; font-size: 11px; font-family: Theme.mono; overflow: elide; }
+                    }
+                    VerticalLayout {
+                        alignment: center; spacing: 4px;
+                        Badge { text: r.state == "in" ? T.tr("acct_st_in") : r.state == "out" ? T.tr("acct_st_out") : r.state == "error" ? T.tr("acct_st_error") : r.state == "closed" ? T.tr("acct_closed") : r.state == "busy" ? T.tr("acct_st_busy") : T.tr("acct_st_never"); tone: r.state == "in" ? "ok" : (r.state == "out" || r.state == "error") ? "err" : "neutral"; mono: false; }
+                    }
+                    if i == root.acct: VerticalLayout {
+                        alignment: center;
+                        Rectangle { width: 20px; height: 20px; border-radius: 10px; background: Theme.primary; Image { source: @image-url("icons/check.svg"); width: 12px; height: 12px; colorize: Theme.on-primary; } }
+                    }
+                }
+                ta := TouchArea { mouse-cursor: pointer; clicked => { root.acct = i; } }
+            }
+        }
+        CheckBox { text: T.tr("new_worktree"); enabled: !root.container; checked <=> root.worktree; }
+        if root.worktree: WText { text: T.tr("new_wt_note"); size: 11px; fg: Theme.outline; }
+        if Prov.new-names.length > 1: CheckBox { text: T.tr("new_container"); enabled: root.prov > 0 && !root.worktree; checked <=> root.container; }
+        Text { text: T.tr("perm_label"); color: Theme.on-var; font-size: 13px; font-weight: 600; }
+        ComboBox { model: [T.tr("perm_m_default"), T.tr("perm_m_acceptEdits"), T.tr("perm_m_plan"), T.tr("perm_m_auto"), T.tr("perm_m_dontAsk"), T.tr("perm_m_bypassPermissions")]; current-index <=> root.perm; }
+        WText { text: [T.tr("perm_n_default"), T.tr("perm_n_acceptEdits"), T.tr("perm_n_plan"), T.tr("perm_n_auto"), T.tr("perm_n_dontAsk"), T.tr("perm_n_bypassPermissions")][root.perm]; size: 11px; fg: root.perm == 5 ? Theme.error : Theme.outline; }
+        Btn {
+            text: "▶  " + T.start; primary: true; height: 46px; enabled: root.cwd != "";
+            clicked => { root.start(root.cwd, model-box.current-value, root.acct, Acct.names.length > 1 && root.prov == 0 ? Acct.names[root.acct] : "", root.prov, Prov.new-names.length > 1 ? Prov.new-names[root.prov] : "", root.container && root.prov > 0, root.worktree, root.perm); }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Btn { horizontal-stretch: 1; text: T.tr("imp_open"); height: 36px; clicked => { root.open-import(); } }
+            Btn { text: T.cancel; height: 36px; clicked => { root.cancel(); } }
+        }
+    }
+}
+
+// One login account in the management card: who it is, where it lives, and how to log it in.
+component AccountCard inherits Rectangle {
+    in property <AcctRow> r;
+    property <bool> editing: Acct.editing == r.id && !r.is-default;
+    property <string> draft;
+    property <bool> guide: false;
+    background: Theme.container;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: r.state == "out" ? Theme.error.with-alpha(0.4) : Theme.hairline;
+    height: cc.preferred-height;
+    cc := VerticalLayout {
+        padding: 14px; spacing: 10px;
+        HorizontalLayout {
+            spacing: 12px;
+            Rectangle {
+                width: 40px; height: 40px; border-radius: 8px; background: r.is-default ? Theme.ok.with-alpha(0.14) : Theme.violet.with-alpha(0.18);
+                Image { source: r.is-default ? @image-url("icons/team.svg") : @image-url("icons/folder.svg"); width: 20px; height: 20px; colorize: r.is-default ? Theme.ok : Theme.violet; }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1; alignment: center; spacing: 2px;
+                if !root.editing: HorizontalLayout {
+                    spacing: 8px; alignment: start;
+                    Text { text: r.name; color: Theme.on-surface; font-size: 15px; font-weight: 600; vertical-alignment: center; overflow: elide; }
+                    if r.is-default: VerticalLayout { alignment: center; Badge { text: T.tr("nc_default_tag"); tone: "info"; } }
+                }
+                if root.editing: LineEdit { text: r.name; init => { root.draft = r.name; self.focus(); } edited(t) => { root.draft = t; } accepted(t) => { Acct.rename(r.id, t); } }
+                Text { text: r.sub; color: Theme.outline; font-size: 12px; font-family: Theme.mono; overflow: elide; }
+            }
+            VerticalLayout {
+                alignment: center;
+                Badge {
+                    text: "● " + (r.state == "in" ? T.tr("acct_st_in") : r.state == "out" ? T.tr("acct_st_out") : r.state == "error" ? T.tr("acct_st_error") : r.state == "closed" ? T.tr("acct_closed") : r.state == "busy" ? T.tr("acct_st_busy") : T.tr("acct_st_never"));
+                    tone: r.state == "in" ? "ok" : (r.state == "out" || r.state == "error") ? "err" : "neutral"; mono: false;
+                }
+            }
+        }
+        Text { text: T.tr("us_title") + ": " + (r.usage != "" ? r.usage : T.tr("us_none")); color: r.usage != "" ? Usage.tone(r.usage-level) : Theme.outline; font-size: 11px; font-family: Theme.mono; overflow: elide; }
+        HorizontalLayout {
+            spacing: 6px;
+            Rectangle {
+                horizontal-stretch: 1; height: 30px; border-radius: 6px; background: Theme.lowest;
+                HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 6px; Image { source: @image-url("icons/folder.svg"); width: 14px; height: 14px; y: (parent.height - 14px) / 2; colorize: Theme.outline; } Text { text: r.dir; color: Theme.on-var; font-size: 11px; font-family: Theme.mono; overflow: elide; vertical-alignment: center; } }
+            }
+            if !root.editing: Btn { text: T.tr("nc_copy_path"); height: 30px; clicked => { Acct.copy-path(r.dir); } }
+            if !root.editing && r.open && Acct.console && r.state != "in": Btn { text: T.tr("acct_login_open"); height: 30px; clicked => { Acct.login(r.id); } }
+            if !root.editing && !r.is-default: Btn { text: T.tr("acct_rename"); height: 30px; clicked => { Acct.editing = r.id; } }
+            if !root.editing && !r.is-default: Btn { text: T.tr("acct_delete"); height: 30px; danger: true; clicked => { Acct.delete(r.id); } }
+            if root.editing: Btn { text: T.cancel; height: 30px; clicked => { Acct.editing = ""; } }
+            if root.editing: Btn { text: T.tr("acct_save"); height: 30px; primary: true; clicked => { Acct.rename(r.id, root.draft); } }
+        }
+        if r.state != "in" && r.open: Rectangle {
+            height: gd.preferred-height;
+            gd := VerticalLayout {
+                spacing: 8px;
+                Rectangle {
+                    height: 30px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: "ⓘ"; color: Theme.primary-soft; font-size: 14px; vertical-alignment: center; }
+                        Text { text: T.tr("nc_guide"); color: Theme.on-surface; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                        Image { source: root.guide ? @image-url("icons/chevron-down.svg") : @image-url("icons/chevron-right.svg"); width: 13px; height: 13px; y: (parent.height - 13px) / 2; colorize: Theme.outline; }
+                    }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.guide = !root.guide; } }
+                }
+                if root.guide: Rectangle {
+                    background: Theme.lowest; border-radius: 8px; height: gb.preferred-height;
+                    gb := VerticalLayout {
+                        padding: 12px; spacing: 8px;
+                        HorizontalLayout { Label { text: T.tr("nc_terminal"); vertical-alignment: center; horizontal-stretch: 1; } Btn { text: T.tr("nc_copy_cmd"); height: 26px; clicked => { Acct.copy-login(r.id); } } }
+                        SelText { text: r.login; size: 12px; mono: true; chars: true; fg: Theme.ok; }
+                        HorizontalLayout { alignment: end; Btn { text: T.tr("nc_recheck"); height: 28px; clicked => { Acct.status(r.id); } } }
+                    }
+                }
+            }
+        }
+        if r.open: Rectangle {
+            height: pg.preferred-height;
+            pg := VerticalLayout {
+                spacing: 6px;
+                Rectangle {
+                    height: 28px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: T.tr("plug_title"); color: Theme.on-surface; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                        Image { source: r.plug-open ? @image-url("icons/chevron-down.svg") : @image-url("icons/chevron-right.svg"); width: 13px; height: 13px; y: (parent.height - 13px) / 2; colorize: Theme.outline; }
+                    }
+                    TouchArea { mouse-cursor: pointer; clicked => { Acct.plugins-toggle(r.id); } }
+                }
+                if r.plug-open: Rectangle {
+                    background: Theme.lowest; border-radius: 8px; height: pb.preferred-height;
+                    pb := VerticalLayout {
+                        padding: 12px; spacing: 8px;
+                        WText { text: T.tr("plug_intro"); size: 12px; fg: Theme.outline; }
+                        if r.plug-note != "": WText { text: r.plug-note; size: 12px; fg: Theme.on-var; }
+                        for p in r.plugs: HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: p.id; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                            Btn { text: p.busy ? T.tr("plug_busy") : T.tr("plug_install"); height: 26px; enabled: !p.busy; clicked => { Acct.plugin-install(r.id, p.id); } }
+                        }
+                    }
+                }
+            }
+        }
+        if r.state == "in" && r.open: HorizontalLayout { alignment: end; Btn { text: T.tr("acct_status"); height: 26px; clicked => { Acct.status(r.id); } } }
+    }
+}
+
+// The right card: every account, and a field to add another.
+export component AccountsManage inherits Rectangle {
+    background: Theme.low;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.hairline;
+    height: mc.preferred-height;
+    mc := VerticalLayout {
+        padding: 22px; spacing: 12px;
+        HorizontalLayout {
+            spacing: 10px;
+            Image { source: @image-url("icons/team.svg"); width: 22px; height: 22px; y: (parent.height - 22px) / 2; colorize: Theme.primary; }
+            Text { text: T.tr("nc_manage"); font-size: 18px; font-weight: 600; color: Theme.on-surface; vertical-alignment: center; horizontal-stretch: 1; }
+            VerticalLayout { alignment: center; Badge { text: Acct.rows.length + " " + T.tr("nc_profiles"); } }
+        }
+        if Acct.notice != "": WText { text: Acct.notice; size: 12px; fg: Theme.primary-soft; }
+        for r in Acct.rows: AccountCard { r: r; }
+        if Acct.can-add: HorizontalLayout {
+            spacing: 8px;
+            LineEdit { horizontal-stretch: 1; text <=> Acct.new-name; placeholder-text: T.tr("acct_name_ph"); accepted(t) => { if (t != "") { Acct.add(t); } } }
+            Btn { text: T.tr("acct_add"); height: 34px; enabled: Acct.new-name != ""; clicked => { Acct.add(Acct.new-name); } }
+        }
+    }
+}

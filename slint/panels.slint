@@ -1,0 +1,780 @@
+// The panels over the main area: Memory, Skills and Settings (with About). Rust fills the globals below from the same replies
+// the web page gets (src/view/panels.rs makes the rows) and answers their callbacks (src/bin/desktop/panels.rs).
+import { ScrollView, LineEdit, CheckBox, AboutSlint, ComboBox, TextEdit } from "std-widgets.slint";
+import { Theme, T, Pill, Btn, Rich, SelText, WText, Label, Badge, KeyHint, Toggle, SegTabs, IconBtn, EmptyState } from "base.slint";
+
+export struct MemRow { kind: string, key: string, section: string, id: string, text: string, meta: string, pinned: bool, instr: bool, open: bool, count: int }
+export struct MemHead { available: bool, notice: string, auto: int, has-cwd: bool, card: bool }
+export struct SkillRow {
+    kind: string, key: string, section: string, id: string, name: string, meta: string, description: string, body: string,
+    risks: string, has-block: bool, has-warn: bool, enabled: bool, improve: bool, version: int, open: bool, count: int,
+}
+export struct SkVerV { n: int, meta: string, description: string, current: bool }
+export struct SkHead { available: bool, notice: string, auto: bool }
+export struct HitRow { sid: string, title: string, meta: string, rich: styled-text, plain: string }
+export struct TeamRole { role: string, model: string, effort: string }
+export struct PlugRow { id: string, busy: bool }
+export struct AcctRow { id: string, name: string, sub: string, state: string, chats: int, open: bool, is-default: bool, usage: string, usage-level: string, login: string, dir: string, plug-open: bool, plug-note: string, plugs: [PlugRow] }
+export struct UsageWin { label: string, pct: string, frac: float, level: string, reset: string }
+
+// The Claude logins (personal, work...). Each has its own notes, skills and history; the panels show one of them.
+export global Acct {
+    in property <[AcctRow]> rows;
+    // The account picker's entries, the default account first.
+    in property <[string]> names;
+    // The same entries as the header shows them: with what waits or runs under an account that is not shown.
+    in property <[string]> labels;
+    // The account the panels show, as an index into `names` (0: the default account).
+    in-out property <int> view;
+    in property <string> notice;
+    in property <bool> can-add;
+    // Windows: "open login window"; elsewhere: "copy login command".
+    in property <bool> console;
+    // The id of the account being renamed ("" for none).
+    in-out property <string> editing;
+    in-out property <string> new-name;
+    callback status(string);
+    callback login(string);
+    callback copy-login(string);
+    // The plug-ins section of an account card opened or closed; one plug-in asked to be installed.
+    callback plugins-toggle(string);
+    callback plugin-install(string, string);
+    callback copy-path(string);
+    callback add(string);
+    callback rename(string, string);
+    callback delete(string);
+    callback view-chosen(int);
+}
+
+// The window's own settings: the language (it applies at the next start).
+export global Prefs {
+    in-out property <int> lang;
+    in property <bool> changed;
+    callback lang-chosen(int);
+    callback theme-chosen(int);
+}
+
+// The limits Claude reported for the account the window shows (src/view/usage.rs makes the rows).
+export global Usage {
+    in property <[UsageWin]> wins;
+    // The header chip: the window to watch, and how worrying it is (ok, warn, limit, unknown).
+    in property <string> chip;
+    in property <string> level;
+    in property <string> who;
+    in property <string> seen;
+    in property <bool> empty;
+    // The per-model weekly window is named by a guess: the card says so.
+    in property <bool> assume;
+    in-out property <bool> open;
+    pure public function tone(level: string) -> color {
+        return level == "ok" ? Theme.ok : level == "warn" ? Theme.primary : level == "limit" ? Theme.error : Theme.outline;
+    }
+}
+
+// The memory and skills pages share one head: the two tabs with their counts, the search and the filter chips.
+export global Know {
+    in-out property <string> filter;
+    in-out property <bool> only-pending;
+    // The add-a-note (or suggest-a-skill) row is open.
+    in-out property <bool> adding;
+    in property <int> memo-count;
+    in property <int> skill-count;
+    in property <int> pending-count;
+    callback filter-edited(string);
+    callback chip(bool);
+    callback goto(int);
+}
+
+export global Mem {
+    in property <[MemRow]> rows;
+    in property <MemHead> head;
+    // The key of the note being edited, "" for none.
+    in-out property <string> editing;
+    // The new note's field; Rust empties it once the note is saved.
+    in-out property <string> note;
+    callback cancel-edit();
+    callback toggle(string);
+    callback add(string, string);
+    callback approve(string, bool);
+    callback reject(string);
+    callback pin(string, bool);
+    callback save(string, string);
+    callback delete(string);
+    callback undo(string);
+    callback auto(int);
+    callback card-later();
+}
+
+export global Sk {
+    in property <[SkillRow]> rows;
+    in property <SkHead> head;
+    in property <bool> can-propose;
+    // The proposal being edited ("" for none) and its fields; the findings of an edited text arrive with a refusal.
+    in-out property <string> editing;
+    in-out property <string> edit-name;
+    in-out property <string> edit-desc;
+    in-out property <string> edit-body;
+    in-out property <bool> edit-ack;
+    in property <string> edit-risks;
+    in property <bool> edit-improve;
+    // The skill whose versions are listed ("" for none).
+    in-out property <string> history-id;
+    in property <[SkVerV]> history;
+    callback edit-open(string);
+    callback edit-save();
+    callback edit-cancel();
+    callback history-open(string);
+    callback rollback(string, int);
+    callback toggle(string);
+    callback approve(string, bool);
+    callback reject(string);
+    callback enable(string, bool);
+    callback delete(string);
+    callback undo(string);
+    callback auto(bool);
+    callback propose(string, string);
+}
+
+export global Search {
+    in-out property <string> text;
+    in property <[HitRow]> hits;
+    // "" while results show; otherwise what to say instead (nothing found, search unavailable).
+    in property <string> status;
+    callback changed(string);
+    callback open(string);
+}
+
+// The SmartWorkbench team mode as this chat has shown it (src/view/team.rs): never more than the plug-in said in the chat.
+export struct SwbDone { text: string, link: string, status: string, label: string, met: bool }
+export struct SwbEvidence { label: string, ok: bool, when: string }
+
+export global Team {
+    // The chat is wired to the plug-in (or showed its state).
+    in property <bool> show;
+    // on | off | unknown
+    in property <string> chip;
+    in property <string> chip-label;
+    in-out property <bool> open;
+    in property <[TeamRole]> roles;
+    in property <string> reviews;
+    // When the state was seen ("" if never).
+    in property <string> seen;
+    // The snapshot the state comes from is old (the plug-in's desktop app may not be running).
+    in property <bool> seen-stale;
+    // The chat showed something newer than the snapshot that differs from it.
+    in property <string> team-note;
+    in property <bool> can-send;
+    // A command was sent and its answer has not come yet.
+    in property <bool> busy;
+    callback turn(bool);
+    callback check();
+    // role, model, effort ("" to leave it): `/swb team <role> <model> [effort]`
+    callback set-role(string, string, string);
+    // A button of the "SmartWorkbench commands" card: its key (the host maps it to the plug-in's fixed command text).
+    callback swb-cmd(string);
+    // What the plug-in's snapshot says (src/view/swb.rs): "" | nochat | missing | refused | found, and the reason line otherwise.
+    in property <string> swb-state;
+    in property <string> swb-note;
+    in property <string> swb-age;
+    in property <bool> swb-stale;
+    in property <string> guard-profile;
+    in property <string> guard-profile-label;
+    in property <bool> guard-paused;
+    in property <string> guard-rules;
+    in property <string> guard-open;
+    in property <[SwbEvidence]> evidence;
+    in property <string> task-goal;
+    in property <string> task-status;
+    in property <bool> task-locked;
+    in property <[string]> constraints;
+    in property <[string]> non-goals;
+    in property <[SwbDone]> done;
+    in property <string> done-met;
+    callback swb-refresh();
+}
+
+
+export struct WtLine { text: string, bad: bool }
+export struct WtRow { path: string, branch: string, tag: string, missing: bool, current: bool }
+
+// A worktree chat: its header chip's card (src/view/wt.rs words it; src/bin/desktop/wt.rs answers the buttons).
+export global Wt {
+    // The open chat has a worktree that was not cleaned up yet.
+    in property <bool> show;
+    in-out property <bool> open;
+    in property <string> banner;
+    in property <string> summary;
+    in property <[WtLine]> lines;
+    in property <bool> can-merge;
+    in property <bool> checked;
+    // The project's git settings changed: they are listed and must be accepted before anything is checked or merged.
+    in property <bool> cfg;
+    in property <[string]> cfg-entries;
+    in property <bool> busy;
+    // The project's working folders (display only).
+    in property <[WtRow]> list;
+    callback check();
+    callback merge();
+    callback remove();
+    callback accept();
+}
+
+export struct AttV { thumb: image, label: string, has-thumb: bool }
+
+// The images attached to the message being written.
+export global Att {
+    in property <[AttV]> items;
+    callback pick();
+    callback remove(int);
+    // Ctrl+V in the composer: true when an image on the clipboard was attached (else the text field pastes as usual).
+    callback paste-image() -> bool;
+}
+
+export struct ProvRowV { id: string, name: string, sub: string, has-key: bool, chats: int }
+
+export component Field inherits VerticalLayout {
+    in property <string> label;
+    spacing: 4px;
+    Text { text: root.label; color: Theme.on-var; font-size: 12px; }
+    @children
+}
+
+// The model providers (an Anthropic-compatible address and its key). A key goes in and is never shown again.
+export global Prov {
+    in property <[ProvRowV]> rows;
+    in property <string> notice;
+    in property <bool> ctr-ready;
+    // The new-chat form's picker: "none" first, then the providers.
+    in property <[string]> new-names;
+    // The form is open; edit-id is "" for a new provider.
+    in-out property <bool> editing;
+    in-out property <string> edit-id;
+    in-out property <string> f-name;
+    in-out property <string> f-url;
+    // 0 bearer, 1 x-api-key.
+    in-out property <int> f-auth;
+    in-out property <string> f-key;
+    in-out property <bool> f-clear;
+    in-out property <bool> f-has-key;
+    in-out property <string> f-model;
+    in-out property <string> f-opus;
+    in-out property <string> f-sonnet;
+    in-out property <string> f-haiku;
+    in-out property <string> ctr-runtime;
+    in-out property <string> ctr-image;
+    callback new();
+    callback edit(string);
+    callback save();
+    callback cancel();
+    callback delete(string);
+    callback save-container();
+}
+
+export global About {
+    in property <string> version;
+}
+
+// One question at a time (a note that looks like a secret, an instruction-like note to approve); Rust keeps what OK does.
+export struct PalRow { label: string, hint: string }
+
+// The command palette (Ctrl+K): the rows that match what is typed; the window acts on the one picked.
+export global Pal {
+    in-out property <bool> open;
+    in property <[PalRow]> rows;
+    in-out property <int> sel;
+    callback filter(string);
+    callback run(int);
+}
+
+export global Dialog {
+    in property <bool> visible;
+    in property <string> title;
+    in property <string> body;
+    in property <string> ok;
+    in property <bool> danger;
+    callback answer(bool);
+}
+
+export component SectionHead inherits Rectangle {
+    in property <string> title;
+    in property <bool> open;
+    in property <int> count;
+    callback clicked;
+    height: 34px;
+    HorizontalLayout {
+        spacing: 8px; padding-top: 8px; alignment: start;
+        VerticalLayout { alignment: center; Image { source: root.open ? @image-url("icons/chevron-down.svg") : @image-url("icons/chevron-right.svg"); width: 14px; height: 14px; colorize: Theme.outline; } }
+        Text { text: root.title; color: Theme.outline; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+        VerticalLayout { alignment: center; Pill { text: root.count; height: 20px; } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// Several choices side by side, the current one filled.
+export component Segment inherits HorizontalLayout {
+    in property <[string]> items;
+    in property <int> current;
+    callback chosen(int);
+    spacing: 4px;
+    for item[i] in root.items: Btn { text: item; height: 28px; primary: i == root.current; clicked => { root.chosen(i); } }
+}
+
+export component Card inherits Rectangle {
+    in property <bool> accent: false;
+    background: Theme.low;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: accent ? Theme.primary.with-alpha(0.5) : Theme.hairline;
+}
+
+export component PageTitle inherits VerticalLayout {
+    in property <string> title;
+    in property <string> sub;
+    spacing: 4px;
+    Text { text: root.title; font-size: 24px; font-weight: 600; color: Theme.on-surface; }
+    if root.sub != "": WText { text: root.sub; size: 13px; fg: Theme.on-var; }
+}
+
+component KnTab inherits Rectangle {
+    in property <string> text;
+    in property <int> count;
+    in property <image> icon;
+    in property <bool> on;
+    callback clicked;
+    height: 44px;
+    width: row.preferred-width + 8px;
+    border-radius: 10px;
+    background: root.on ? Theme.container : (ta.has-hover ? Theme.high.with-alpha(0.5) : transparent);
+    border-width: 1px;
+    border-color: root.on ? Theme.hairline : transparent;
+    row := HorizontalLayout {
+        padding-left: 14px; padding-right: 14px; spacing: 8px;
+        Image { source: root.icon; width: 16px; height: 16px; y: (parent.height - 16px) / 2; colorize: root.on ? Theme.primary-soft : Theme.on-var; }
+        Text { text: root.text; color: root.on ? Theme.on-surface : Theme.on-var; font-size: 14px; font-weight: root.on ? 600 : 400; vertical-alignment: center; }
+        VerticalLayout { alignment: center; Badge { text: root.count; } }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component KnChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    callback clicked;
+    height: 32px;
+    width: lbl.preferred-width + 28px;
+    border-radius: 16px;
+    background: root.on ? Theme.primary : (ta.has-hover ? Theme.high : Theme.container);
+    border-width: 1px;
+    border-color: root.on ? Theme.primary : Theme.hairline;
+    lbl := Text { x: 14px; y: (parent.height - self.preferred-height) / 2; text: (root.on ? "✓ " : "") + root.text; color: root.on ? Theme.on-primary : Theme.on-var; font-size: 13px; font-weight: root.on ? 600 : 400; }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component KnowledgeHead inherits VerticalLayout {
+    in property <bool> memo: true;
+    spacing: 14px;
+    HorizontalLayout {
+        spacing: 10px;
+        KnTab { text: T.tr("kn_memo"); count: Know.memo-count; icon: @image-url("icons/brain.svg"); on: root.memo; clicked => { Know.goto(1); } }
+        KnTab { text: T.tr("kn_skill"); count: Know.skill-count; icon: @image-url("icons/bolt.svg"); on: !root.memo; clicked => { Know.goto(2); } }
+        Rectangle { horizontal-stretch: 1; }
+        VerticalLayout { alignment: center; Btn { text: "+  " + (root.memo ? T.tr("kn_new_memo") : T.tr("kn_new_skill")); primary: true; height: 40px; clicked => { Know.adding = !Know.adding; } } }
+    }
+    Rectangle { height: 1px; background: Theme.hairline; }
+    HorizontalLayout {
+        spacing: 8px; padding-left: 4px;
+        Badge { text: T.tr("kn_scope_note"); tone: "info"; mono: false; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    LineEdit { height: 42px; text <=> Know.filter; placeholder-text: T.tr("kn_search_ph"); font-size: 14px; edited(t) => { Know.filter-edited(t); } }
+    HorizontalLayout {
+        spacing: 8px; alignment: start;
+        KnChip { text: T.tr("kn_all"); on: !Know.only-pending; clicked => { Know.chip(false); } }
+        KnChip { text: T.tr("kn_suggested") + " (" + Know.pending-count + ")"; on: Know.only-pending; clicked => { Know.chip(true); } }
+    }
+}
+
+component MemRowView inherits VerticalLayout {
+    in property <MemRow> r;
+    property <bool> editing: Mem.editing == r.key;
+    // The edited text: the field lives in a branch of its own, out of reach of the Save button.
+    property <string> draft;
+    padding-bottom: r.kind == "note" ? 8px : 0px;
+    if r.kind == "head": SectionHead { title: r.text; open: r.open; count: r.count; clicked => { Mem.toggle(r.key); } }
+    if r.kind == "empty": Text { text: r.text; color: Theme.outline; font-size: 13px; }
+    if r.kind == "note": Card {
+        accent: r.section == "pending";
+        VerticalLayout {
+            padding: 14px; spacing: 10px;
+            HorizontalLayout {
+                spacing: 8px;
+                Badge { text: r.section == "pending" ? T.tr("kn_suggested") : T.tr("kn_memo_badge"); tone: r.section == "pending" ? "warn" : "ok"; mono: false; }
+                Text { text: r.meta; color: Theme.outline; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                if r.pinned: Badge { text: T.tr("mem_pinned"); tone: "info"; mono: false; }
+                if r.instr: Badge { text: T.tr("mem_instr"); tone: "primary"; mono: false; }
+            }
+            if !root.editing: WText { text: r.text; fg: Theme.on-surface; size: 15px; }
+            if root.editing: Rectangle {
+                background: Theme.lowest; border-radius: 6px; border-width: 1px; border-color: Theme.primary; height: max(60px, ed.preferred-height + 16px);
+                ed := TextInput { x: 8px; y: 8px; width: parent.width - 16px; text: r.text; wrap: word-wrap; single-line: false; color: Theme.on-surface; font-size: 14px; init => { root.draft = r.text; self.focus(); } edited => { root.draft = self.text; } }
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                Rectangle { horizontal-stretch: 1; }
+                if root.editing: Btn { text: T.cancel; height: 26px; clicked => { Mem.cancel-edit(); } }
+                if root.editing: Btn { text: T.tr("mem_save"); height: 26px; primary: true; clicked => { Mem.save(r.id, root.draft); } }
+                if !root.editing && r.section == "pending": Btn { text: T.tr("mem_reject"); height: 26px; clicked => { Mem.reject(r.id); } }
+                if !root.editing && r.section == "pending": Btn { text: T.tr("mem_approve"); height: 26px; primary: true; clicked => { Mem.approve(r.id, r.instr); } }
+                if !root.editing && (r.section == "project" || r.section == "user"): Btn { text: r.pinned ? T.tr("mem_unpin") : T.tr("mem_pin"); height: 26px; clicked => { Mem.pin(r.id, !r.pinned); } }
+                if !root.editing && (r.section == "pending" || r.section == "project" || r.section == "user"): Btn { text: T.tr("mem_edit"); height: 26px; clicked => { Mem.editing = r.key; } }
+                if !root.editing && (r.section == "project" || r.section == "user" || r.section == "others"): Btn { text: T.tr("mem_delete"); height: 26px; danger: true; clicked => { Mem.delete(r.id); } }
+                if r.section == "deleted": Btn { text: T.tr("mem_undo"); height: 26px; clicked => { Mem.undo(r.id); } }
+            }
+        }
+    }
+}
+
+export component WtCard inherits Card {
+    height: wl.preferred-height;
+    drop-shadow-blur: 20px;
+    drop-shadow-color: #00000080;
+    background: Theme.container;
+    TouchArea { }
+    wl := VerticalLayout {
+        padding: 16px; spacing: 8px;
+        Text { text: T.tr("wt_title"); color: Theme.on-surface; font-size: 15px; font-weight: 600; }
+        WText { text: Wt.banner; fg: Theme.on-var; size: 11px; mono: true;  }
+        WText { text: T.tr("wt_hint"); fg: Theme.outline; size: 11px;  }
+        if Wt.cfg: WText { text: T.tr("wt_cfg_intro"); fg: Theme.primary-soft; size: 12px;  }
+        for e in Wt.cfg-entries: WText { text: e; fg: Theme.on-var; size: 11px; mono: true;  }
+        if !Wt.cfg && Wt.checked: WText { text: Wt.summary; fg: Theme.on-surface; size: 12px;  }
+        if !Wt.cfg: VerticalLayout { spacing: 8px; for l in Wt.lines: WText { text: l.text; fg: l.bad ? Theme.primary-soft : Theme.ok; size: 12px; } }
+        HorizontalLayout {
+            spacing: 6px; alignment: end; padding-top: 4px;
+            if Wt.cfg: Btn { text: T.tr("wt_cfg_accept"); height: 28px; primary: true; enabled: !Wt.busy; clicked => { Wt.accept(); } }
+            if !Wt.cfg: Btn { text: T.tr("wt_check"); height: 28px; enabled: !Wt.busy; clicked => { Wt.check(); } }
+            if !Wt.cfg: Btn { text: T.tr("wt_merge"); height: 28px; primary: true; enabled: !Wt.busy && Wt.can-merge; clicked => { Wt.merge(); } }
+            Btn { text: T.tr("wt_remove"); height: 28px; danger: true; enabled: !Wt.busy; clicked => { Wt.remove(); } }
+        }
+    }
+}
+
+export component TeamCard inherits Card {
+    height: tc.preferred-height;
+    drop-shadow-blur: 20px;
+    drop-shadow-color: #00000080;
+    background: Theme.container;
+    // A click inside the card is not a click outside it.
+    TouchArea { }
+    tc := VerticalLayout {
+        padding: 16px; spacing: 8px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: T.tr("team_title"); color: Theme.on-surface; font-size: 15px; font-weight: 600; vertical-alignment: center; }
+            VerticalLayout {
+                alignment: center;
+                Pill {
+                    text: Team.chip == "on" ? T.tr("team_on") : Team.chip == "off" ? T.tr("team_off") : T.tr("team_unknown");
+                    fg: Team.chip == "on" ? Theme.primary-soft : Theme.outline;
+                    fill: Team.chip == "on" ? Theme.primary.with-alpha(0.15) : transparent;
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if Team.seen == "": WText { text: T.tr("team_none"); fg: Theme.on-var; size: 12px;  }
+        for r in Team.roles: HorizontalLayout {
+            spacing: 10px;
+            Text { width: 72px; text: r.role == "lead" ? T.tr("team_role_lead") : r.role == "explorer" ? T.tr("team_role_explorer") : T.tr("team_role_advisor"); color: Theme.outline; font-size: 12px; }
+            Text { text: r.model + (r.effort == "" ? "" : " (" + r.effort + ")"); color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; }
+        }
+        if Team.reviews != "": Text { text: Team.reviews; color: Theme.on-var; font-size: 12px; }
+        if Team.seen != "": Text { text: Team.seen; color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+        WText { text: T.tr("team_note"); fg: Theme.outline; size: 11px;  }
+        WText { text: T.tr("team_sends"); fg: Theme.outline; size: 11px;  }
+        HorizontalLayout {
+            spacing: 6px; alignment: end; padding-top: 4px;
+            Btn { text: T.tr("team_btn_check"); height: 28px; enabled: Team.can-send && !Team.busy; clicked => { Team.check(); } }
+            Btn { text: T.tr("team_btn_off"); height: 28px; enabled: Team.can-send && !Team.busy; clicked => { Team.turn(false); } }
+            Btn { text: T.tr("team_btn_on"); height: 28px; primary: true; enabled: Team.can-send && !Team.busy; clicked => { Team.turn(true); } }
+        }
+        if !Team.can-send: WText { text: T.tr("team_wait"); fg: Theme.primary-soft; size: 11px;  }
+    }
+}
+
+export component UsageCard inherits Card {
+    height: uc.preferred-height;
+    drop-shadow-blur: 20px;
+    drop-shadow-color: #00000080;
+    background: Theme.container;
+    TouchArea { }
+    uc := VerticalLayout {
+        padding: 16px; spacing: 10px;
+        Text { text: T.tr("us_title") + " · " + Usage.who; color: Theme.on-surface; font-size: 15px; font-weight: 600; overflow: elide; }
+        if Usage.empty: WText { text: T.tr("us_none_hint"); size: 12px; fg: Theme.on-var; }
+        for w in Usage.wins: VerticalLayout {
+            spacing: 4px;
+            HorizontalLayout {
+                Text { text: w.label; color: Theme.on-surface; font-size: 12px; font-weight: 600; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: w.pct; color: Usage.tone(w.level); font-size: 12px; font-family: Theme.mono; font-weight: 600; }
+            }
+            Rectangle {
+                height: 6px; border-radius: 3px; background: Theme.highest;
+                Rectangle { x: 0px; width: parent.width * clamp(w.frac, 0, 1); height: parent.height; border-radius: 3px; background: Usage.tone(w.level); }
+            }
+            Text { text: w.reset; color: Theme.outline; font-size: 11px; }
+        }
+        if !Usage.empty: Text { text: Usage.seen; color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+        if Usage.assume: WText { text: T.tr("us_assume"); size: 11px; fg: Theme.outline; }
+    }
+}
+
+component ProvRowView inherits Rectangle {
+    in property <ProvRowV> r;
+    height: pl.preferred-height;
+    pl := VerticalLayout {
+        padding-top: 10px; padding-bottom: 10px; spacing: 4px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: r.name; color: Theme.on-surface; font-size: 14px; font-weight: 600; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            Btn { text: T.tr("pv_edit"); height: 28px; clicked => { Prov.edit(r.id); } }
+            Btn { text: T.tr("pv_delete"); height: 28px; danger: true; clicked => { Prov.delete(r.id); } }
+        }
+        WText { text: r.sub; fg: Theme.outline; size: 11px; mono: true; }
+    }
+    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
+}
+
+export component ProvidersCard inherits Card {
+    VerticalLayout {
+        padding: 18px; spacing: 8px;
+        Text { text: T.tr("pv_title"); color: Theme.outline; font-size: 12px; font-weight: 600; }
+        WText { text: T.tr("pv_intro"); fg: Theme.on-var; size: 13px; }
+        if Prov.notice != "": WText { text: Prov.notice; fg: Theme.primary-soft; size: 12px; }
+        VerticalLayout {
+            for r in Prov.rows: ProvRowView { r: r; }
+        }
+        if Prov.rows.length == 0: Text { text: T.tr("pv_none"); color: Theme.outline; font-size: 12px; }
+        if !Prov.editing: HorizontalLayout { alignment: start; padding-top: 4px; Btn { text: T.tr("pv_new"); height: 30px; clicked => { Prov.new(); } } }
+        if Prov.editing: Rectangle {
+            height: pf.preferred-height;
+            background: Theme.lowest; border-radius: 8px; border-width: 1px; border-color: Theme.primary.with-alpha(0.5);
+            pf := VerticalLayout {
+                padding: 14px; spacing: 8px;
+                Field { label: T.tr("pv_name"); LineEdit { text <=> Prov.f-name; } }
+                Field { label: T.tr("pv_url"); LineEdit { text <=> Prov.f-url; placeholder-text: "https://"; } }
+                Field {
+                    label: T.tr("pv_auth");
+                    HorizontalLayout { alignment: start; Segment { items: ["Bearer", "x-api-key"]; current: Prov.f-auth; chosen(i) => { Prov.f-auth = i; } } }
+                }
+                Field { label: T.tr("pv_key"); LineEdit { text <=> Prov.f-key; input-type: InputType.password; } }
+                WText { text: Prov.f-has-key ? T.tr("pv_key_keep") : T.tr("pv_key_none"); fg: Theme.outline; size: 11px; }
+                if Prov.f-has-key: CheckBox { text: T.tr("pv_key_clear"); checked <=> Prov.f-clear; }
+                Field { label: T.tr("pv_model"); LineEdit { text <=> Prov.f-model; } }
+                Field {
+                    label: T.tr("pv_aliases");
+                    HorizontalLayout {
+                        spacing: 8px;
+                        LineEdit { text <=> Prov.f-opus; placeholder-text: "opus"; }
+                        LineEdit { text <=> Prov.f-sonnet; placeholder-text: "sonnet"; }
+                        LineEdit { text <=> Prov.f-haiku; placeholder-text: "haiku"; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px; alignment: end;
+                    Btn { text: T.cancel; clicked => { Prov.cancel(); } }
+                    Btn { text: T.tr("pv_save"); primary: true; enabled: Prov.f-name != "" && Prov.f-url != ""; clicked => { Prov.save(); } }
+                }
+            }
+        }
+        Text { text: T.tr("pv_ctr") + "   ·   " + (Prov.ctr-ready ? T.tr("pv_ctr_ready") : T.tr("pv_ctr_not")); color: Theme.outline; font-size: 12px; font-weight: 600; }
+        HorizontalLayout {
+            spacing: 8px;
+            LineEdit { horizontal-stretch: 1; text <=> Prov.ctr-runtime; placeholder-text: T.tr("pv_ctr_runtime"); }
+            LineEdit { horizontal-stretch: 1; text <=> Prov.ctr-image; placeholder-text: T.tr("pv_ctr_image"); }
+            Btn { text: T.tr("pv_save"); height: 34px; clicked => { Prov.save-container(); } }
+        }
+    }
+}
+
+export component MemPanel inherits Rectangle {
+    background: Theme.surface;
+    property <int> scope: 0;
+    TouchArea { }
+    ScrollView {
+        VerticalLayout {
+            padding-left: max(28px, (root.width - 900px) / 2); padding-right: max(28px, (root.width - 900px) / 2); padding-top: 28px; padding-bottom: 28px; spacing: 14px;
+            KnowledgeHead { memo: true; }
+            if Mem.head.notice != "": WText { text: Mem.head.notice; fg: Theme.primary-soft; size: 13px; }
+            if Mem.head.available && Mem.head.card: Card {
+                accent: true;
+                VerticalLayout {
+                    padding: 14px; spacing: 10px;
+                    WText { text: T.tr("mem_card_text"); fg: Theme.on-surface; size: 13px; }
+                    HorizontalLayout {
+                        spacing: 8px; alignment: end;
+                        Btn { text: T.tr("mem_card_later"); clicked => { Mem.card-later(); } }
+                        Btn { text: T.tr("mem_card_on"); primary: true; clicked => { Mem.auto(1); } }
+                    }
+                }
+            }
+            if Mem.head.available: HorizontalLayout {
+                spacing: 10px;
+                Text { text: T.tr("mem_auto"); color: Theme.on-var; font-size: 13px; vertical-alignment: center; }
+                Segment { items: [T.tr("mem_auto_off"), T.tr("mem_auto_project"), T.tr("mem_auto_both")]; current: Mem.head.auto; chosen(i) => { Mem.auto(i); } }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            if Mem.head.available && Know.adding: HorizontalLayout {
+                spacing: 8px;
+                LineEdit { horizontal-stretch: 1; placeholder-text: T.tr("mem_add_ph"); text <=> Mem.note; accepted(t) => { if (t != "" && (root.scope == 1 || Mem.head.has-cwd)) { Mem.add(t, root.scope == 0 ? "project" : "user"); } } }
+                Segment { items: [T.tr("mem_scope_project"), T.tr("mem_scope_user")]; current: root.scope; chosen(i) => { root.scope = i; } }
+                Btn { text: T.tr("mem_add"); primary: true; enabled: Mem.note != "" && (root.scope == 1 || Mem.head.has-cwd); clicked => { Mem.add(Mem.note, root.scope == 0 ? "project" : "user"); } }
+            }
+            if Mem.head.available && root.scope == 0 && !Mem.head.has-cwd: Text { text: T.tr("mem_no_chat"); color: Theme.outline; font-size: 12px; }
+            if Mem.rows.length == 0 && (Know.filter != "" || Know.only-pending): EmptyState { text: T.tr("kn_no_match"); }
+            VerticalLayout {
+                for r in Mem.rows: MemRowView { r: r; }
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}
+
+component SkillRowView inherits VerticalLayout {
+    in property <SkillRow> r;
+    property <bool> acked: false;
+    padding-bottom: r.kind == "head" ? 0px : 8px;
+    if r.kind == "head": SectionHead { title: r.name; open: r.open; count: r.count; clicked => { Sk.toggle(r.key); } }
+    if r.kind == "empty": Text { text: r.name; color: Theme.outline; font-size: 13px; }
+    if r.kind == "proposal" || r.kind == "skill": Card {
+        accent: r.kind == "proposal";
+        VerticalLayout {
+            padding: 12px; spacing: 8px;
+            HorizontalLayout {
+                spacing: 8px;
+                if r.kind == "proposal": Badge { text: T.tr("kn_suggested"); tone: "warn"; mono: false; }
+                Text { text: r.name; color: Theme.on-surface; font-size: 15px; font-weight: 600; font-family: Theme.mono; vertical-alignment: center; }
+                Text { text: r.meta; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+            }
+            if r.description != "": WText { text: r.description; fg: Theme.on-var; size: 13px; }
+            if r.risks != "": Rectangle {
+                background: (r.has-block ? Theme.error : Theme.primary).with-alpha(0.08); border-radius: 6px; border-width: 1px; border-color: (r.has-block ? Theme.error : Theme.primary).with-alpha(0.4);
+                VerticalLayout { padding: 10px; WText { text: r.risks; fg: r.has-block ? Theme.error : Theme.primary-soft; size: 12px; mono: true; } }
+            }
+            if r.kind == "proposal": Text { text: T.tr("sk_full"); color: Theme.outline; font-size: 11px; }
+            if r.kind == "proposal": Rectangle {
+                background: Theme.lowest; border-radius: 6px; height: min(260px, body.height + 20px);
+                ScrollView {
+                    VerticalLayout { padding: 10px; body := SelText { text: r.body; size: 12px; mono: true; chars: true; } }
+                }
+            }
+            if r.kind == "proposal" && r.has-warn && !r.has-block: CheckBox { text: T.tr("sk_ack"); checked: root.acked; toggled => { root.acked = self.checked; } }
+            if r.kind == "proposal" && Sk.editing == r.id: Rectangle {
+                background: Theme.lowest; border-radius: 8px; border-width: 1px; border-color: Theme.primary.with-alpha(0.5);
+                height: ed.preferred-height;
+                ed := VerticalLayout {
+                    padding: 12px; spacing: 8px;
+                    Field { label: T.tr("sk_name"); LineEdit { text <=> Sk.edit-name; enabled: !Sk.edit-improve; } }
+                    if Sk.edit-improve: Text { text: T.tr("sk_name_locked"); color: Theme.outline; font-size: 11px; }
+                    Field { label: T.tr("sk_description"); LineEdit { text <=> Sk.edit-desc; } }
+                    Field { label: T.tr("sk_body"); TextEdit { height: 220px; text <=> Sk.edit-body; } }
+                    if Sk.edit-risks != "": Text { text: T.tr("sk_edited_report"); color: Theme.outline; font-size: 11px; }
+                    if Sk.edit-risks != "": WText { text: Sk.edit-risks; fg: Theme.primary-soft; size: 12px; mono: true; }
+                    if Sk.edit-risks != "": CheckBox { text: T.tr("sk_ack"); checked <=> Sk.edit-ack; }
+                    HorizontalLayout {
+                        spacing: 6px; alignment: end;
+                        Btn { text: T.cancel; height: 28px; clicked => { Sk.edit-cancel(); } }
+                        Btn { text: T.tr("sk_save_approve"); height: 28px; primary: true; clicked => { Sk.edit-save(); } }
+                    }
+                }
+            }
+            if r.kind == "skill" && Sk.history-id == r.id: Rectangle {
+                background: Theme.lowest; border-radius: 8px;
+                height: hl.preferred-height;
+                hl := VerticalLayout {
+                    padding: 10px; spacing: 6px;
+                    for v in Sk.history: HorizontalLayout {
+                        spacing: 8px;
+                        VerticalLayout { horizontal-stretch: 1; Text { text: v.meta; color: v.current ? Theme.primary-soft : Theme.on-var; font-size: 12px; font-family: Theme.mono; } Text { text: v.description; color: Theme.outline; font-size: 11px; overflow: elide; } }
+                        if v.current: VerticalLayout { alignment: center; Pill { text: T.tr("sk_ver_current"); fg: Theme.primary-soft; } }
+                        if !v.current: VerticalLayout { alignment: center; Btn { text: T.tr("sk_rollback"); height: 26px; clicked => { Sk.rollback(r.id, v.n); } } }
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 6px; alignment: end;
+                if r.kind == "proposal" && Sk.editing != r.id: Btn { text: T.tr("sk_edit_approve"); height: 28px; clicked => { Sk.edit-open(r.id); } }
+                if r.kind == "proposal": Btn { text: T.tr("sk_reject"); height: 28px; clicked => { Sk.reject(r.id); } }
+                if r.kind == "skill" && r.section == "active": Btn { text: T.tr("sk_history"); height: 28px; clicked => { Sk.history-open(r.id); } }
+                if r.kind == "proposal": Btn { text: T.tr("sk_approve"); height: 28px; primary: true; enabled: !r.has-block && (!r.has-warn || root.acked); clicked => { Sk.approve(r.id, root.acked); } }
+                if r.kind == "skill" && r.section == "active": Btn { text: r.enabled ? T.tr("sk_disable") : T.tr("sk_enable"); height: 28px; clicked => { Sk.enable(r.id, !r.enabled); } }
+                if r.kind == "skill" && r.section == "active": Btn { text: T.tr("sk_delete"); height: 28px; danger: true; clicked => { Sk.delete(r.id); } }
+                if r.kind == "skill" && r.section == "deleted": Btn { text: T.tr("mem_undo"); height: 28px; clicked => { Sk.undo(r.id); } }
+            }
+        }
+    }
+}
+
+export component SkillsPanel inherits Rectangle {
+    background: Theme.surface;
+    property <int> scope: 0;
+    TouchArea { }
+    ScrollView {
+        VerticalLayout {
+            padding-left: max(28px, (root.width - 900px) / 2); padding-right: max(28px, (root.width - 900px) / 2); padding-top: 28px; padding-bottom: 28px; spacing: 14px;
+            KnowledgeHead { memo: false; }
+            if Sk.head.notice != "": WText { text: Sk.head.notice; fg: Theme.primary-soft; size: 13px; }
+            if Sk.head.available: CheckBox { text: T.tr("sk_auto"); checked: Sk.head.auto; toggled => { Sk.auto(self.checked); } }
+            if Sk.head.available && Know.adding: HorizontalLayout {
+                spacing: 8px;
+                hint := LineEdit { horizontal-stretch: 1; placeholder-text: T.tr("sk_hint"); enabled: Sk.can-propose; }
+                Segment { items: [T.tr("sk_scope_project"), T.tr("sk_scope_user")]; current: root.scope; chosen(i) => { root.scope = i; } }
+                Btn { text: T.tr("sk_propose"); primary: true; enabled: Sk.can-propose; clicked => { Sk.propose(hint.text, root.scope == 0 ? "project" : "user"); hint.text = ""; } }
+            }
+            if Sk.head.available && !Sk.can-propose: Text { text: T.tr("sk_no_chat"); color: Theme.outline; font-size: 12px; }
+            if Sk.rows.length == 0 && (Know.filter != "" || Know.only-pending): EmptyState { text: T.tr("kn_no_match"); }
+            VerticalLayout {
+                for r in Sk.rows: SkillRowView { r: r; }
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}
+
+export component SettingsPanel inherits Rectangle {
+    background: Theme.surface;
+    TouchArea { }
+    ScrollView {
+        VerticalLayout {
+            padding-left: max(28px, (root.width - 900px) / 2); padding-right: max(28px, (root.width - 900px) / 2); padding-top: 28px; padding-bottom: 28px; spacing: 14px;
+            PageTitle { title: T.tr("tab_settings"); sub: ""; }
+            Card {
+                VerticalLayout {
+                    padding: 18px; spacing: 10px;
+                    Text { text: T.tr("pref_title"); color: Theme.outline; font-size: 12px; font-weight: 600; }
+                    HorizontalLayout { alignment: start; Segment { items: ["한국어", "English"]; current: Prefs.lang; chosen(i) => { Prefs.lang-chosen(i); } } }
+                    if Prefs.changed: WText { text: T.tr("pref_restart"); fg: Theme.primary-soft; size: 12px; }
+                }
+            }
+            ProvidersCard { }
+            Card {
+                VerticalLayout {
+                    padding: 18px; spacing: 10px;
+                    Text { text: T.tr("about_title"); color: Theme.outline; font-size: 12px; font-weight: 600; }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text { text: "Tenrec"; font-size: 20px; font-weight: 600; color: Theme.on-surface; vertical-alignment: center; }
+                        Pill { text: About.version; y: (parent.height - 22px) / 2; }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    WText { text: T.tr("about_text"); fg: Theme.on-var; size: 13px; }
+                    WText { text: T.tr("about_slint"); fg: Theme.on-var; size: 13px; }
+                    HorizontalLayout { alignment: start; AboutSlint { } }
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}

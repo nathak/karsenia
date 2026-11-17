@@ -1,0 +1,287 @@
+// The Files tab: the open chat's project folder, one folder at a time, and a text file in an editor (src/view/files.rs makes the
+// rows; src/bin/desktop/files.rs answers the callbacks). The host decides what may be opened or saved; where it refuses (Windows
+// has no editor), its sentence is shown as it is.
+import { ScrollView, LineEdit } from "std-widgets.slint";
+import { Theme, T, Pill, Btn, WText, Label, Badge, IconBtn, EmptyState } from "base.slint";
+import { Wt, WtCard, WtRow } from "panels.slint";
+
+export struct FsRow { name: string, path: string, kind: string, size: string, tags: string, blocked: bool, from: string, place: string }
+export struct FsCrumb { label: string, path: string }
+
+export global Files {
+    in property <bool> has-chat;
+    in property <[FsCrumb]> crumbs;
+    in property <[FsRow]> rows;
+    in property <string> notice;
+    // The open file ("" for none), its text as edited and as loaded, and why it is read-only ("" if it is not).
+    in property <string> file;
+    in-out property <string> text;
+    in-out property <string> orig;
+    in property <bool> readonly;
+    in property <string> note;
+    // The line numbers beside the editor and where the cursor is.
+    in property <string> gutter: "1";
+    in property <int> ln: 1;
+    in property <int> col: 1;
+    // The worktree panel and the terminal drawer are open.
+    in-out property <bool> wt-open: true;
+    in-out property <bool> term-open: false;
+    // The shell: on for this run (a start option), its output as plain text, a line under it, and whether one is running.
+    in property <bool> term-enabled;
+    in property <string> term-text;
+    in property <string> term-status;
+    in property <bool> term-live;
+    callback term-set(bool);
+    // Puts @<path> of the open file into the message being written.
+    callback mention(string);
+    callback term-submit(string);
+    callback term-interrupt();
+    callback edited(string);
+    callback cursor(int);
+    callback back();
+    callback open-dir(string);
+    callback open-file(string);
+    callback up();
+    callback refresh();
+    // Making, renaming and deleting inside the folder shown ("file" or "dir"; a name has no /; the path is as the host listed it).
+    in-out property <string> creating;
+    in-out property <string> edit-path;
+    callback create(string, string);
+    callback rename(string, string);
+    callback delete(string, string);
+    callback restore(string);
+    // Delete for good an entry of the trash (the host asks with a count first); empty the trash.
+    callback purge(string);
+    callback empty-trash();
+    callback save();
+    callback close();
+}
+
+export component FilesPanel inherits Rectangle {
+    background: Theme.surface;
+    // Set when the panel is sized (a binding on the width would loop through the layout).
+    property <bool> roomy: root.width >= 1100px;
+    TouchArea { }
+    if !Files.has-chat: Text { text: T.tr("fs_no_chat"); color: Theme.outline; font-size: 13px; }
+    if Files.has-chat: VerticalLayout {
+        // the page header: where we are, the worktree panel, back to the chat
+        Rectangle {
+            height: 52px;
+            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
+            HorizontalLayout {
+                padding-left: 18px; padding-right: 18px; spacing: 10px;
+                Image { source: @image-url("icons/folder.svg"); width: 16px; height: 16px; y: (parent.height - 16px) / 2; colorize: Theme.on-var; }
+                Text { text: Files.crumbs.length > 0 ? Files.crumbs[Files.crumbs.length - 1].label : "/"; color: Theme.on-surface; font-size: 14px; font-weight: 600; font-family: Theme.mono; vertical-alignment: center; overflow: elide; }
+                if Wt.show: VerticalLayout { alignment: center; Badge { text: T.tr("wt_chip"); tone: "info"; mono: false; } }
+                Rectangle { horizontal-stretch: 1; }
+                VerticalLayout { alignment: center; Btn { text: T.tr("fs_wt_manage"); height: 32px; clicked => { Files.wt-open = !Files.wt-open; } } }
+                VerticalLayout { alignment: center; Btn { text: T.tr("fs_terminal"); height: 32px; clicked => { Files.term-open = !Files.term-open; Files.term-set(Files.term-open); } } }
+                VerticalLayout { alignment: center; Btn { text: "←  " + T.tr("fs_back"); height: 32px; clicked => { Files.back(); } } }
+            }
+        }
+        HorizontalLayout {
+            vertical-stretch: 1;
+            // the explorer
+            VerticalLayout {
+                width: root.roomy ? 300px : 250px;
+                padding: 14px; spacing: 8px;
+                HorizontalLayout {
+                    spacing: 4px;
+                    Label { text: "EXPLORER"; vertical-alignment: center; horizontal-stretch: 1; }
+                    IconBtn { icon: @image-url("icons/folder.svg"); clicked => { Files.up(); } }
+                    IconBtn { icon: @image-url("icons/check.svg"); clicked => { Files.refresh(); } }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Btn { text: "+ " + T.tr("fs_new_file"); height: 28px; clicked => { Files.edit-path = ""; Files.creating = "file"; } }
+                    Btn { text: "+ " + T.tr("fs_new_folder"); height: 28px; clicked => { Files.edit-path = ""; Files.creating = "dir"; } }
+                }
+                if Files.creating != "": HorizontalLayout {
+                    spacing: 6px;
+                    LineEdit { placeholder-text: T.tr("fs_name_ph"); init => { self.focus(); } accepted(t) => { Files.create(Files.creating, t); } }
+                    IconBtn { icon: @image-url("icons/x.svg"); clicked => { Files.creating = ""; } }
+                }
+                ScrollView {
+                    height: 30px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        for c[i] in Files.crumbs: Rectangle {
+                            width: ct.preferred-width + 12px; height: 26px; border-radius: 6px; background: ca.has-hover ? Theme.high : transparent;
+                            ct := Text { text: c.label; color: i == Files.crumbs.length - 1 ? Theme.on-surface : Theme.outline; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; }
+                            ca := TouchArea { mouse-cursor: pointer; clicked => { Files.open-dir(c.path); } }
+                        }
+                    }
+                }
+                if Files.notice != "": WText { text: Files.notice; fg: Theme.primary-soft; size: 11px; }
+                if Files.rows.length == 0: Text { text: T.tr("fs_empty"); color: Theme.outline; font-size: 12px; }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        alignment: start; spacing: 2px;
+                        for r in Files.rows: row := Rectangle {
+                            property <string> draft: r.path;
+                            height: Files.edit-path == r.path ? (r.from != "" ? 128px : 92px) : 36px; border-radius: 6px;
+                            background: Files.file == r.path ? Theme.primary.with-alpha(0.12) : (ra.has-hover && !r.blocked ? Theme.high : transparent);
+                            border-width: Files.file == r.path ? 1px : 0px; border-color: Theme.primary.with-alpha(0.5);
+                            opacity: r.blocked ? 0.5 : 1;
+                            if Files.edit-path == r.path: VerticalLayout {
+                                padding: 6px; spacing: 6px;
+                                LineEdit { text: r.path; placeholder-text: T.tr("fs_path_ph"); init => { row.draft = r.path; self.focus(); self.select-all(); } edited(t) => { row.draft = t; } accepted(t) => { Files.rename(r.path, t); } }
+                                if r.from != "": HorizontalLayout {
+                                    alignment: end;
+                                    Btn { text: T.tr("fs_restore"); height: 28px; primary: true; clicked => { Files.restore(r.path); } }
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px; alignment: end;
+                                    Btn { text: T.cancel; height: 28px; clicked => { Files.edit-path = ""; } }
+                                    if r.place == "trash-root": Btn { text: T.tr("fs_empty_trash"); height: 28px; danger: true; clicked => { Files.empty-trash(); } }
+                                    if r.place == "trash-entry": Btn { text: T.tr("fs_purge"); height: 28px; danger: true; clicked => { Files.purge(r.path); } }
+                                    if r.place == "": Btn { text: T.tr("fs_delete"); height: 28px; danger: true; clicked => { Files.delete(r.path, r.kind); } }
+                                    // The trash folder is emptied, not renamed.
+                                    if r.place != "trash-root": Btn { text: T.tr("fs_rename"); height: 28px; primary: true; clicked => { Files.rename(r.path, row.draft); } }
+                                }
+                            }
+                            if Files.edit-path != r.path: HorizontalLayout {
+                                padding-left: 8px; padding-right: 4px; spacing: 8px;
+                                Image { source: r.kind == "dir" ? @image-url("icons/folder.svg") : @image-url("icons/code.svg"); width: 15px; height: 15px; y: (parent.height - 15px) / 2; colorize: r.kind == "dir" ? Theme.primary-soft : Theme.on-var; }
+                                Text { text: r.name; color: Theme.on-surface; font-size: 13px; font-family: Theme.mono; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+                                if r.from != "": Text { text: "← " + r.from; color: Theme.outline; font-size: 10px; font-family: Theme.mono; overflow: elide; vertical-alignment: center; max-width: 90px; }
+                                if r.tags != "": VerticalLayout { alignment: center; Badge { text: r.tags; tone: "warn"; mono: false; } }
+                                if r.size != "": Text { text: r.size; color: Theme.outline; font-size: 10px; font-family: Theme.mono; vertical-alignment: center; }
+                                if r.kind != "other": VerticalLayout { alignment: center; IconBtn { icon: @image-url("icons/more.svg"); clicked => { Files.creating = ""; Files.edit-path = r.path; } } }
+                            }
+                            ra := TouchArea { width: parent.width - 36px; mouse-cursor: r.blocked ? default : pointer; enabled: !r.blocked && Files.edit-path != r.path; clicked => { if (r.kind == "dir") { Files.open-dir(r.path); } else if (r.kind == "file") { Files.open-file(r.path); } } }
+                        }
+                    }
+                }
+            }
+            Rectangle { width: 1px; background: Theme.hairline; }
+            // the editor: its tab, the text with line numbers, the status bar
+            VerticalLayout {
+                horizontal-stretch: 1;
+                if Files.file == "": Rectangle { vertical-stretch: 1; VerticalLayout { padding: 24px; alignment: center; WText { text: Files.note != "" ? Files.note : T.tr("fs_pick"); fg: Theme.outline; size: 13px; } } }
+                if Files.file != "": Rectangle {
+                    height: 42px; background: Theme.low;
+                    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
+                    HorizontalLayout {
+                        padding-left: 6px; padding-right: 12px; spacing: 8px;
+                        Rectangle {
+                            width: tabrow.preferred-width + 24px; height: parent.height;
+                            background: Theme.surface;
+                            Rectangle { y: 0px; height: 2px; background: Theme.primary; }
+                            tabrow := HorizontalLayout {
+                                padding-left: 12px; padding-right: 8px; spacing: 8px;
+                                Image { source: @image-url("icons/code.svg"); width: 14px; height: 14px; y: (parent.height - 14px) / 2; colorize: Theme.primary-soft; }
+                                Text { text: Files.file; color: Theme.on-surface; font-size: 13px; font-family: Theme.mono; vertical-alignment: center; }
+                                if Files.text != Files.orig: Text { text: "●"; color: Theme.primary; font-size: 12px; vertical-alignment: center; }
+                                IconBtn { y: 0px; icon: @image-url("icons/x.svg"); clicked => { Files.close(); } }
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        VerticalLayout { alignment: center; Btn { text: "@  " + T.tr("fs_mention"); height: 28px; clicked => { Files.mention(Files.file); } } }
+                        VerticalLayout { alignment: center; Btn { text: T.tr("fs_save"); height: 28px; primary: true; enabled: !Files.readonly && Files.text != Files.orig; clicked => { Files.save(); } } }
+                    }
+                }
+                if Files.file != "" && Files.note != "": Rectangle { height: nt.preferred-height + 14px; background: Theme.primary.with-alpha(0.08); nt := VerticalLayout { padding: 7px; padding-left: 14px; padding-right: 14px; WText { text: Files.note; fg: Theme.primary-soft; size: 12px; } } }
+                if Files.file != "": Rectangle {
+                    vertical-stretch: 1; background: Theme.lowest; clip: true;
+                    fl := Flickable {
+                        content-width: max(self.width, ti.x + ti.preferred-width + 24px);
+                        content-height: max(self.height, ti.preferred-height + 24px);
+                        Text { x: 0px; y: 12px; width: 52px; height: ti.preferred-height; text: Files.gutter; color: Theme.outline.with-alpha(0.7); font-family: Theme.mono; font-size: 13px; horizontal-alignment: right; }
+                        ti := TextInput {
+                            x: 64px; y: 12px; width: max(fl.width - 76px, self.preferred-width);
+                            text <=> Files.text;
+                            read-only: Files.readonly;
+                            wrap: no-wrap;
+                            single-line: false;
+                            color: Theme.on-surface;
+                            font-family: Theme.mono;
+                            font-size: 13px;
+                            selection-background-color: Theme.primary.with-alpha(0.4);
+                            edited => { Files.edited(self.text); }
+                            cursor-position-changed(pos) => {
+                                Files.cursor(self.cursor-position-byte-offset);
+                                if (pos.y + fl.content-y < 0px) { fl.content-y = -pos.y; }
+                                if (pos.y + 28px + fl.content-y > fl.height) { fl.content-y = fl.height - pos.y - 28px; }
+                            }
+                        }
+                    }
+                }
+                if Files.file != "": Rectangle {
+                    height: 30px; background: Theme.low;
+                    Rectangle { y: 0px; height: 1px; background: Theme.hairline; }
+                    HorizontalLayout {
+                        padding-left: 14px; padding-right: 14px; spacing: 16px;
+                        Text { text: "UTF-8"; color: Theme.on-var; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+                        Text { text: "Ln " + Files.ln + ", Col " + Files.col; color: Theme.on-var; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        if Files.readonly: Text { text: T.tr("fs_readonly_tag"); color: Theme.primary-soft; font-size: 11px; vertical-alignment: center; }
+                    }
+                }
+            }
+            if Files.wt-open && root.width >= 900px: Rectangle { width: 1px; background: Theme.hairline; }
+            // the worktree panel
+            if Files.wt-open && root.width >= 900px: VerticalLayout {
+                width: 300px;
+                padding: 14px; spacing: 10px; alignment: start;
+                Text { text: T.tr("fs_wt_title"); color: Theme.on-surface; font-size: 17px; font-weight: 600; }
+                WText { text: T.tr("fs_wt_sub"); fg: Theme.on-var; size: 12px; }
+                if Wt.show: WtCard { }
+                if !Wt.show: EmptyState { text: T.tr("fs_wt_none"); }
+                Label { text: T.tr("fs_wt_list"); }
+                if Wt.list.length == 0: WText { text: T.tr("fs_wt_list_none"); fg: Theme.outline; size: 12px; }
+                for r in Wt.list: Rectangle {
+                    height: 44px; background: r.current ? Theme.primary.with-alpha(0.10) : Theme.low; border-radius: 8px; border-width: 1px; border-color: r.current ? Theme.primary.with-alpha(0.4) : Theme.hairline;
+                    HorizontalLayout {
+                        padding-left: 10px; padding-right: 10px; spacing: 8px;
+                        VerticalLayout {
+                            alignment: center; horizontal-stretch: 1;
+                            Text { text: r.branch == "" ? "—" : r.branch; color: r.missing ? Theme.outline : Theme.on-surface; font-size: 12px; font-weight: 600; font-family: Theme.mono; overflow: elide; }
+                            Text { text: r.path; color: Theme.on-var; font-size: 11px; font-family: Theme.mono; overflow: elide; }
+                        }
+                        if r.tag != "": VerticalLayout { alignment: center; Badge { text: r.tag; tone: r.missing ? "err" : r.current ? "primary" : "neutral"; mono: false; } }
+                    }
+                }
+                Rectangle {
+                    background: Theme.low; border-radius: 8px; border-width: 1px; border-color: Theme.hairline; height: sf.preferred-height;
+                    sf := VerticalLayout {
+                        padding: 12px; spacing: 6px;
+                        HorizontalLayout { spacing: 6px; Image { source: @image-url("icons/shield.svg"); width: 14px; height: 14px; y: (parent.height - 14px) / 2; colorize: Theme.info; } Text { text: T.tr("fs_safety"); color: Theme.info; font-size: 13px; font-weight: 600; } }
+                        WText { text: T.tr("fs_safety_text"); fg: Theme.on-var; size: 12px; }
+                    }
+                }
+            }
+        }
+        // the terminal drawer: a shell in the chat's folder (only when the app was started with TENREC_TERMINAL=1)
+        if Files.term-open: Rectangle {
+            height: 230px; background: Theme.lowest;
+            Rectangle { y: 0px; height: 1px; background: Theme.hairline; }
+            VerticalLayout {
+                HorizontalLayout {
+                    padding: 8px; padding-left: 14px; spacing: 10px;
+                    Label { text: "CLI"; vertical-alignment: center; horizontal-stretch: 1; }
+                    if Files.term-live: Btn { text: T.tr("fs_term_int"); height: 28px; clicked => { Files.term-interrupt(); } }
+                    IconBtn { icon: @image-url("icons/x.svg"); clicked => { Files.term-open = false; Files.term-set(false); } }
+                }
+                if !Files.term-enabled: VerticalLayout { padding: 14px; WText { text: T.tr("fs_term_off"); fg: Theme.outline; size: 12px; mono: true; } }
+                if Files.term-enabled: VerticalLayout {
+                    spacing: 6px; padding-left: 14px; padding-right: 14px; padding-bottom: 10px;
+                    out := Flickable {
+                        vertical-stretch: 1;
+                        interactive: true;
+                        content-height: tx.preferred-height;
+                        // new output scrolls to the bottom
+                        changed content-height => { self.content-y = min(0px, self.height - self.content-height); }
+                        tx := Text { width: parent.width; text: Files.term-text; wrap: char-wrap; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; }
+                    }
+                    if Files.term-status != "": Text { text: Files.term-status; color: Theme.primary-soft; font-size: 11px; overflow: elide; }
+                    LineEdit {
+                        height: 32px; enabled: Files.term-live; placeholder-text: T.tr("fs_term_hint"); font-size: 12px;
+                        accepted(line) => { Files.term-submit(line); self.text = ""; }
+                    }
+                }
+            }
+        }
+    }
+}

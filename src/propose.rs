@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::Instant;
 
+use crate::claude::env::EnvPlan;
 use crate::extract::{run_claude_with, RunSpec, TurnEnd};
 use crate::memory::secret_hit;
 use crate::session::{ProposalInput, SessionHandle};
@@ -136,6 +137,11 @@ pub struct ProposeCtx {
     pub bin: String,
     pub workdir: PathBuf,
     pub config: ProposeConfig,
+    /// The account whose chats this one reads (None: the default one), and the environment its runs get.
+    pub account: Option<String>,
+    pub env: EnvPlan,
+    /// The account is being removed or gone: no run is started for it.
+    pub retired: Arc<std::sync::atomic::AtomicBool>,
 }
 
 fn day() -> u64 {
@@ -144,17 +150,18 @@ fn day() -> u64 {
 
 impl ProposeCtx {
     fn notice(&self, text: &str) {
-        let _ = self.events.send(json!({"v": 1, "kind": "skill_notice", "data": {"text": text}}));
+        let _ = self.events.send(json!({"v": 1, "kind": "skill_notice", "data": {"text": text, "account": self.account}}));
     }
 
     fn proposed(&self, proposal: &Proposal) {
-        let _ = self.events.send(json!({"v": 1, "kind": "skill_proposed", "data": {"id": proposal.id, "name": proposal.name}}));
-        let _ = self.events.send(json!({"v": 1, "kind": "skills_changed", "data": {}}));
+        let _ = self.events.send(json!({"v": 1, "kind": "skill_proposed", "data": {"id": proposal.id, "name": proposal.name, "account": self.account}}));
+        let _ = self.events.send(json!({"v": 1, "kind": "skills_changed", "data": {"account": self.account}}));
     }
 
     async fn run(&self, prompt: &str) -> Result<Option<Parsed>> {
+        anyhow::ensure!(!self.retired.load(std::sync::atomic::Ordering::SeqCst), "this account was removed");
         let spec = RunSpec { model: "sonnet", schema: SCHEMA, system: SYSTEM, timeout: PROPOSE_TIMEOUT };
-        let result = run_claude_with(&self.bin, &self.workdir, prompt, &spec).await?;
+        let result = run_claude_with(&self.bin, &self.workdir, prompt, &spec, &self.env).await?;
         parse_output(&result)
     }
 
@@ -167,6 +174,9 @@ impl ProposeCtx {
         let input = handle.proposal_input(0).await.ok_or("the chat is gone")?;
         if input.provider {
             return Err("a chat that runs on another provider is not read for proposals: the proposal run goes to your Claude account".into());
+        }
+        if input.account.as_ref().map(|a| &a.id) != self.account.as_ref() {
+            return Err("this chat belongs to another account".into());
         }
         let texts = usable_texts(&input.user_texts);
         if input.tool_lines.is_empty() && hint.as_deref().map(str::trim).unwrap_or_default().is_empty() {
@@ -189,6 +199,9 @@ impl ProposeCtx {
 
     /// An automatic proposal after a long, successful turn: only if every condition holds. Returns quietly when one does not.
     async fn auto(&self, sid: &str) {
+        if self.retired.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let settings = self.settings.get();
         if !settings.skills_auto {
             return;
@@ -200,7 +213,7 @@ impl ProposeCtx {
         }
         let Some(handle) = self.sessions.lock().ok().and_then(|s| s.get(sid).cloned()) else { return };
         let Some(input) = handle.proposal_input(settings.skills_auto_since).await else { return };
-        if input.provider {
+        if input.provider || input.account.as_ref().map(|a| &a.id) != self.account.as_ref() {
             return;
         }
         // Third-party text reached this chat (a web page, an external tool): no automatic skill from it.

@@ -51,6 +51,22 @@ pub fn plan(inherited: &[String], provider: Option<&Provider>, config_dir: &Path
     EnvPlan { set, remove }
 }
 
+/// The environment of a `claude` that runs for one of the person's extra accounts: its own settings folder, and none of the
+/// credential variables the app inherited, so the default account's token or address cannot be used in its place. Everything else
+/// stays (proxy, certificate, locale, `PATH`: a work network needs them). Unlike a provider chat nothing is pinned: the person's
+/// own project settings still apply.
+pub fn account_plan(inherited: &[String], config_dir: &Path) -> EnvPlan {
+    let mut remove: Vec<String> = inherited.iter().filter(|name| is_credential_var(name) && name.as_str() != "CLAUDE_CONFIG_DIR").cloned().collect();
+    remove.sort();
+    remove.dedup();
+    EnvPlan { set: vec![("CLAUDE_CONFIG_DIR".into(), config_dir.display().to_string())], remove }
+}
+
+/// The names of this process's variables, for `plan` and `account_plan`.
+pub fn inherited_names() -> Vec<String> {
+    std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()).collect()
+}
+
 /// The settings given on the command line: they pin the address, because a project's `.claude/settings.json` may carry an `env`
 /// that would otherwise replace it (measured), and the token would follow the address. Only the address, which is not a secret.
 pub fn pin_settings(base_url: &str) -> String {
@@ -72,6 +88,42 @@ mod tests {
 
     fn value<'a>(plan: &'a EnvPlan, name: &str) -> Option<&'a str> {
         plan.set.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn an_account_chat_runs_in_its_own_folder_and_loses_every_inherited_credential_but_nothing_else() {
+        let inherited = names(&[
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_MODEL",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CONFIG_DIR",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "TENREC_MCP_SECRET",
+            "HOME",
+            "PATH",
+            "LANG",
+            "TZ",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+            "NODE_EXTRA_CA_CERTS",
+            "SSL_CERT_FILE",
+            "XDG_RUNTIME_DIR",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+        ]);
+        let plan = account_plan(&inherited, Path::new("/data/accounts/ab"));
+        assert_eq!(plan.set, vec![("CLAUDE_CONFIG_DIR".to_owned(), "/data/accounts/ab".to_owned())], "only the folder is set: no token, no address");
+        for gone in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "AWS_BEARER_TOKEN_BEDROCK", "TENREC_MCP_SECRET"] {
+            assert!(plan.remove.iter().any(|n| n == gone), "{gone} must be removed");
+        }
+        for kept in ["HOME", "PATH", "LANG", "TZ", "HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "XDG_RUNTIME_DIR", "CLAUDE_CODE_MAX_OUTPUT_TOKENS", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] {
+            assert!(!plan.remove.iter().any(|n| n == kept), "{kept} stays");
+        }
+        assert!(!plan.remove.iter().any(|n| n == "CLAUDE_CONFIG_DIR"), "what is set is not also removed");
+        assert!(account_plan(&[], Path::new("/c")).remove.is_empty());
     }
 
     #[test]

@@ -16,6 +16,10 @@ pub struct CanUseTool {
     pub permission_suggestions: Value,
     pub blocked_path: Option<String>,
     pub tool_use_id: Option<String>,
+    /// A field Claude Code 2.1.325 sends on some requests (seen as `true` on a file write) and does not document: kept as it is, and a request
+    /// that carries it is not offered a rule to remember (what it promises is not known).
+    #[serde(default)]
+    pub server_policy_ask_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +65,7 @@ pub fn parse_line(line: &str) -> Event {
                         permission_suggestions: request.get("permission_suggestions").cloned().unwrap_or(Value::Null),
                         blocked_path: text(request, "blocked_path"),
                         tool_use_id: text(request, "tool_use_id"),
+                        server_policy_ask_only: request.get("server_policy_ask_only").and_then(Value::as_bool) == Some(true),
                         tool_name,
                     });
                 }
@@ -114,6 +119,50 @@ pub fn allow(request_id: &str, input: &Value, updated_permissions: Option<Value>
         response["updatedPermissions"] = rules;
     }
     one_line(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": response}}))
+}
+
+/// The rules a person may have Claude Code remember for a request, worked out from the request's own `permission_suggestions` and from
+/// nothing else. A suggestion is taken only when it is `addRules` with behavior `allow` and 1 to 8 rules that all name the tool that
+/// is asked about and carry a plain, non-empty `ruleContent` of at most 500 characters; what is sent back is built from those checked
+/// fields (every other key is dropped), with the destination the person chose. `addDirectories`, `setMode` and any other suggestion
+/// are never passed on.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Grants {
+    /// `updatedPermissions` for "allow for this run of the process" (destination `session`).
+    pub session: Option<Value>,
+    /// `updatedPermissions` for "always allow in this project" (destination `localSettings`, a file Claude Code writes).
+    pub always: Option<Value>,
+    /// The rules as text, `Bash(touch probe-file.txt)`, one per line.
+    pub rule_text: Option<String>,
+    /// True when no rule has a `*`: only exactly what was asked is allowed.
+    pub exact: bool,
+}
+
+pub fn grants(suggestions: &Value, tool_name: &str) -> Grants {
+    let Some(list) = suggestions.as_array() else { return Grants::default() };
+    for suggestion in list {
+        if suggestion["type"] != "addRules" || suggestion["behavior"] != "allow" {
+            continue;
+        }
+        let Some(rules) = suggestion["rules"].as_array().filter(|r| (1..=8).contains(&r.len())) else { continue };
+        let mut clean: Vec<Value> = Vec::new();
+        let mut shown: Vec<String> = Vec::new();
+        for rule in rules {
+            let (Some(name), Some(content)) = (rule["toolName"].as_str(), rule["ruleContent"].as_str()) else { break };
+            if name != tool_name || content.is_empty() || content.chars().count() > 500 || content.chars().any(char::is_control) {
+                break;
+            }
+            clean.push(json!({"toolName": name, "ruleContent": content}));
+            shown.push(format!("{name}({content})"));
+        }
+        if clean.len() != rules.len() {
+            continue;
+        }
+        let build = |destination: &str| json!([{"type": "addRules", "rules": clean, "behavior": "allow", "destination": destination}]);
+        let exact = clean.iter().all(|r| !r["ruleContent"].as_str().unwrap_or_default().contains('*'));
+        return Grants { session: Some(build("session")), always: Some(build("localSettings")), rule_text: Some(shown.join("\n")), exact };
+    }
+    Grants::default()
 }
 
 pub fn deny(request_id: &str, message: &str) -> String {
@@ -186,5 +235,55 @@ mod tests {
         let v: Value = serde_json::from_str(&interrupt("c1")).unwrap();
         assert_eq!(v["request"]["subtype"], "interrupt");
         assert!(!allow("r", &json!({}), None).contains('\n'));
+    }
+    // What Claude Code 2.1.325 really sent for `touch probe-file.txt` (measured).
+    const BASH_SUGGESTIONS: &str = r#"[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"touch probe-file.txt"}],"behavior":"allow","destination":"localSettings"},{"type":"addDirectories","directories":["/p"],"destination":"session"},{"type":"setMode","mode":"acceptEdits","destination":"session"}]"#;
+    const WRITE_SUGGESTIONS: &str = r#"[{"type":"setMode","mode":"acceptEdits","destination":"session"}]"#;
+
+    #[test]
+    fn a_rule_to_remember_is_built_from_the_requests_own_suggestion_and_only_for_the_tool_asked_about() {
+        let g = grants(&serde_json::from_str(BASH_SUGGESTIONS).unwrap(), "Bash");
+        assert_eq!(g.rule_text.as_deref(), Some("Bash(touch probe-file.txt)"));
+        assert!(g.exact);
+        assert_eq!(g.session, Some(json!([{"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "touch probe-file.txt"}], "behavior": "allow", "destination": "session"}])));
+        assert_eq!(g.always.as_ref().unwrap()[0]["destination"], "localSettings");
+        // Nothing else of the suggestions travels: no directory, no mode.
+        let sent = format!("{:?}", g);
+        assert!(!sent.contains("addDirectories") && !sent.contains("setMode") && !sent.contains("acceptEdits"));
+        // A file write was only offered a mode change: nothing to remember.
+        assert_eq!(grants(&serde_json::from_str(WRITE_SUGGESTIONS).unwrap(), "Write"), Grants::default());
+        // The rule must be for the tool that asks.
+        assert_eq!(grants(&serde_json::from_str(BASH_SUGGESTIONS).unwrap(), "Edit"), Grants::default());
+    }
+
+    #[test]
+    fn a_suggestion_that_is_not_plain_is_not_taken() {
+        let one = |rule: Value, behavior: &str| json!([{"type": "addRules", "rules": [rule], "behavior": behavior, "destination": "localSettings"}]);
+        let bash = |c: Value| json!({"toolName": "Bash", "ruleContent": c});
+        assert!(grants(&one(bash(json!("ls")), "allow"), "Bash").session.is_some());
+        for bad in [one(bash(json!("ls")), "deny"), one(bash(json!("")), "allow"), one(bash(json!("a\nb")), "allow"), one(bash(json!("x".repeat(501))), "allow"), one(bash(json!(3)), "allow"), one(json!({"toolName": "Bash"}), "allow"), one(json!({"toolName": "Read", "ruleContent": "x"}), "allow"), json!([{"type": "addRules", "rules": [], "behavior": "allow"}]), json!("nope"), Value::Null] {
+            assert_eq!(grants(&bad, "Bash"), Grants::default(), "{bad}");
+        }
+        // A rule that has a wildcard is taken as Claude suggested it, and said not to be exact.
+        let wild = grants(&one(bash(json!("npm run *")), "allow"), "Bash");
+        assert!(wild.session.is_some() && !wild.exact);
+        // More rules than eight, or one bad rule among good ones: none.
+        let many = json!([{"type": "addRules", "behavior": "allow", "rules": (0..9).map(|i| bash(json!(format!("c{i}")))).collect::<Vec<_>>()}]);
+        assert_eq!(grants(&many, "Bash"), Grants::default());
+        let mixed = json!([{"type": "addRules", "behavior": "allow", "rules": [bash(json!("ls")), json!({"toolName": "Bash", "ruleContent": ""})]}]);
+        assert_eq!(grants(&mixed, "Bash"), Grants::default());
+        // Extra keys of the suggestion and of a rule are dropped.
+        let extra = json!([{"type": "addRules", "behavior": "allow", "destination": "userSettings", "x": 1, "rules": [{"toolName": "Bash", "ruleContent": "ls", "y": 2}]}]);
+        let g = grants(&extra, "Bash");
+        assert_eq!(g.always.unwrap(), json!([{"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "ls"}], "behavior": "allow", "destination": "localSettings"}]), "the destination is the person's choice, not the suggestion's");
+    }
+
+    #[test]
+    fn the_undocumented_ask_only_flag_is_read_and_defaults_to_false() {
+        let line = |extra: &str| format!(r#"{{"type":"control_request","request_id":"r","request":{{"subtype":"can_use_tool","tool_name":"Write","input":{{}}{extra}}}}}"#);
+        let Event::CanUseTool(a) = parse_line(&line(r#","server_policy_ask_only":true"#)) else { panic!() };
+        assert!(a.server_policy_ask_only);
+        let Event::CanUseTool(b) = parse_line(&line("")) else { panic!() };
+        assert!(!b.server_policy_ask_only);
     }
 }

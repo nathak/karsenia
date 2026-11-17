@@ -77,6 +77,19 @@ pub fn next_due(schedule: &Schedule, after_ms: i64, clock: &dyn Clock) -> Option
 /// The machine's own time zone.
 pub struct SystemClock;
 
+#[cfg(unix)]
+unsafe fn mktime_local(tm: &mut libc::tm) -> libc::time_t {
+    libc::mktime(tm)
+}
+
+#[cfg(windows)]
+unsafe fn mktime_local(tm: &mut libc::tm) -> libc::time_t {
+    extern "C" {
+        fn _mktime64(tm: *mut libc::tm) -> libc::time_t;
+    }
+    _mktime64(tm)
+}
+
 impl Clock for SystemClock {
     fn now_ms(&self) -> i64 {
         crate::now_ms() as i64
@@ -87,7 +100,10 @@ impl Clock for SystemClock {
         // SAFETY: `tm` is plain data; localtime_r fills it from `secs` and does not keep either pointer.
         let tm = unsafe {
             let mut tm: libc::tm = std::mem::zeroed();
+            #[cfg(unix)]
             libc::localtime_r(&secs, &mut tm);
+            #[cfg(windows)]
+            libc::localtime_s(&mut tm, &secs);
             tm
         };
         Local { year: tm.tm_year + 1900, month: (tm.tm_mon + 1) as u32, day: tm.tm_mday as u32, hour: tm.tm_hour as u32, minute: tm.tm_min as u32, weekday: ((tm.tm_wday + 6) % 7) as u32 }
@@ -103,7 +119,7 @@ impl Clock for SystemClock {
             tm.tm_hour = hour as i32;
             tm.tm_min = minute as i32;
             tm.tm_isdst = -1;
-            libc::mktime(&mut tm)
+            mktime_local(&mut tm)
         };
         // time_t is 64 bits on this platform and 32 on some others.
         #[allow(clippy::useless_conversion)]

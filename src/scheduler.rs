@@ -5,7 +5,7 @@
 //! project cannot run unattended), there are no MCP servers, no plugins, no skills and no session. The host approves nothing; a
 //! tool the run tries that is not in the list is refused by Claude Code and the refusal is kept with the run. What a run produced
 //! is only shown: nothing in the host reads a result and acts on it (no note, no skill, no search index).
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -128,7 +128,7 @@ struct State {
     active: Option<i64>,
     /// The person pressed Stop on the run that is going.
     stop_requested: bool,
-    pids: HashSet<u32>,
+    groups: HashMap<u32, Arc<crate::proc_group::Group>>,
 }
 
 pub struct Scheduler {
@@ -265,11 +265,8 @@ impl Scheduler {
         let mut did = state.queue.len() != before;
         if state.active == Some(id) {
             state.stop_requested = true;
-            for pid in state.pids.iter() {
-                // SAFETY: killpg on a process group this host created (process_group(0) at spawn).
-                unsafe {
-                    libc::killpg(*pid as i32, libc::SIGKILL);
-                }
+            for group in state.groups.values() {
+                group.kill();
             }
             did = true;
         }
@@ -278,11 +275,8 @@ impl Scheduler {
 
     /// Ends every scheduled run and what it started (the host is going away).
     pub fn kill_all(&self) {
-        for pid in self.state().pids.iter() {
-            // SAFETY: killpg on a process group this host created (process_group(0) at spawn).
-            unsafe {
-                libc::killpg(*pid as i32, libc::SIGKILL);
-            }
+        for group in self.state().groups.values() {
+            group.kill();
         }
     }
 
@@ -382,7 +376,8 @@ impl Scheduler {
 
     async fn run_claude(&self, def: &TaskDef, workdir: &Path) -> Outcome {
         let mut command = Command::new(&self.bin);
-        command.args(build_args(def)).current_dir(workdir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).process_group(0);
+        command.args(build_args(def)).current_dir(workdir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        crate::proc_group::configure(&mut command);
         // The CLI's own memory folder is not read into an unattended run.
         command.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
         let mut child = match command.spawn() {
@@ -390,9 +385,20 @@ impl Scheduler {
             Err(error) => return Outcome { status: "error".into(), note: format!("could not start {}: {error}", self.bin), ..Default::default() },
         };
         let pid = child.id();
-        if let Some(pid) = pid {
-            self.state().pids.insert(pid);
-        }
+        let group = match pid {
+            Some(pid) => match crate::proc_group::adopt(pid) {
+                Some(group) => {
+                    let group = Arc::new(group);
+                    self.state().groups.insert(pid, group.clone());
+                    Some(group)
+                }
+                None => {
+                    let _ = child.start_kill();
+                    return Outcome { status: "error".into(), note: "could not put the run in a group it can be ended with".into(), ..Default::default() };
+                }
+            },
+            None => None,
+        };
         let prompt = def.prompt.clone();
         let (Some(mut stdin), Some(mut stdout), Some(mut stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take()) else {
             return Outcome { status: "error".into(), note: "no pipes".into(), ..Default::default() };
@@ -410,17 +416,14 @@ impl Scheduler {
                 parse_result(&out, &tail)
             }
             Err(_) => {
-                if let Some(pid) = pid {
-                    // SAFETY: killpg on the group this function created with process_group(0).
-                    unsafe {
-                        libc::killpg(pid as i32, libc::SIGKILL);
-                    }
+                if let Some(group) = &group {
+                    group.kill();
                 }
                 Outcome { status: "timeout".into(), note: format!("it ran longer than {} seconds and was ended", def.timeout_s), ..Default::default() }
             }
         };
         if let Some(pid) = pid {
-            self.state().pids.remove(&pid);
+            self.state().groups.remove(&pid);
         }
         let stopped = std::mem::take(&mut self.state().stop_requested);
         if stopped {

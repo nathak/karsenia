@@ -138,7 +138,7 @@ async fn the_tool_finds_this_projects_history_framed_as_untrusted() {
     let fx = fixture(true).await;
     let a = chat(&fx, "proj-a", "run the MIGRATIONNEEDLE please").await;
     chat(&fx, "proj-b", "also MIGRATIONNEEDLE here").await;
-    fx.server.registry.index().unwrap().flush();
+    fx.server.registry.realm(None).unwrap().index.clone().unwrap().flush();
     let (sock, secret) = sock_and_secret(&config_of(&fx, &a.sid));
     let mut mcp = Mcp::start(&sock, &secret).await;
 
@@ -172,7 +172,7 @@ async fn the_tool_finds_this_projects_history_framed_as_untrusted() {
 async fn a_wrong_or_ended_secret_gets_nothing() {
     let fx = fixture(true).await;
     let session = chat(&fx, "proj-a", "the MIGRATIONNEEDLE").await;
-    fx.server.registry.index().unwrap().flush();
+    fx.server.registry.realm(None).unwrap().index.clone().unwrap().flush();
     let (sock, secret) = sock_and_secret(&config_of(&fx, &session.sid));
 
     let mut guess = Mcp::start(&sock, "not-the-secret").await;
@@ -202,4 +202,67 @@ async fn the_server_ends_when_stdin_closes_and_the_app_being_gone_is_an_error_no
     let status = tokio::time::timeout(Duration::from_secs(5), mcp.child.wait()).await.expect("did not end").unwrap();
     assert_eq!(status.code(), Some(0));
     let _: &Path = Path::new("/");
+}
+
+async fn work_chat(fx: &Fx, account: &str, project: &str, text: &str) -> tenrec::session::SessionHandle {
+    let path = fx.root.join(project);
+    std::fs::create_dir_all(&path).unwrap();
+    let session = fx.server.registry.create_in(path.to_str().unwrap(), None, None, false, Some(account)).unwrap();
+    let (_, mut rx) = session.subscribe(0).await.unwrap();
+    session.send(text.into(), vec![]).await.unwrap();
+    loop {
+        let got = tokio::time::timeout(Duration::from_secs(8), rx.recv()).await.unwrap().unwrap();
+        if got.kind == "state" && got.data["state"] == "idle" {
+            break;
+        }
+    }
+    session
+}
+
+async fn notes_of(mcp: &mut Mcp, query: &str) -> String {
+    text(&mcp.call("tools/call", json!({"name": "memory_search", "arguments": {"query": query}})).await)
+}
+
+#[tokio::test]
+async fn a_secret_given_to_an_account_chat_reaches_only_that_accounts_history_and_notes_in_both_directions() {
+    let fx = fixture(true).await;
+    let id = fx.server.registry.add_account("Work").unwrap().id;
+    // The same folder name for both: only the account tells them apart.
+    let personal = chat(&fx, "same", "PERSONALNEEDLE please").await;
+    let work = work_chat(&fx, &id, "same", "WORKNEEDLE please").await;
+    let folder = fx.root.join("same").canonicalize().unwrap().display().to_string();
+    let add = |realm: std::sync::Arc<tenrec::realm::Realm>, text: &str| {
+        let added = realm.memory.clone().unwrap().add(tenrec::memory::NewMem { scope: "project", cwd: Some(folder.clone()), kind: "fact".into(), text: text.into(), source: "manual", sid: None, seq: None, status: "active", instr: false, allow_secret: false });
+        assert!(matches!(added, tenrec::memory::Added::Saved(_)), "{added:?}");
+    };
+    add(fx.server.registry.realm(None).unwrap(), "PERSONALNOTE the home server runs on port 8080");
+    add(fx.server.registry.realm(Some(&id)).unwrap(), "WORKNOTE the deploy runs on friday");
+    for realm in [fx.server.registry.realm(None).unwrap(), fx.server.registry.realm(Some(&id)).unwrap()] {
+        realm.index.clone().unwrap().flush();
+    }
+
+    let (sock, personal_secret) = sock_and_secret(&config_of(&fx, &personal.sid));
+    let (_, work_secret) = sock_and_secret(&config_of(&fx, &work.sid));
+    let mut as_personal = Mcp::start(&sock, &personal_secret).await;
+    let mut as_work = Mcp::start(&sock, &work_secret).await;
+
+    let history = |reply: &Value| text(reply);
+    let (p, w) = (history(&as_personal.search(json!({"query": "NEEDLE"})).await), history(&as_work.search(json!({"query": "NEEDLE"})).await));
+    assert!(p.contains("PERSONALNEEDLE") && !p.contains("WORKNEEDLE"), "{p}");
+    assert!(w.contains("WORKNEEDLE") && !w.contains("PERSONALNEEDLE"), "{w}");
+
+    let (own_p, other_p) = (notes_of(&mut as_personal, "home").await, notes_of(&mut as_personal, "deploy").await);
+    assert!(own_p.contains("PERSONALNOTE"), "{own_p}");
+    assert!(!other_p.contains("WORKNOTE") && other_p.contains("No matches"), "the work note is not found by a personal chat: {other_p}");
+    let (own_w, other_w) = (notes_of(&mut as_work, "deploy").await, notes_of(&mut as_work, "home").await);
+    assert!(own_w.contains("WORKNOTE"), "{own_w}");
+    assert!(!other_w.contains("PERSONALNOTE") && other_w.contains("No matches"), "the personal note is not found by a work chat: {other_w}");
+
+    // A save by the work chat lands in the work account's file only.
+    let before = fx.server.registry.realm(None).unwrap().memory.clone().unwrap().counts();
+    let saved = text(&as_work.call("tools/call", json!({"name": "memory_save", "arguments": {"text": "WORKSAVED the staging url is internal"}})).await);
+    assert!(saved.contains("Saved"), "{saved}");
+    assert_eq!(fx.server.registry.realm(None).unwrap().memory.clone().unwrap().counts(), before, "nothing was written to the default account's notes");
+    let (active, pending) = fx.server.registry.realm(Some(&id)).unwrap().memory.clone().unwrap().counts();
+    assert_eq!(active + pending, 2, "the work account's own file holds the new note beside its first");
 }

@@ -1,0 +1,130 @@
+// The VHDB page (the plug-in that keeps past decisions and guards). What the plug-in left in the project's git folder is read and shown
+// (src/view/vhdb.rs): its switches, token budget and recorded decisions. The switches are not set here (that is the plug-in's own
+// command in a chat), and searching the history needs the plug-in's engine, so those parts say so instead of inventing a result.
+import { ScrollView } from "std-widgets.slint";
+import { Theme, T, Label, Badge, Toggle, EmptyState, WText, Btn, ProgressBar } from "base.slint";
+
+export struct VhDecision { id: string, topic: string, chosen: string, reason: string, files: string, when: string, active: bool }
+
+export global Vh {
+    // The page was asked for a chat's project, and the plug-in's folder was found there.
+    in property <bool> has-chat;
+    in property <bool> found;
+    in property <bool> record;
+    in property <bool> inject;
+    in property <bool> guard;
+    in property <bool> upload;
+    in property <int> budget: 1200;
+    in property <int> deadline: 250;
+    in property <string> logs;
+    in property <[VhDecision]> rows;
+    callback refresh();
+}
+
+component ChannelCard inherits Rectangle {
+    in property <string> name;
+    in property <string> key;
+    in property <bool> on;
+    background: Theme.low;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.hairline;
+    height: 92px;
+    VerticalLayout {
+        padding: 14px; spacing: 8px;
+        HorizontalLayout { Text { text: root.name; color: Theme.on-surface; font-size: 14px; font-weight: 600; horizontal-stretch: 1; } Rectangle { width: 8px; height: 8px; y: 3px; border-radius: 4px; background: root.on ? Theme.ok : Theme.outline; } }
+        Rectangle { vertical-stretch: 1; }
+        HorizontalLayout { Label { text: root.key; vertical-alignment: center; horizontal-stretch: 1; } Toggle { checked: root.on; enabled: false; } }
+    }
+}
+
+component DecisionCard inherits Rectangle {
+    in property <VhDecision> d;
+    background: Theme.low; border-radius: 10px; border-width: 1px; border-color: Theme.hairline;
+    height: dc.preferred-height;
+    dc := VerticalLayout {
+        padding: 14px; spacing: 6px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: root.d.id; color: Theme.primary-soft; font-size: 11px; font-family: Theme.mono; font-weight: 600; vertical-alignment: center; }
+            Badge { text: root.d.active ? T.tr("vh_active") : T.tr("vh_replaced"); tone: root.d.active ? "ok" : "neutral"; mono: false; }
+            Rectangle { horizontal-stretch: 1; }
+            Text { text: root.d.when; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+        }
+        WText { text: root.d.topic; size: 14px; fg: Theme.on-surface; weight: 600; }
+        WText { text: root.d.chosen; size: 12px; fg: Theme.on-surface; }
+        WText { text: root.d.reason; size: 12px; fg: Theme.on-var; }
+        if root.d.files != "": WText { text: root.d.files; size: 11px; fg: Theme.outline; mono: true; }
+    }
+}
+
+export component VhdbPage inherits Rectangle {
+    property <bool> wide: root.width >= 1000px;
+    background: Theme.surface;
+    TouchArea { }
+    ScrollView {
+        VerticalLayout {
+            padding-left: max(24px, (root.width - 1280px) / 2 + 24px); padding-right: max(24px, (root.width - 1280px) / 2 + 24px); padding-top: 24px; padding-bottom: 28px; spacing: 16px; alignment: start;
+            HorizontalLayout {
+                spacing: 12px;
+                Badge { text: "VHDB CORE DAEMON"; }
+                Text { text: T.tr("vh_title"); color: Theme.on-surface; font-size: 22px; font-weight: 600; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                Badge { text: Vh.found ? T.tr("vh_read") : T.tr("vh_not_connected"); tone: Vh.found ? "ok" : "neutral"; mono: false; }
+                Btn { text: T.tr("vh_refresh"); height: 28px; clicked => { Vh.refresh(); } }
+            }
+            if !Vh.has-chat: EmptyState { text: T.tr("vh_no_chat"); }
+            if Vh.has-chat && !Vh.found: EmptyState { text: T.tr("vh_no_dir"); }
+            if Vh.has-chat && Vh.found: WText { text: Vh.logs; size: 12px; fg: Theme.outline; mono: true; }
+            WText { text: T.tr("vh_sub"); size: 13px; fg: Theme.on-var; }
+            // the four channels
+            Rectangle {
+                background: Theme.low; border-radius: 12px; border-width: 1px; border-color: Theme.hairline; height: pc.preferred-height;
+                pc := VerticalLayout {
+                    padding: 18px; spacing: 12px;
+                    HorizontalLayout { Text { text: T.tr("vh_pipeline"); color: Theme.on-surface; font-size: 16px; font-weight: 600; horizontal-stretch: 1; } Label { text: "4 CHANNELS / INDEPENDENT"; vertical-alignment: center; } }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        ChannelCard { horizontal-stretch: 1; name: T.tr("vh_record"); key: "AUTO_CAPTURE"; on: Vh.record; }
+                        ChannelCard { horizontal-stretch: 1; name: T.tr("vh_inject"); key: "CTX_PROMPT"; on: Vh.inject; }
+                        ChannelCard { horizontal-stretch: 1; name: T.tr("vh_guard"); key: "RULE_ASSERT"; on: Vh.guard; }
+                        ChannelCard { horizontal-stretch: 1; name: T.tr("vh_upload"); key: "REMOTE_SYNC"; on: Vh.upload; }
+                    }
+                    WText { text: T.tr("vh_switch_note"); size: 12px; fg: Theme.outline; }
+                }
+            }
+            // the budget
+            Rectangle {
+                background: Theme.low; border-radius: 12px; border-width: 1px; border-color: Theme.hairline; height: bc.preferred-height;
+                bc := VerticalLayout {
+                    padding: 18px; spacing: 10px;
+                    HorizontalLayout { Text { text: T.tr("vh_budget"); color: Theme.on-surface; font-size: 15px; font-weight: 600; horizontal-stretch: 1; } Label { text: Vh.found ? Vh.budget + " / 2500 · " + Vh.deadline + "ms" : "—"; } }
+                    ProgressBar { frac: Vh.found ? (Vh.budget - 200) / 2300 : 0; }
+                }
+            }
+            // the query bar
+            Rectangle {
+                background: Theme.low; border-radius: 12px; border-width: 1px; border-color: Theme.hairline; height: 56px;
+                HorizontalLayout {
+                    padding: 12px; spacing: 10px;
+                    Text { text: "vql:"; color: Theme.outline; font-size: 13px; font-family: Theme.mono; vertical-alignment: center; }
+                    Text { text: T.tr("vh_query_ph"); color: Theme.outline.with-alpha(0.7); font-size: 13px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    Btn { text: T.tr("vh_run"); enabled: false; primary: true; height: 32px; }
+                    Btn { text: "+  " + T.tr("vh_new_decision"); enabled: false; height: 32px; }
+                }
+            }
+            // records and the file timeline
+            HorizontalLayout {
+                spacing: 16px;
+                VerticalLayout {
+                    horizontal-stretch: 1; spacing: 10px;
+                    Text { text: T.tr("vh_adr"); color: Theme.on-surface; font-size: 16px; font-weight: 600; }
+                    if Vh.rows.length == 0: EmptyState { text: T.tr("vh_empty"); }
+                    for d in Vh.rows: DecisionCard { d: d; }
+                }
+                if root.wide: VerticalLayout { horizontal-stretch: 1; spacing: 10px; alignment: start; Text { text: T.tr("vh_timeline"); color: Theme.on-surface; font-size: 16px; font-weight: 600; } EmptyState { text: T.tr("vh_timeline_na"); } }
+            }
+            if !root.wide: VerticalLayout { spacing: 10px; Text { text: T.tr("vh_timeline"); color: Theme.on-surface; font-size: 16px; font-weight: 600; } EmptyState { text: T.tr("vh_timeline_na"); } }
+        }
+    }
+}

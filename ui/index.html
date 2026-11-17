@@ -7,19 +7,28 @@
 <link rel="stylesheet" href="/theme.css">
 </head>
 <body>
+<svg class="sprite" width="0" height="0" aria-hidden="true" focusable="false"><symbol id="i-forum" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol><symbol id="i-brain" viewBox="0 0 24 24"><path d="M9.5 3A2.5 2.5 0 0 0 7 5.5v.3A3 3 0 0 0 4.5 9a3 3 0 0 0 .6 1.8A3 3 0 0 0 4 13.5a3 3 0 0 0 2.2 2.9A3 3 0 0 0 9 20a2.5 2.5 0 0 0 3-2.4V5.5A2.5 2.5 0 0 0 9.5 3z"/><path d="M14.5 3A2.5 2.5 0 0 1 17 5.5v.3A3 3 0 0 1 19.5 9a3 3 0 0 1-.6 1.8 3 3 0 0 1 1.1 2.7 3 3 0 0 1-2.2 2.9A3 3 0 0 1 15 20a2.5 2.5 0 0 1-3-2.4"/></symbol><symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol><symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol><symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol><symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol><symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol><symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol><symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 7 5 5-5 5M12 17h7"/></symbol><symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol><symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></symbol><symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12 20 4l-6 16-3-7z"/><path d="m11 13 9-9"/></symbol><symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol><symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 17-5-5-9 8"/></symbol><symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2 6"/><path d="M20 4v7h-7"/></symbol><symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol><symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></symbol><symbol id="i-half" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z"/></symbol><symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3"/></symbol><symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol><symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol><symbol id="i-code" viewBox="0 0 24 24"><path d="m8 8-4 4 4 4M16 8l4 4-4 4"/></symbol></svg>
 <div id="app">
   <aside id="side">
-    <div class="brand"><span>Tenrec</span><button id="theme" class="icon" title="theme" aria-label="theme">◐</button></div>
-    <div class="side-tabs" role="tablist">
-      <button id="tab-chats" class="on" role="tab" type="button" data-i="tabChats"></button>
-      <button id="tab-memory" role="tab" type="button"><span data-i="tabMemory"></span> <span id="mem-badge" class="badge" hidden></span></button>
-      <button id="tab-skills" role="tab" type="button"><span data-i="tabSkills"></span> <span id="sk-badge" class="badge" hidden></span></button>
-      <button id="tab-sched" role="tab" type="button"><span data-i="tabSched"></span> <span id="sc-badge" class="badge" hidden></span></button>
+    <div class="brand-box">
+      <div class="brand"><span class="logo"><svg class="ic" aria-hidden="true"><use href="#i-bolt"/></svg></span><span class="grow"><span class="bname">Tenrec</span><span class="bsub">claude code · local</span></span><button id="theme" class="icon ghost" type="button" aria-label="theme"><svg class="ic" aria-hidden="true"><use href="#i-moon"/></svg></button></div>
+      <div id="conn" class="conn-pill"></div>
     </div>
+    <div class="side-tabs" role="tablist">
+      <button id="tab-chats" class="on" role="tab" type="button"><svg class="ic" aria-hidden="true"><use href="#i-forum"/></svg><span data-i="tabChats"></span></button>
+      <button id="tab-memory" role="tab" type="button"><svg class="ic" aria-hidden="true"><use href="#i-brain"/></svg><span data-i="tabMemory"></span><span id="mem-badge" class="badge" hidden></span></button>
+      <button id="tab-skills" role="tab" type="button"><svg class="ic" aria-hidden="true"><use href="#i-bolt"/></svg><span data-i="tabSkills"></span><span id="sk-badge" class="badge" hidden></span></button>
+      <button id="tab-sched" role="tab" type="button"><svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg><span data-i="tabSched"></span><span id="sc-badge" class="badge" hidden></span></button>
+      <button id="tab-files" role="tab" type="button"><svg class="ic" aria-hidden="true"><use href="#i-folder"/></svg><span data-i="tabFiles"></span></button>
+    </div>
+    <div id="acct-bar" class="acct-bar" hidden><span data-i="acctView"></span><select id="acct-view" aria-label="account"></select><span id="acct-who" class="muted"></span></div>
     <div id="chats" class="pane">
-    <button id="new-toggle" class="primary wide"></button>
+    <label class="search"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg><input id="search" type="search" spellcheck="false" autocomplete="off" data-i-ph="searchPh" aria-label="search"></label>
+    <div id="results" role="list" hidden></div>
+    <div class="sec-head"><span data-i="cvSessions"></span><button id="new-toggle" class="icon ghost" type="button" data-i-title="newChat" aria-label="new chat"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg></button></div>
     <form id="new-form" hidden>
       <label><span data-i="folder"></span><input id="new-cwd" type="text" spellcheck="false" autocomplete="off" placeholder="/home/you/project"></label>
+      <label><span data-i="chatName"></span><input id="new-name" type="text" maxlength="60" spellcheck="false" autocomplete="off"></label>
       <label><span data-i="model"></span>
         <select id="new-model"><option value="">default</option><option>haiku</option><option>sonnet</option><option>opus</option></select>
       </label>
@@ -27,12 +36,31 @@
         <select id="new-provider"><option value="" data-i="provAccount"></option></select>
       </label>
       <div id="new-prov-note" class="muted" hidden data-i="provNote"></div>
+      <label id="new-acct-row" hidden><span data-i="acct"></span>
+        <select id="new-account"><option value="" data-i="acctDefault"></option></select>
+      </label>
+      <div id="new-acct-note" class="muted" hidden data-i="acctNote"></div>
+      <label class="inline" id="new-wt-row"><input id="new-worktree" type="checkbox"> <span data-i="wtUse"></span></label>
+      <div class="muted" data-i="wtUseNote"></div>
       <label id="new-ctr-row" class="inline" hidden><input id="new-container" type="checkbox"> <span data-i="ctrUse"></span></label>
+      <label><span data-i="perm"></span>
+        <select id="new-perm"></select>
+      </label>
+      <div id="new-perm-note" class="muted"></div>
       <div class="row"><button type="submit" class="primary" data-i="create"></button><button type="button" id="new-cancel" data-i="cancel"></button></div>
     </form>
-    <input id="search" type="search" spellcheck="false" autocomplete="off" data-i-ph="searchPh" aria-label="search">
-    <div id="results" role="list" hidden></div>
     <div id="sessions" role="list"></div>
+    <details id="acct-box">
+      <summary data-i="acctTitle"></summary>
+      <div id="acct-notice" class="note-card" hidden></div>
+      <div class="muted" data-i="acctIntro"></div>
+      <div id="acct-list" class="mem-list"></div>
+      <button id="acct-new" type="button" class="wide" data-i="acctNew"></button>
+      <form id="acct-form" class="note-card" hidden autocomplete="off">
+        <label><span data-i="acctName"></span><input id="ac-name" type="text" maxlength="40" autocomplete="off"></label>
+        <div class="row"><button type="submit" class="primary" data-i="acctAdd"></button><button type="button" id="ac-cancel" data-i="cancel"></button></div>
+      </form>
+    </details>
     <details id="prov-box">
       <summary data-i="provTitle"></summary>
       <div id="prov-notice" class="note-card" hidden></div>
@@ -134,20 +162,61 @@
       </form>
       <div id="sc-list" class="mem-list"></div>
     </div>
-    <div id="conn" class="muted"></div>
+    <div id="files" class="pane" hidden>
+      <div class="row"><div class="muted grow" data-i="fsIntro"></div><button id="fs-refresh" type="button" class="icon ghost" data-i-title="fsRefresh" aria-label="refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button></div>
+      <div class="row"><button id="fs-newfile" type="button" class="ghost" data-i="fsNewFile"></button><button id="fs-newdir" type="button" class="ghost" data-i="fsNewFolder"></button></div>
+      <div id="fs-tree" class="fs-tree" role="tree"></div>
+    </div>
+    <div id="side-foot">
+      <div class="foot-card"><div class="fr"><span id="foot-model" class="fmodel"></span><span id="foot-tag" class="ftag" hidden></span></div><div class="fr"><span id="foot-prov"></span></div></div>
+      <div class="foot-links"><button id="open-acct" type="button" class="ghost"><svg class="ic" aria-hidden="true"><use href="#i-user"/></svg><span data-i="acctTitle"></span></button><button id="open-prov" type="button" class="ghost"><svg class="ic" aria-hidden="true"><use href="#i-key"/></svg><span data-i="provTitle"></span></button></div>
+    </div>
   </aside>
   <main id="main">
-    <header id="top"><div id="title" class="grow"></div><span id="pill" class="pill"></span><button id="debug-toggle" class="icon" title="debug" aria-label="debug">⋯</button></header>
+    <header id="top"><span id="pwd" class="pwd" hidden><svg class="ic" aria-hidden="true"><use href="#i-terminal"/></svg><span class="k">PWD:</span><span id="pwd-path"></span></span><span id="pwd-sep" class="sep" hidden>/</span><div id="title" class="grow"></div><span id="chip-team" class="pill chip" hidden></span><span id="chip-vhdb" class="pill chip" hidden></span><span id="acct-pill" class="pill acct" hidden></span><span id="perm-pill" class="pill perm" hidden></span><select id="chat-model" class="pill" hidden aria-label="model"></select><button id="chat-rename" type="button" class="pill" hidden></button><button id="chat-delete" type="button" class="pill danger" hidden></button><span id="pill" class="pill"></span><span id="turn-pill" class="pill" hidden></span><button id="term-toggle" class="icon ghost" type="button" hidden data-i-title="termOpen" aria-label="terminal"><svg class="ic" aria-hidden="true"><use href="#i-terminal"/></svg></button><button id="debug-toggle" class="icon ghost" type="button" title="debug" aria-label="debug"><svg class="ic" aria-hidden="true"><use href="#i-more"/></svg></button></header>
     <div id="prov-banner" class="note-card" hidden></div>
+    <div id="wt-banner" class="note-card" hidden>
+      <div id="wt-line"></div>
+      <div class="row"><button id="wt-check" type="button" data-i="wtCheck"></button><button id="wt-remove" type="button" data-i="wtRemoveBtn"></button></div>
+      <div id="wt-panel" hidden></div>
+    </div>
     <div id="messages" aria-live="polite"><div id="empty" class="empty" data-i="empty"></div></div>
     <div id="debug" hidden></div>
+    <section id="editor">
+      <div id="ed-head">
+        <span id="ed-path" class="grow"></span>
+        <span id="ed-dirty" class="pill" hidden data-i="fsDirty"></span>
+        <button id="ed-reload" type="button" data-i="fsReload"></button>
+        <button id="ed-save" type="button" class="primary" data-i="fsSave"></button>
+        <button id="ed-back" type="button" data-i="fsBack"></button>
+      </div>
+      <div id="ed-note" class="note-card" hidden></div>
+      <div id="ed-body"><pre id="ed-gutter" aria-hidden="true">1</pre><textarea id="ed-text" wrap="off" spellcheck="false" autocomplete="off" aria-label="editor"></textarea></div>
+    </section>
+    <section id="term">
+      <div id="term-head">
+        <span id="term-title" class="grow"></span>
+        <button id="term-int" type="button" data-i="termInt"></button>
+        <button id="term-eof" type="button" data-i="termEof"></button>
+        <button id="term-hide" type="button" data-i="termHide"></button>
+        <button id="term-close" type="button" class="danger" data-i="termClose"></button>
+      </div>
+      <div id="term-note" class="note-card" hidden></div>
+      <pre id="term-out" tabindex="0" aria-label="terminal output" aria-live="off"></pre>
+      <form id="term-form"><span class="muted" aria-hidden="true">$</span><input id="term-in" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="command"><button type="submit" class="primary" data-i="termSend"></button></form>
+    </section>
     <form id="composer">
       <div id="chips"></div>
-      <div class="box">
-        <button type="button" id="attach" class="icon" data-i-title="attach" aria-label="attach">＋</button>
-        <textarea id="input" rows="1" data-i-ph="placeholder"></textarea>
-        <button type="button" id="stop" class="danger" hidden data-i="stop"></button>
-        <button type="submit" id="send" class="primary" data-i="send"></button>
+      <div class="card">
+        <div class="box"><textarea id="input" rows="2" data-i-ph="placeholder"></textarea></div>
+        <div class="bar">
+          <button type="button" id="attach" data-i-title="attach" aria-label="attach"><svg class="ic" aria-hidden="true"><use href="#i-image"/></svg><span data-i="cvAttach"></span></button>
+          <span id="model-chip" class="chipm" hidden></span>
+          <span class="grow"></span>
+          <span class="hint" data-i="cvHint"></span>
+          <button type="button" id="stop" class="danger" hidden><svg class="ic" aria-hidden="true"><use href="#i-stop"/></svg><span data-i="stop"></span></button>
+          <button type="submit" id="send" class="primary"><span data-i="send"></span><svg class="ic" aria-hidden="true"><use href="#i-send"/></svg></button>
+        </div>
       </div>
       <input id="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
     </form>
@@ -156,6 +225,7 @@
 <dialog id="perm"></dialog>
 <div id="toasts" aria-live="polite"></div>
 <dialog id="sc-run"><div id="sc-run-body"></div><div class="actions"><button id="sc-copy" type="button" data-i="scCopy"></button><button id="sc-run-close" type="button" class="primary" data-i="scClose"></button></div></dialog>
+<dialog id="fs-dlg"></dialog>
 <dialog id="zoom"><img id="zoom-img" alt=""></dialog>
 <script type="module" src="/app.js"></script>
 </body>

@@ -5,17 +5,19 @@ mod clap_free {
         pub port: u16,
         pub data: Option<std::path::PathBuf>,
         pub claude: Option<String>,
+        pub terminal: bool,
     }
 
     pub fn parse() -> Result<Args, String> {
-        let mut args = Args { port: 0, data: None, claude: None };
+        let mut args = Args { port: 0, data: None, claude: None, terminal: false };
         let mut it = std::env::args().skip(1);
         while let Some(flag) = it.next() {
             match flag.as_str() {
                 "--port" => args.port = it.next().and_then(|v| v.parse().ok()).ok_or("--port needs a number")?,
                 "--data" => args.data = Some(it.next().ok_or("--data needs a folder")?.into()),
                 "--claude" => args.claude = Some(it.next().ok_or("--claude needs a program")?),
-                "-h" | "--help" => return Err("usage: tenrec [--port N] [--data FOLDER] [--claude PROGRAM]".into()),
+                "--terminal" => args.terminal = true,
+                "-h" | "--help" => return Err("usage: tenrec [--port N] [--data FOLDER] [--claude PROGRAM] [--terminal]".into()),
                 other => return Err(format!("unknown option {other}")),
             }
         }
@@ -38,23 +40,58 @@ async fn main() {
         }
     };
     let config = tenrec::server::Config { port: args.port, data_dir: args.data.unwrap_or_else(tenrec::registry::data_dir), bin: args.claude, mcp_bin: std::env::current_exe().ok(), extract: Default::default(), propose: Default::default(), sched: Default::default() };
-    match tenrec::server::start(config).await {
+    let terminal = args.terminal || std::env::var("TENREC_TERMINAL").map(|v| v == "1").unwrap_or(false);
+    #[cfg(windows)]
+    {
+        if terminal {
+            eprintln!("the terminal is not available on Windows");
+            std::process::exit(2);
+        }
+        // No mode bits are set on Windows: the data folder relies on the default access list of the user's profile.
+        let inside = tenrec::platform::home_dir().is_some_and(|profile| tenrec::platform::data_dir_in_profile(&config.data_dir, &profile));
+        if !inside {
+            eprintln!("the data folder must be inside your user profile folder on Windows (use --data with a folder there)");
+            std::process::exit(2);
+        }
+    }
+    match tenrec::server::start_with(config, terminal).await {
         Ok(running) => {
             println!("Tenrec is running. Open:\n  {}", running.url());
             let tenrec::server::Running { registry, task, .. } = running;
-            let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("could not listen for SIGTERM");
             tokio::select! {
                 _ = task => {}
                 _ = tokio::signal::ctrl_c() => {}
-                _ = terminate.recv() => {}
+                _ = termination() => {}
             }
             // Leave no claude, and nothing it started, behind.
             registry.kill_all();
+            tenrec::server::term_ops::kill_all();
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
         Err(error) => {
             eprintln!("could not start: {error:#}");
             std::process::exit(1);
         }
+    }
+}
+
+/// Resolves when the system asks this program to end: SIGTERM, or on Windows the console being closed.
+#[cfg(unix)]
+async fn termination() {
+    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        Ok(mut terminate) => {
+            terminate.recv().await;
+        }
+        Err(_) => std::future::pending().await,
+    }
+}
+
+#[cfg(windows)]
+async fn termination() {
+    match tokio::signal::windows::ctrl_close() {
+        Ok(mut close) => {
+            close.recv().await;
+        }
+        Err(_) => std::future::pending().await,
     }
 }

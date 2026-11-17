@@ -18,6 +18,16 @@ path = "src/bin/main.rs"
 name = "fake-claude"
 path = "src/bin/fake_claude.rs"
 
+# The native desktop app (Slint). Built with `--features desktop`; the library and its tests do not need Slint.
+[[bin]]
+name = "tenrec-desktop"
+path = "src/bin/desktop/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = []
+desktop = ["dep:slint", "dep:slint-build", "dep:arboard", "dep:rfd", "dep:image"]
+
 [dependencies]
 anyhow = "1"
 axum = { version = "0.7", features = ["ws"] }
@@ -32,6 +42,20 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+pulldown-cmark = { version = "0.13.6", default-features = false }
+sys-locale = "0.3.2"
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-software", "accessibility", "raw-window-handle-06"], optional = true }
+arboard = { version = "3.7.0", default-features = false, features = ["image-data"], optional = true }
+# Thumbnails of attached images and the PNG of a pasted one; the same pure-Rust crate Slint already uses.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"], optional = true }
+# The native folder picker: COM IFileOpenDialog on Windows, the desktop portal on Linux (no GTK).
+rfd = { version = "=0.18.0", default-features = false, features = ["xdg-portal"], optional = true }
+
+[build-dependencies]
+slint-build = { version = "=1.18.1", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tempfile = "3"
