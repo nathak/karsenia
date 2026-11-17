@@ -16,15 +16,19 @@ pub fn home_dir() -> Option<PathBuf> {
 /// A canonical path in the form other programs take. On Windows `canonicalize` answers `\\?\C:\...`; git and the shell want
 /// `C:\...`, so the prefix is left out for a plain drive path that fits the usual length (a UNC or longer path keeps it).
 pub fn canon(path: &Path) -> std::io::Result<PathBuf> {
-    let real = path.canonicalize()?;
+    Ok(plain(path.canonicalize()?))
+}
+
+/// An already canonical path in the form other programs take (see `canon`); unchanged except on Windows.
+pub fn plain(real: PathBuf) -> PathBuf {
     #[cfg(windows)]
     if let Some(rest) = real.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
         let bytes = rest.as_bytes();
         if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\' && rest.len() < 260 {
-            return Ok(PathBuf::from(rest));
+            return PathBuf::from(rest);
         }
     }
-    Ok(real)
+    real
 }
 
 /// Whether a candidate for the `claude` program is one this build will run. On Windows only a real executable is run:

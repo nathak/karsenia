@@ -108,7 +108,8 @@ pub fn check_dir(path: &Path, parent: &Path, default_dir: Option<&Path>) -> Resu
             return Err("this account's folder is the default account's folder".into());
         }
     }
-    Ok(real)
+    // The folder goes to `claude` (and to git, for a plug-in install) as CLAUDE_CONFIG_DIR; they cannot use the Windows `\\?\` form.
+    Ok(crate::platform::plain(real))
 }
 
 /// Makes the two folders of an account (private), under parents that are private too.
@@ -306,7 +307,7 @@ pub async fn status(bin: &str, dir: &Path, env: &EnvPlan, expect: Option<&Path>)
     let (bytes, _) = run_auth(bin, dir, env, ["auth", "status"]).await.map_err(StatusError::Failed)?;
     let status = parse_status(&bytes).map_err(StatusError::Failed)?;
     if let Some(expect) = expect {
-        let said = status.config_dir.as_deref().map(PathBuf::from).and_then(|p| p.canonicalize().ok());
+        let said = status.config_dir.as_deref().map(PathBuf::from).and_then(|p| crate::platform::canon(&p).ok());
         if said.as_deref() != Some(expect) {
             return Err(StatusError::Redirected);
         }
