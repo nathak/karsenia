@@ -20,6 +20,7 @@ mod usage;
 mod notify;
 mod palette;
 mod term;
+mod tray;
 mod vhdb;
 mod wt;
 mod zoom;
@@ -62,6 +63,9 @@ struct App {
 thread_local! {
     // The UI thread's copy of the rows on screen, to change only what changed.
     static SHOWN: RefCell<Vec<Row>> = const { RefCell::new(Vec::new()) };
+    // Set when a card or a run of steps is opened or closed: the next update of the rows does not carry the list to its end (the row
+    // that was clicked must stay where it is, however near the end it is).
+    static NO_FOLLOW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     // Every chat the host listed with what the account badges need; the list on screen is the part of it under the account shown.
     // The project folders of the chat list that are closed.
     static COLLAPSED: RefCell<std::collections::HashSet<String>> = RefCell::new(std::collections::HashSet::new());
@@ -114,7 +118,13 @@ fn main() {
     }
     // One app per data folder: two of them would answer the same chats and sweep each other's containers. The lock is the system's,
     // so it goes away with the process, however it ends.
-    let _single = single_instance(&data).unwrap_or_else(|| fatal(&tr(lang, "already_running")));
+    let _single = single_instance(&data).unwrap_or_else(|| {
+        // A window that was closed to the tray is brought back by the one that runs; only when there is none to ask is the person told.
+        if tray::signal_running(&data) {
+            std::process::exit(0);
+        }
+        fatal(&tr(lang, "already_running"))
+    });
     let log = start_log(&data);
     let config = tenrec::server::Config { port: 0, data_dir: data.clone(), bin: claude, mcp_bin: std::env::current_exe().ok(), extract: Default::default(), propose: Default::default(), sched: Default::default() };
     let registry = match tenrec::server::start_core(config) {
@@ -192,25 +202,49 @@ fn main() {
         }
     });
 
-    // Closing the window with unsaved edits asks first.
+    // The tray icon: closing the window hides it and the app goes on (see `tray`).
+    let tray = tray::start(
+        &app.data,
+        tray::Labels { open: tr(lang, "tray_open"), quit: tr(lang, "tray_quit"), tip: tr(lang, "tray_tip") },
+        Box::new({
+            let (weak, a) = (ui.as_weak(), app.clone());
+            move |cmd| {
+                let a = a.clone();
+                let _ = weak.upgrade_in_event_loop(move |ui| on_tray(&ui, &a, cmd));
+            }
+        }),
+    );
+    // Closing the window: with the icon it only hides (what was typed stays); without it the app ends, and unsaved edits are asked about first.
     {
         let (a, weak) = (app.clone(), ui.as_weak());
         ui.window().on_close_requested(move || {
-            let Some(ui) = weak.upgrade() else { return slint::CloseRequestResponse::HideWindow };
+            if tray::present() {
+                return slint::CloseRequestResponse::HideWindow;
+            }
+            let Some(ui) = weak.upgrade() else {
+                quit_app();
+                return slint::CloseRequestResponse::HideWindow;
+            };
             if !files::has_unsaved(&ui) {
+                quit_app();
                 return slint::CloseRequestResponse::HideWindow;
             }
             let w = ui.as_weak();
             panels::ask(&ui, tr(a.lang, "fs_dirty_discard"), tr(a.lang, "fs_discard"), true, Box::new(move |ok| {
                 if let (true, Some(ui)) = (ok, w.upgrade()) {
                     let _ = ui.hide();
+                    quit_app();
                 }
             }));
             slint::CloseRequestResponse::KeepWindowShown
         });
     }
     let _ = log;
-    let result = ui.run();
+    // With the icon the loop goes on while the window is hidden, until `quit_app`.
+    let result = if tray.is_some() { ui.show().and_then(|()| slint::run_event_loop_until_quit()) } else { ui.run() };
+    // Nothing is left on the screen while the rest is cleaned up: the icon goes, and the window (this loop does not hide it as `run` does).
+    drop(tray);
+    let _ = ui.hide();
     tracing::info!("window closed");
     // Leave no claude, and nothing it started, behind (nor a shell of the terminal drawer).
     registry.kill_all();
@@ -274,6 +308,32 @@ fn single_instance(data: &std::path::Path) -> Option<std::fs::File> {
         Ok(()) => Some(file),
         Err(TryLockError::WouldBlock) => None,
         Err(TryLockError::Error(_)) => Some(file),
+    }
+}
+
+/// Ends the event loop (and so the app).
+fn quit_app() {
+    let _ = slint::quit_event_loop();
+}
+
+/// What the tray icon asks for, on the UI thread.
+fn on_tray(ui: &AppWindow, app: &Arc<App>, cmd: tray::TrayCmd) {
+    match cmd {
+        tray::TrayCmd::Open => tray::raise(ui),
+        tray::TrayCmd::EndSession => quit_app(),
+        tray::TrayCmd::Quit => {
+            if !files::has_unsaved(ui) {
+                quit_app();
+                return;
+            }
+            // Edits that are not saved: the window comes back and asks.
+            tray::raise(ui);
+            panels::ask(ui, tr(app.lang, "fs_dirty_discard"), tr(app.lang, "fs_discard"), true, Box::new(|ok| {
+                if ok {
+                    quit_app();
+                }
+            }));
+        }
     }
 }
 
@@ -623,6 +683,7 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
     let a = app.clone();
     ui.on_toggle(move |key| {
         a.current.lock().expect("current").transcript.toggle(&key);
+        NO_FOLLOW.with(|f| f.set(true));
         push(&a);
     });
 
@@ -987,7 +1048,8 @@ fn push(app: &Arc<App>) {
         if a.current.lock().expect("current").epoch != epoch {
             return;
         }
-        let follow = ui.get_at_bottom() || STICK.with(|s| s.get()) || SHOWN.with(|s| s.borrow().is_empty());
+        let hold = NO_FOLLOW.with(|f| f.replace(false));
+        let follow = !hold && (ui.get_at_bottom() || STICK.with(|s| s.get()) || SHOWN.with(|s| s.borrow().is_empty()));
         apply_rows(rows, &a);
         let state = if head.state.is_empty() { "idle".to_owned() } else { head.state.clone() };
         ui.set_state(state.clone().into());
@@ -1178,8 +1240,12 @@ fn apply_rows(new: Vec<Row>, app: &Arc<App>) {
             let mut shown = s.borrow_mut();
             let same = shown.iter().zip(new.iter()).take_while(|(a, b)| a == b).count();
             let common = shown.len().min(new.len());
+            // Only the rows that differ, by place: a run of steps that is open changes its first row at each event, and what follows it
+            // (rows that did not change) is not drawn again.
             for (i, row) in new.iter().enumerate().take(common).skip(same) {
-                model.set_row_data(i, to_slint(row));
+                if shown[i] != *row {
+                    model.set_row_data(i, to_slint(row));
+                }
             }
             if new.len() > shown.len() {
                 for row in &new[shown.len()..] {

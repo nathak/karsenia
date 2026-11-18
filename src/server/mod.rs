@@ -135,8 +135,9 @@ macro_rules! asset {
     };
 }
 
-const ASSETS: [(&str, &str, &[u8]); 12] = [
+const ASSETS: [(&str, &str, &[u8]); 13] = [
     asset!("index.html", "text/html; charset=utf-8"),
+    asset!("favicon.png", "image/png"),
     asset!("app.js", "text/javascript; charset=utf-8"),
     asset!("theme.css", "text/css; charset=utf-8"),
     asset!("util.js", "text/javascript; charset=utf-8"),
