@@ -4834,6 +4834,7 @@ dependencies = [
  "image",
  "libc",
  "pulldown-cmark",
+ "raw-window-handle",
  "regex",
  "reqwest",
  "rfd",

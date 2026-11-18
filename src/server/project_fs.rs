@@ -57,9 +57,10 @@ pub enum Guard {
     Block(&'static str),
 }
 
-/// What a save to this project-relative path means (ASCII case ignored, every part of the path looked at).
+/// What a save to this project-relative path means (case folded, every part of the path looked at).
 pub fn guard(rel: &Path) -> Guard {
-    let parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase()).collect();
+    // Folded the way a file system that ignores case does (`.gıt` and `.huſky` are the same names as `.git` and `.husky` there).
+    let parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().to_uppercase().to_lowercase()).collect();
     if parts.iter().any(|p| p == ".git") {
         return Guard::Block("a file inside .git can make git run a program (hooks, core.hooksPath, core.fsmonitor); use git itself");
     }
@@ -139,12 +140,15 @@ fn trash_origin(rel: &Path, real: &Path, name: &str) -> Option<String> {
     }
     let mut bytes = Vec::new();
     file.take(4097).read_to_end(&mut bytes).ok()?;
-    String::from_utf8(bytes).ok().filter(|f| rel_path(f).is_ok_and(|r| !r.as_os_str().is_empty() && !r.starts_with(TRASH)))
+    parse_record(bytes)
 }
 
-#[cfg(not(unix))]
-fn trash_origin(_rel: &Path, _real: &Path, _name: &str) -> Option<String> {
-    None
+#[cfg(windows)]
+fn trash_origin(rel: &Path, real: &Path, name: &str) -> Option<String> {
+    if rel != Path::new(TRASH) {
+        return None;
+    }
+    win::read_record(&real.join(".from"), trash_id(name)?).and_then(parse_record)
 }
 
 fn canonical_root(project: &Path) -> Result<PathBuf, String> {
@@ -353,7 +357,6 @@ fn read_bytes(t: &Target) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-#[cfg(unix)]
 fn decode(bytes: Vec<u8>) -> Result<String, String> {
     if bytes.contains(&0) {
         return Err("the file is binary, not text".to_owned());
@@ -401,7 +404,6 @@ pub enum Saved {
 
 /// One save at a time in this process: the last version check and the replacing rename are not one step, and two saves of the
 /// same file from two connections could otherwise both pass the check.
-#[cfg(unix)]
 static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(unix)]
@@ -414,12 +416,7 @@ pub fn write_text(project: &Path, rel_text: &str, text: &str, base: &str, confir
 #[cfg(unix)]
 pub fn write_text_in(root: &Path, rel_text: &str, text: &str, base: &str, confirm: bool) -> Result<Saved, String> {
     let _one_at_a_time = SAVING.lock().unwrap_or_else(|e| e.into_inner());
-    if text.len() > MAX_TEXT {
-        return Err(format!("the text is bigger than {} KiB", MAX_TEXT / 1024));
-    }
-    if text.contains('\0') {
-        return Err("the text holds a NUL character".to_owned());
-    }
+    text_ok(text)?;
     let t = target(root, rel_text)?;
     match guard(&t.rel) {
         Guard::Block(why) => return Err(format!("not saved: {why}")),
@@ -519,8 +516,75 @@ pub fn new_name(name: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The text of a save: not too big, no NUL.
+fn text_ok(text: &str) -> Result<(), String> {
+    if text.len() > MAX_TEXT {
+        return Err(format!("the text is bigger than {} KiB", MAX_TEXT / 1024));
+    }
+    if text.contains('\0') {
+        return Err("the text holds a NUL character".to_owned());
+    }
+    Ok(())
+}
+
+/// The place a trash entry came from, as written in its record (`None` when it is not usable): a path of the project, not in the trash.
+fn parse_record(bytes: Vec<u8>) -> Option<String> {
+    String::from_utf8(bytes).ok().filter(|f| rel_path(f).is_ok_and(|r| !r.as_os_str().is_empty() && !r.starts_with(TRASH)))
+}
+
+/// The name of an entry in the trash: `<id>-<name>`, cut to 255 bytes and not ending in a dot or a space (Windows refuses such names).
+fn trash_entry_name(id: &str, original: &str) -> String {
+    let mut entry = format!("{id}-{original}");
+    while entry.len() > 255 || entry.ends_with(['.', ' ']) {
+        entry.pop();
+    }
+    entry
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DeleteHow {
+    ToTrash,
+    ForGood,
+}
+
+/// What a delete of the entry at `real` (the place it really is) means, when the person sent `sent`.
+fn delete_how(sent: &Path, real: &Path, is_file: bool, readonly: bool) -> Result<DeleteHow, String> {
+    let for_good = real.starts_with(TRASH);
+    if real == Path::new(TRASH) {
+        return Err("the trash itself is not deleted here; use Empty trash (nothing was deleted)".to_owned());
+    }
+    // The person was asked in the words of the path they sent: a name that reaches the trash only through a link must not be
+    // deleted for good under the words "move to the trash".
+    if for_good && !sent.starts_with(TRASH) {
+        return Err("it is inside the trash through a link; delete it from the trash itself (nothing was deleted)".to_owned());
+    }
+    if for_good && is_file && readonly {
+        return Err("the file is read-only".to_owned());
+    }
+    Ok(if for_good { DeleteHow::ForGood } else { DeleteHow::ToTrash })
+}
+
+/// Whether the entry at `from` may be moved to `to` (the two real places), when something `taken` is already at `to`.
+fn move_check(from: &Path, is_dir: bool, to: &Path, taken: bool) -> Result<(), String> {
+    if taken {
+        return Err("that name already exists".to_owned());
+    }
+    // A folder cannot go into itself or into what is inside it; both paths come from the open folders, not from the text sent.
+    if is_dir && to.parent().is_some_and(|d| d.starts_with(from)) {
+        return Err("a folder cannot be moved into itself or a folder inside it".to_owned());
+    }
+    Ok(())
+}
+
+/// Whether the entry `name` at `real` can be deleted for good: directly in the trash, not the trash's own records.
+fn purge_name_ok(real: &Path, name: &str, exists: bool) -> Result<(), String> {
+    if real.parent() != Some(Path::new(TRASH)) || name == ".from" || name == ".gitignore" || !exists {
+        return Err(format!("only an entry directly in {TRASH} can be deleted for good"));
+    }
+    Ok(())
+}
+
 /// What `guard` says for a change at `rel`: refused, or asks for a confirmation unless `confirm` is given.
-#[cfg(unix)]
 fn check_change(rel: &Path, confirm: bool) -> Result<Option<&'static str>, String> {
     match guard(rel) {
         Guard::Block(why) => Err(format!("not changed: {why}")),
@@ -624,25 +688,14 @@ pub fn delete_in(root: &Path, rel_text: &str, base: Option<&str>, confirm: bool)
         return Ok(Changed::NeedsConfirm(why));
     }
     let kind = changeable(&st)?;
-    let for_good = p.rel.starts_with(TRASH);
-    if p.rel == Path::new(TRASH) {
-        return Err("the trash itself is not deleted here; use Empty trash (nothing was deleted)".to_owned());
-    }
-    // The person was asked in the words of the path they sent: a name that reaches the trash only through a link must not be
-    // deleted for good under the words "move to the trash".
-    if for_good && !rel_path(rel_text).map_err(str::to_owned)?.starts_with(TRASH) {
-        return Err("it is inside the trash through a link; delete it from the trash itself (nothing was deleted)".to_owned());
-    }
-    if for_good && kind == libc::S_IFREG && st.st_mode & 0o200 == 0 {
-        return Err("the file is read-only".to_owned());
-    }
+    let how = delete_how(&rel_path(rel_text).map_err(str::to_owned)?, &p.rel, kind == libc::S_IFREG, st.st_mode & 0o200 == 0)?;
     let t = Target { dir: p.dir, name: p.name, rel: p.rel, st };
     if let (Some(base), true) = (base, kind == libc::S_IFREG) {
         if version(&read_bytes(&t)?) != base {
             return Err("the file changed since it was opened, so it was not deleted".to_owned());
         }
     }
-    if !for_good {
+    if how == DeleteHow::ToTrash {
         return trash_entry(root, &t, kind);
     }
     // Looked at once more just before: what is unlinked is what was checked. (A swap in the instant between this look and the call
@@ -694,7 +747,6 @@ fn trash_dir(parent: &OwnedFd, name: &str) -> Result<OwnedFd, String> {
     Ok(OwnedFd::from(file))
 }
 
-#[cfg(unix)]
 /// The id a trash entry carries in its name: `<unix ms>-<8 hex>` before the original name.
 fn trash_id(name: &str) -> Option<&str> {
     let (ms, rest) = name.split_once('-')?;
@@ -736,10 +788,7 @@ fn trash_entry(root: &Path, t: &Target, kind: libc::mode_t) -> Result<Changed, S
     drop(file);
     fsync_dir(&froms);
     let original = String::from_utf8_lossy(t.name.as_bytes()).into_owned();
-    let mut entry = format!("{id}-{original}");
-    while entry.len() > 255 {
-        entry.pop();
-    }
+    let entry = trash_entry_name(&id, &original);
     let entry_name = c_name(std::ffi::OsStr::new(&entry))?;
     let outcome = stat_at(&t.dir, &t.name).and_then(|again| {
         if again.st_ino != t.st.st_ino || again.st_dev != t.st.st_dev || again.st_mode & libc::S_IFMT != kind {
@@ -768,9 +817,7 @@ fn recorded_from(froms: &OwnedFd, id: &str) -> Option<String> {
     }
     let mut bytes = Vec::new();
     file.take(4097).read_to_end(&mut bytes).ok()?;
-    let from = String::from_utf8(bytes).ok()?;
-    let rel = rel_path(&from).ok()?;
-    (!rel.as_os_str().is_empty() && !rel.starts_with(TRASH)).then_some(from)
+    parse_record(bytes)
 }
 
 #[cfg(unix)]
@@ -810,7 +857,6 @@ pub fn restore_in_to(root: &Path, rel_text: &str, confirm: bool) -> Result<(Chan
 
 /// The most entries (files, links and folders, counted all together) one purge walks through, and the deepest folder it goes into.
 pub const MAX_PURGE: usize = if cfg!(test) { 300 } else { 100_000 };
-#[cfg(unix)]
 const MAX_DEPTH: usize = 64;
 
 /// What `purge_in` and `empty_trash_in` answer: what a delete would reach (asked without `confirm`), or what was done.
@@ -820,7 +866,6 @@ pub enum Purged {
     Done { removed: usize, left: usize },
 }
 
-#[cfg(unix)]
 #[derive(Default)]
 struct Tally {
     items: usize,
@@ -829,7 +874,6 @@ struct Tally {
     left: usize,
 }
 
-#[cfg(unix)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Walk {
     /// Only counts; refuses what a delete would not do whole (a mount point, too deep, too many).
@@ -1009,9 +1053,7 @@ pub fn purge_in(root: &Path, rel_text: &str, confirm: bool) -> Result<Purged, St
     let p = place(root, rel_text)?;
     // The same path as it really is: a link that leads into the trash is not a way to delete for good under other words.
     let name = String::from_utf8_lossy(p.name.as_bytes()).into_owned();
-    if p.rel.parent() != Some(Path::new(TRASH)) || name == ".from" || name == ".gitignore" || p.st.is_none() {
-        return Err(format!("only an entry directly in {TRASH} can be deleted for good"));
-    }
+    purge_name_ok(&p.rel, &name, p.st.is_some())?;
     let trash = open_trash(root)?;
     let top_dev = fstat_fd(&trash).map(|st| st.st_dev).ok_or("the trash cannot be read")?;
     let mut count = Tally::default();
@@ -1095,13 +1137,7 @@ fn move_place(p: &Place, st: &libc::stat, q: &Place, confirm: bool) -> Result<Ch
     let from_ask = check_change(&p.rel, confirm)?;
     let to_ask = check_change(&q.rel, confirm)?;
     let kind = changeable(st)?;
-    if q.st.is_some() {
-        return Err("that name already exists".to_owned());
-    }
-    // A folder cannot go into itself or into what is inside it; both paths come from the open folders, not from the text sent.
-    if kind == libc::S_IFDIR && q.rel.parent().is_some_and(|d| d.starts_with(&p.rel)) {
-        return Err("a folder cannot be moved into itself or a folder inside it".to_owned());
-    }
+    move_check(&p.rel, kind == libc::S_IFDIR, &q.rel, q.st.is_some())?;
     // Asked last: a move that cannot be done is refused before the person is asked about it.
     if let Some(why) = from_ask.or(to_ask) {
         return Ok(Changed::NeedsConfirm(why));
@@ -1146,67 +1182,76 @@ fn renameat2_noreplace(from_dir: &OwnedFd, from: &CString, to_dir: &OwnedFd, to:
     })
 }
 
+#[cfg(windows)]
+mod win;
+#[cfg(windows)]
+pub use win::{create_in, delete_in, empty_trash_in, purge_in, rename_in, restore_in, restore_in_to, write_text, write_text_in};
+
+/// Windows: a name that is not a plain one (a `\`, `:`, wildcard, trailing dot or space, a device name) is refused for every operation.
+/// Reading goes by a path resolved through links that must still lie inside the project, to a regular file within the size limit; what
+/// is changed is done through open handles (see `win`).
+#[cfg_attr(unix, allow(dead_code))] // read on Windows; the test runs it everywhere
+fn win_part_ok(part: &str) -> bool {
+    const BAD: &[char] = &['\\', ':', '*', '?', '"', '<', '>', '|'];
+    if part.chars().any(|c| c.is_control() || BAD.contains(&c)) || part.ends_with('.') || part.ends_with(' ') {
+        return false;
+    }
+    let stem = part.split('.').next().unwrap_or("").trim_end().to_uppercase();
+    let numbered = (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.chars().count() == 4 && stem.chars().nth(3).is_some_and(|c| c.is_ascii_digit() || matches!(c, '\u{b9}' | '\u{b2}' | '\u{b3}'));
+    !(matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") || numbered)
+}
+
+/// The bytes of a plain file of the project and the project-relative place it really is at (`/` between the parts).
 #[cfg(not(unix))]
-pub fn create_in(_root: &Path, _rel_text: &str, _kind: &str, _confirm: bool) -> Result<Changed, String> {
-    Err("the editor is not available on Windows".to_owned())
+fn read_checked(root: &Path, rel_text: &str) -> Result<(Vec<u8>, String), String> {
+    use std::io::Read as _;
+    let rel = rel_path(rel_text).map_err(str::to_owned)?;
+    if rel.as_os_str().is_empty() || rel_text.split('/').any(|p| !win_part_ok(p)) {
+        return Err("that is not a file name this editor opens on Windows".to_owned());
+    }
+    let root = root.to_path_buf();
+    let real = inside(&root, &rel)?;
+    if real == root {
+        return Err("that is the project folder, not a file".to_owned());
+    }
+    let file = std::fs::File::open(&real).map_err(|_| "the file cannot be opened".to_owned())?;
+    if !file.metadata().map_err(|_| "the file cannot be read".to_owned())?.is_file() {
+        return Err("not a plain file".to_owned());
+    }
+    // A link put in the way after the first check: the path must still lead to the same place inside the project.
+    if real.canonicalize().ok().as_deref() != Some(real.as_path()) {
+        return Err("the file was replaced while it was being opened".to_owned());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_TEXT as u64 + 1).read_to_end(&mut bytes).map_err(|_| "the file cannot be read".to_owned())?;
+    if bytes.len() > MAX_TEXT {
+        return Err(format!("the file is bigger than {} KiB, which the editor does not open", MAX_TEXT / 1024));
+    }
+    let shown = real.strip_prefix(&root).map_err(|_| "that path leaves the project folder".to_owned())?.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+    Ok((bytes, shown))
 }
 
 #[cfg(not(unix))]
-pub fn delete_in(_root: &Path, _rel_text: &str, _base: Option<&str>, _confirm: bool) -> Result<Changed, String> {
-    Err("the editor is not available on Windows".to_owned())
+pub fn read_text(project: &Path, rel_text: &str) -> Result<TextFile, String> {
+    read_text_in(&canonical_root(project)?, rel_text)
 }
 
 #[cfg(not(unix))]
-pub fn purge_in(_root: &Path, _rel_text: &str, _confirm: bool) -> Result<Purged, String> {
-    Err("the editor is not available on Windows".to_owned())
+pub fn read_text_in(root: &Path, rel_text: &str) -> Result<TextFile, String> {
+    let (bytes, real) = read_checked(root, rel_text)?;
+    let version = version(&bytes);
+    let text = decode(bytes)?;
+    let (guard, guard_kind) = match guard(Path::new(&real)) {
+        Guard::Free => (None, ""),
+        Guard::Confirm(why) => (Some(why), "confirm"),
+        Guard::Block(why) => (Some(why), "block"),
+    };
+    Ok(TextFile { eol: eol(&text), version, text, guard, guard_kind, real })
 }
 
 #[cfg(not(unix))]
-pub fn empty_trash_in(_root: &Path, _rel_text: &str, _confirm: bool) -> Result<Purged, String> {
-    Err("the editor is not available on Windows".to_owned())
-}
-
-#[cfg(not(unix))]
-pub fn restore_in_to(_root: &Path, _rel_text: &str, _confirm: bool) -> Result<(Changed, Option<String>), String> {
-    Err("the editor is not available on Windows".to_owned())
-}
-
-#[cfg(not(unix))]
-pub fn restore_in(_root: &Path, _rel_text: &str, _confirm: bool) -> Result<Changed, String> {
-    Err("the editor is not available on Windows".to_owned())
-}
-
-#[cfg(not(unix))]
-pub fn rename_in(_root: &Path, _rel_text: &str, _to_text: &str, _confirm: bool) -> Result<Changed, String> {
-    Err("the editor is not available on Windows".to_owned())
-}
-
-/// Windows: the editor does not open or save files. A link, a junction, a name that differs only in case or a trailing dot, an
-/// alternate data stream or a device name cannot be told apart from the project's own files with the checks used on Linux, and a
-/// weak copy of them would be worse than none.
-#[cfg(not(unix))]
-pub fn read_text(_project: &Path, _rel_text: &str) -> Result<TextFile, String> {
-    Err("the editor is not available on Windows".to_owned())
-}
-
-#[cfg(not(unix))]
-pub fn write_text(_project: &Path, _rel_text: &str, _text: &str, _base: &str, _confirm: bool) -> Result<Saved, String> {
-    Err("the editor is not available on Windows".to_owned())
-}
-
-#[cfg(not(unix))]
-pub fn read_text_in(_root: &Path, _rel_text: &str) -> Result<TextFile, String> {
-    Err("the editor is not available on Windows".to_owned())
-}
-
-#[cfg(not(unix))]
-pub fn version_in(_root: &Path, _rel_text: &str) -> Result<String, String> {
-    Err("the editor is not available on Windows".to_owned())
-}
-
-#[cfg(not(unix))]
-pub fn write_text_in(_root: &Path, _rel_text: &str, _text: &str, _base: &str, _confirm: bool) -> Result<Saved, String> {
-    Err("the editor is not available on Windows".to_owned())
+pub fn version_in(root: &Path, rel_text: &str) -> Result<String, String> {
+    Ok(version(&read_checked(root, rel_text)?.0))
 }
 
 #[cfg(all(test, unix))]
@@ -1223,6 +1268,16 @@ mod tests {
 
     fn base_of(p: &Path, rel: &str) -> String {
         read_text(p, rel).unwrap().version
+    }
+
+    #[test]
+    fn windows_names_that_are_not_plain_files_are_refused() {
+        for ok in ["a.txt", "src", "my file.rs", ".gitignore", "console.log", "COM10", "한글.md"] {
+            assert!(win_part_ok(ok), "{ok}");
+        }
+        for bad in ["a:b", "a:stream", "C:", "a\\b", "a*", "a?", "a|b", "<a>", "a\"b", "a.", "a ", "CON", "con.txt", "Nul", "aux.", "COM1", "lpt9.log", "COM\u{b9}", "CONIN$", "a\u{1}b"] {
+            assert!(!win_part_ok(bad), "{bad:?}");
+        }
     }
 
     #[test]
