@@ -161,25 +161,13 @@ export component TeamPage inherits Rectangle {
             if Team.seen-stale: WText { text: T.tr("tm_swb_stale"); size: 12px; fg: Theme.primary-soft; }
             if Team.team-note != "": WText { text: Team.team-note; size: 12px; fg: Theme.primary-soft; }
             if !Team.show: EmptyState { text: T.tr("tm_not_wired"); }
-            // SmartWorkbench's own commands, sent to this chat as typed (goals and pins have no command form: they are edited in its panel).
+            // SmartWorkbench's own commands, sent to this chat as typed (the goal, rules, done conditions and pins are edited in the workbench card below).
             Rectangle {
                 background: Theme.low; border-radius: 12px; border-width: 1px; border-color: Theme.hairline; height: cmds.preferred-height;
                 cmds := VerticalLayout {
                     padding: 16px; spacing: 10px;
                     Text { text: T.tr("tm_cmds"); color: Theme.on-surface; font-size: 15px; font-weight: 600; }
                     WText { text: T.tr("tm_cmds_note"); size: 12px; fg: Theme.on-var; }
-                    HorizontalLayout { spacing: 8px; alignment: start;
-                        Btn { text: T.tr("tm_cmd_new"); height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("new"); } }
-                        Btn { text: T.tr("tm_cmd_lock"); height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("lock"); } }
-                        Btn { text: T.tr("tm_cmd_unlock"); height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("unlock"); } }
-                        Btn { text: T.tr("tm_cmd_status"); height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("status"); } }
-                        Btn { text: T.tr("tm_cmd_preview"); height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("preview"); } }
-                    }
-                    HorizontalLayout { spacing: 8px; alignment: start;
-                        Btn { text: T.tr("tm_cmd_suggest"); height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("suggest"); } }
-                        Btn { text: T.tr("tm_cmd_suggest_add"); height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("suggest_add"); } }
-                        Btn { text: T.tr("tm_cmd_suggest_undo"); height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("suggest_undo"); } }
-                    }
                     HorizontalLayout { spacing: 8px; alignment: start;
                         Text { text: T.tr("tm_cmd_guard"); color: Theme.on-var; font-size: 13px; vertical-alignment: center; }
                         Btn { text: "high"; height: 30px; enabled: Team.can-send && !Team.busy; clicked => { Team.swb-cmd("guard_high"); } }
@@ -329,26 +317,6 @@ export component TeamPage inherits Rectangle {
                     LineEdit { text <=> Team.gf-path; placeholder-text: T.tr("gf_ph_path"); }
                     LineEdit { text <=> Team.gf-reason; placeholder-text: T.tr("gf_ph_reason"); }
                     HorizontalLayout { alignment: end; Btn { text: T.tr("gf_add_btn"); height: 32px; primary: true; enabled: Team.gf-tool != ""; clicked => { Team.gf-add(Team.gf-policy, Team.gf-tool, Team.gf-command, Team.gf-path, Team.gf-reason); } } }
-                }
-            }
-            // The contract has no command form: what is typed here goes to the chat as a request, and Claude applies it with the plug-in's tools.
-            Rectangle {
-                background: Theme.low; border-radius: 12px; border-width: 1px; border-color: Theme.hairline; height: rq.preferred-height;
-                rq := VerticalLayout {
-                    padding: 16px; spacing: 10px;
-                    Text { text: T.tr("tm_req"); color: Theme.on-surface; font-size: 15px; font-weight: 600; }
-                    WText { text: T.tr("tm_req_note"); size: 12px; fg: Theme.on-var; }
-                    HorizontalLayout { spacing: 8px; alignment: start;
-                        Btn { text: T.tr("tm_req_goal"); height: 30px; primary: Team.req-kind == "goal"; clicked => { Team.req-kind = "goal"; } }
-                        Btn { text: T.tr("tm_req_constraint"); height: 30px; primary: Team.req-kind == "constraint"; clicked => { Team.req-kind = "constraint"; } }
-                        Btn { text: T.tr("tm_req_done"); height: 30px; primary: Team.req-kind == "done"; clicked => { Team.req-kind = "done"; } }
-                        Btn { text: T.tr("tm_req_nongoal"); height: 30px; primary: Team.req-kind == "nongoal"; clicked => { Team.req-kind = "nongoal"; } }
-                        Btn { text: T.tr("tm_req_pin"); height: 30px; primary: Team.req-kind == "pin"; clicked => { Team.req-kind = "pin"; } }
-                    }
-                    HorizontalLayout { spacing: 8px;
-                        LineEdit { horizontal-stretch: 1; text <=> Team.req-text; placeholder-text: T.tr("tm_req_ph"); accepted(t) => { Team.contract-request(Team.req-kind, t); } }
-                        Btn { text: T.tr("tm_req_send"); height: 34px; primary: true; enabled: Team.can-send && !Team.busy && Team.req-text != ""; clicked => { Team.contract-request(Team.req-kind, Team.req-text); } }
-                    }
                 }
             }
             // the roles

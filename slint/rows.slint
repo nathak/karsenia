@@ -1,0 +1,261 @@
+// One row of the transcript, and the structs it is made from. The chat list draws them, and so does the Files panel for a markdown file.
+import { Theme, T, Pill, Rich, SelText, WText } from "base.slint";
+
+export struct TRow { cells: [string], head: bool }
+export struct ChatImg { thumb: image, label: string, has-thumb: bool }
+export struct ChatRow {
+    kind: string, depth: int, key: string, text: string, rich: styled-text, plain: string, label: string, extra: string, status: string,
+    state: string, detail: string, open: bool, badge: string, add: int, del: int, indent: int,
+    img-id: int, imgs: [ChatImg], trows: [TRow],
+}
+
+export component RowView inherits Rectangle {
+    in property <ChatRow> r;
+    callback toggle(string);
+    callback copy(string);
+    callback link(string);
+    callback open-image(int, int);
+    in property <bool> select-mode: false;
+    property <length> indent: r.depth * 24px;
+    VerticalLayout {
+        padding-left: root.indent;
+        if r.kind == "day": HorizontalLayout {
+            padding-top: 6px; padding-bottom: 18px; spacing: 12px; alignment: center;
+            Rectangle { width: 96px; height: 1px; y: parent.height / 2; background: Theme.highest; }
+            Text { text: r.text; color: Theme.outline; font-size: 11px; font-weight: 600; font-family: Theme.mono; }
+            Rectangle { width: 96px; height: 1px; y: parent.height / 2; background: Theme.highest; }
+        }
+        if r.kind == "meta-user": HorizontalLayout {
+            alignment: end; spacing: 8px; padding-right: 4px; padding-bottom: 5px;
+            Text { text: r.text; color: Theme.info; font-size: 11px; font-family: Theme.mono; }
+            Text { text: r.extra; color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+        }
+        if r.kind == "user": VerticalLayout {
+            padding-bottom: 18px; spacing: 6px;
+            if r.text != "": HorizontalLayout {
+                alignment: end;
+                Rectangle {
+                    max-width: root.width * 0.8;
+                    background: Theme.high;
+                    border-radius: 12px;
+                    VerticalLayout {
+                        padding: 12px;
+                        SelText { text: r.text; size: 14px; }
+                    }
+                }
+            }
+            if r.imgs.length > 0: HorizontalLayout {
+                alignment: end; spacing: 6px;
+                for im[i] in r.imgs: Rectangle {
+                    width: 96px; height: 96px; border-radius: 8px; clip: true; background: Theme.high; border-width: 1px; border-color: Theme.hairline;
+                    if im.has-thumb: Image { source: im.thumb; width: parent.width; height: parent.height; image-fit: cover; }
+                    if !im.has-thumb: Text { text: im.label; color: Theme.outline; font-size: 11px; font-family: Theme.mono; horizontal-alignment: center; vertical-alignment: center; }
+                    TouchArea { mouse-cursor: im.has-thumb ? MouseCursor.pointer : MouseCursor.default; clicked => { if (im.has-thumb) { root.open-image(r.img-id, i); } } }
+                }
+            }
+        }
+        if r.kind == "meta-asst": HorizontalLayout {
+            spacing: 8px; padding-left: 4px; padding-bottom: 6px; alignment: start;
+            Rectangle {
+                width: 24px; height: 24px; border-radius: 6px; background: Theme.primary;
+                Image { source: @image-url("icons/bolt.svg"); width: 13px; height: 13px; colorize: Theme.on-primary; }
+            }
+            Text { text: r.text; color: Theme.primary-soft; font-size: 12px; font-weight: 600; font-family: Theme.mono; vertical-alignment: center; }
+            Text { text: r.extra; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+        }
+        if r.kind == "para": VerticalLayout {
+            padding-left: 4px; padding-right: 24px; padding-top: 2px; padding-bottom: 14px;
+            Rich { select: root.select-mode; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
+        }
+        if r.kind == "heading": VerticalLayout {
+            padding-left: 4px; padding-top: 14px; padding-bottom: 10px; spacing: 6px;
+            Rich { select: root.select-mode; rich: r.rich; plain: r.plain; size: r.extra == "1" ? 21px : r.extra == "2" ? 18px : 16px; fg: Theme.on-surface; }
+            if r.extra == "1" || r.extra == "2": Rectangle { height: 1px; background: Theme.hairline; }
+        }
+        if r.kind == "item": HorizontalLayout {
+            padding-left: 8px + r.indent * 18px; padding-top: 1px; padding-bottom: 8px; spacing: 8px;
+            Text { text: r.label; color: Theme.primary-soft; font-size: 15px; min-width: 14px; vertical-alignment: top; }
+            Rich { select: root.select-mode; horizontal-stretch: 1; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
+        }
+        if r.kind == "quote": VerticalLayout {
+            padding-left: 4px; padding-right: 24px; padding-bottom: 12px;
+            Rectangle {
+                background: Theme.low; border-radius: 6px; height: ql.preferred-height;
+                ql := HorizontalLayout {
+                    spacing: 12px;
+                    Rectangle { width: 3px; background: Theme.primary.with-alpha(0.7); }
+                    VerticalLayout { padding-top: 10px; padding-bottom: 10px; padding-right: 12px; horizontal-stretch: 1; Rich { select: root.select-mode; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-var; } }
+                }
+            }
+        }
+        if r.kind == "rule": VerticalLayout { padding-top: 8px; padding-bottom: 12px; Rectangle { height: 1px; background: Theme.hairline; } }
+        if r.kind == "code" || r.kind == "table": VerticalLayout {
+            padding-top: 2px; padding-bottom: 16px; padding-right: 24px;
+            Rectangle {
+                background: Theme.lowest;
+                border-radius: 8px;
+                clip: true;
+                VerticalLayout {
+                    Rectangle {
+                        background: Theme.high;
+                        height: 32px;
+                        HorizontalLayout {
+                            padding-left: 12px; padding-right: 8px; spacing: 8px;
+                            Image { source: r.kind == "code" ? @image-url("icons/code.svg") : @image-url("icons/table.svg"); width: 14px; height: 14px; y: (parent.height - 14px) / 2; colorize: Theme.primary; }
+                            Text { text: r.label; color: Theme.on-surface; font-size: 12px; font-weight: 600; font-family: Theme.mono; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text { text: r.extra; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+                            Rectangle {
+                                width: 52px; height: 22px; y: 5px; border-radius: 6px;
+                                background: copy-area.has-hover ? Theme.highest : Theme.container;
+                                Text { text: T.copy; color: Theme.on-var; font-size: 11px; }
+                                copy-area := TouchArea { mouse-cursor: pointer; clicked => { root.copy(r.text); } }
+                            }
+                        }
+                    }
+                    if r.kind == "code": VerticalLayout {
+                        padding: 14px;
+                        SelText { text: r.text; size: 13px; mono: true; chars: true; }
+                    }
+                    if r.kind == "table": VerticalLayout {
+                        for tr[i] in r.trows: Rectangle {
+                            height: trl.preferred-height;
+                            background: tr.head ? Theme.high : (mod(i, 2) == 0 ? transparent : Theme.low);
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
+                            trl := HorizontalLayout {
+                                padding-left: 12px; padding-right: 12px; padding-top: 8px; padding-bottom: 8px; spacing: 16px;
+                                for c in tr.cells: Text { horizontal-stretch: 1; min-width: 0px; text: c; wrap: word-wrap; color: tr.head ? Theme.on-surface : Theme.on-var; font-size: 13px; font-weight: tr.head ? 700 : 400; line-height-factor: 1.35; }
+                            }
+                        }
+                    }
+                    if r.add == 1: Rectangle {
+                        height: 30px;
+                        background: fold-area.has-hover ? Theme.high : Theme.container;
+                        Text { text: r.detail; color: Theme.on-var; font-size: 11px; font-family: Theme.mono; }
+                        fold-area := TouchArea { mouse-cursor: pointer; clicked => { root.toggle(r.key); } }
+                    }
+                }
+            }
+        }
+        if r.kind == "think": VerticalLayout {
+            padding-bottom: 12px; padding-right: 24px;
+            Rectangle {
+                background: Theme.low; border-radius: 8px; border-width: 1px; border-color: Theme.hairline;
+                VerticalLayout {
+                    Rectangle {
+                        height: 38px;
+                        HorizontalLayout {
+                            padding-left: 12px; padding-right: 12px; spacing: 8px;
+                            if r.add == 1: Image { source: r.open ? @image-url("icons/chevron-down.svg") : @image-url("icons/chevron-right.svg"); width: 12px; height: 12px; y: (parent.height - 12px) / 2; colorize: Theme.outline; }
+                            if r.add != 1: Rectangle { width: 6px; height: 6px; y: (parent.height - 6px) / 2; border-radius: 3px; background: Theme.primary; }
+                            Text { text: r.text; color: think-area.has-hover ? Theme.on-surface : Theme.primary-soft; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        }
+                        think-area := TouchArea { mouse-cursor: pointer; clicked => { root.toggle(r.key); } }
+                    }
+                    if r.open && r.detail != "": HorizontalLayout {
+                        padding: 12px; padding-top: 0px; spacing: 10px;
+                        Rectangle { width: 2px; background: Theme.hairline; }
+                        WText { horizontal-stretch: 1; text: r.detail; fg: Theme.on-var; size: 13px; }
+                    }
+                }
+            }
+        }
+        if r.kind == "steps": VerticalLayout {
+            padding-bottom: 12px; padding-right: 24px;
+            Rectangle {
+                background: Theme.low; border-radius: 8px; border-width: 1px;
+                border-color: r.state == "err" ? Theme.error.with-alpha(0.5) : r.state == "guard" ? Theme.primary : Theme.hairline;
+                clip: true;
+                VerticalLayout {
+                    Rectangle {
+                        background: steps-area.has-hover ? Theme.high : transparent;
+                        height: 34px;
+                        HorizontalLayout {
+                            padding-left: 12px; padding-right: 10px; spacing: 8px;
+                            Image { source: r.open ? @image-url("icons/chevron-down.svg") : @image-url("icons/chevron-right.svg"); width: 12px; height: 12px; y: (parent.height - 12px) / 2; colorize: Theme.outline; }
+                            Text { text: r.label; color: steps-area.has-hover ? Theme.on-surface : Theme.primary-soft; font-size: 12px; font-weight: 600; font-family: Theme.mono; vertical-alignment: center; }
+                            Text { horizontal-stretch: 1; text: r.text; color: Theme.outline; font-size: 11px; font-family: Theme.mono; overflow: elide; vertical-alignment: center; }
+                            Pill {
+                                y: 6px;
+                                text: r.status;
+                                show-icon: r.state == "done" || r.state == "err" || r.state == "guard";
+                                icon: r.state == "done" ? @image-url("icons/check.svg") : r.state == "err" ? @image-url("icons/x.svg") : @image-url("icons/shield.svg");
+                                pulse: r.state == "running";
+                                fg: r.state == "done" ? Theme.ok : r.state == "err" ? Theme.error : r.state == "guard" ? Theme.primary-soft : Theme.outline;
+                                fill: r.state == "done" ? Theme.ok.with-alpha(0.14) : r.state == "err" ? Theme.error.with-alpha(0.14) : r.state == "guard" ? Theme.primary.with-alpha(0.14) : Theme.container;
+                            }
+                        }
+                        steps-area := TouchArea { mouse-cursor: pointer; clicked => { root.toggle(r.key); } }
+                    }
+                    if !r.open && r.detail != "": HorizontalLayout {
+                        padding: 12px; padding-top: 0px; spacing: 10px;
+                        Rectangle { width: 2px; background: Theme.hairline; }
+                        Text { horizontal-stretch: 1; text: r.detail; color: Theme.on-var; font-size: 11px; font-family: Theme.mono; overflow: elide; }
+                    }
+                }
+            }
+        }
+        if r.kind == "tool": VerticalLayout {
+            padding-bottom: 12px; padding-right: 24px;
+            Rectangle {
+                background: Theme.lowest;
+                border-radius: 8px;
+                border-width: r.state == "guard" ? 1px : 0px;
+                border-color: Theme.primary;
+                clip: true;
+                VerticalLayout {
+                    Rectangle {
+                        background: tool-area.has-hover ? Theme.highest : Theme.high;
+                        height: 34px;
+                        HorizontalLayout {
+                            padding-left: 12px; padding-right: 10px; spacing: 8px;
+                            Text { text: ">"; color: Theme.ok; font-weight: 700; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
+                            Text { text: r.label + ":"; color: Theme.outline; font-weight: 600; font-family: Theme.mono; font-size: 11px; vertical-alignment: center; }
+                            if r.badge != "": Pill { text: r.badge; fg: Theme.violet; y: 6px; }
+                            Text { horizontal-stretch: 1; text: r.text; color: Theme.on-surface; font-weight: 600; font-family: Theme.mono; font-size: 12px; overflow: elide; vertical-alignment: center; }
+                            if r.extra != "": Text { text: r.extra; color: Theme.outline; font-family: Theme.mono; font-size: 11px; vertical-alignment: center; }
+                            if r.add > 0 || r.del > 0: HorizontalLayout {
+                                spacing: 4px;
+                                Text { text: "+" + r.add; color: Theme.ok; font-weight: 600; font-family: Theme.mono; font-size: 11px; vertical-alignment: center; }
+                                Text { text: "−" + r.del; color: Theme.error; font-weight: 600; font-family: Theme.mono; font-size: 11px; vertical-alignment: center; }
+                            }
+                            Pill {
+                                y: 6px;
+                                text: r.status;
+                                show-icon: r.state == "done" || r.state == "err" || r.state == "guard";
+                                icon: r.state == "done" ? @image-url("icons/check.svg") : r.state == "err" ? @image-url("icons/x.svg") : @image-url("icons/shield.svg");
+                                pulse: r.state == "running";
+                                fg: r.state == "done" ? Theme.ok : r.state == "err" ? Theme.error : r.state == "guard" ? Theme.primary-soft : Theme.outline;
+                                fill: r.state == "done" ? Theme.ok.with-alpha(0.14) : r.state == "err" ? Theme.error.with-alpha(0.14) : r.state == "guard" ? Theme.primary.with-alpha(0.14) : Theme.container;
+                            }
+                            Image { source: r.open ? @image-url("icons/chevron-down.svg") : @image-url("icons/chevron-right.svg"); width: 13px; height: 13px; y: (parent.height - 13px) / 2; colorize: Theme.outline; }
+                        }
+                        tool-area := TouchArea { mouse-cursor: pointer; clicked => { root.toggle(r.key); } }
+                    }
+                    if r.open: VerticalLayout {
+                        padding: 12px;
+                        SelText { text: r.detail; size: 12px; mono: true; chars: true; fg: Theme.on-var; }
+                    }
+                }
+            }
+        }
+        if r.kind == "note": VerticalLayout {
+            padding-bottom: 14px;
+            WText { text: r.text; fg: Theme.outline; size: 12px; mono: true; }
+        }
+        if r.kind == "note-sys" || r.kind == "note-err": VerticalLayout {
+            padding-bottom: 12px;
+            Rectangle {
+                background: r.kind == "note-err" ? Theme.error.with-alpha(0.1) : Theme.container; border-radius: 8px;
+                border-width: r.kind == "note-err" ? 1px : 0px; border-color: Theme.error.with-alpha(0.35);
+                height: nr.preferred-height;
+                nr := HorizontalLayout {
+                    padding: 10px; padding-left: 14px; padding-right: 14px; spacing: 10px;
+                    Rectangle { width: 6px; height: 6px; y: 7px; border-radius: 3px; background: r.kind == "note-err" ? Theme.error : Theme.info; }
+                    Text { text: r.kind == "note-err" ? "ERROR" : "SYSTEM NOTICE"; color: r.kind == "note-err" ? Theme.error : Theme.info; font-size: 11px; font-weight: 600; font-family: Theme.mono; letter-spacing: 0.8px; vertical-alignment: top; }
+                    WText { horizontal-stretch: 1; text: r.text; fg: r.kind == "note-err" ? Theme.error : Theme.on-var; size: 13px; }
+                }
+            }
+        }
+    }
+}

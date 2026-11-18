@@ -696,22 +696,6 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         wb_do(&a, op);
     });
     let (weak, a) = (ui.as_weak(), app.clone());
-    team.on_contract_request(move |kind, text| {
-        let text: String = text.chars().filter(|c| !c.is_control()).take(600).collect();
-        let text = text.trim();
-        let key = match kind.as_str() {
-            "goal" | "constraint" | "done" | "nongoal" | "pin" => format!("tm_reqt_{kind}"),
-            _ => return,
-        };
-        if text.is_empty() {
-            return;
-        }
-        command(&a, &fill(&tr(a.lang, &key), &[("t", text.to_owned())]));
-        if let Some(ui) = weak.upgrade() {
-            ui.global::<Team>().set_req_text(SharedString::new());
-        }
-    });
-    let (weak, a) = (ui.as_weak(), app.clone());
     team.on_set_role(move |role, model, effort| {
         match tenrec::view::team::role_command(&role, &model, Some(&effort)) {
             Ok(text) => command(&a, &text),

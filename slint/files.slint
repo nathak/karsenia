@@ -1,12 +1,16 @@
 // The Files tab: the open chat's project folder, one folder at a time, and a text file in an editor (src/view/files.rs makes the
 // rows; src/bin/desktop/files.rs answers the callbacks). The host decides what may be opened or saved; where it refuses (Windows
 // has no editor), its sentence is shown as it is.
-import { ScrollView, LineEdit } from "std-widgets.slint";
+import { ScrollView, LineEdit, ListView } from "std-widgets.slint";
 import { Theme, T, Pill, Btn, WText, Label, Badge, IconBtn, EmptyState } from "base.slint";
 import { Wt, WtCard, WtRow } from "panels.slint";
+import { RowView, ChatRow } from "rows.slint";
 
 export struct FsRow { name: string, path: string, kind: string, size: string, tags: string, blocked: bool, from: string, place: string }
 export struct FsCrumb { label: string, path: string }
+// One coloured piece of a line (kind: 0 plain, 1 keyword, 2 type, 3 string, 4 comment, 5 number, 6 punctuation, 7 meta; src/view/highlight.rs) and one line of the viewer.
+export struct HlTok { text: string, kind: int }
+export struct HlLine { n: int, toks: [HlTok] }
 
 export global Files {
     in property <bool> has-chat;
@@ -55,6 +59,16 @@ export global Files {
     callback empty-trash();
     callback save();
     callback close();
+    // The viewer: what the file is drawn as ("code", "md", or "" for the editor alone), whether it is shown that way now, the coloured lines
+    // and the widest of them in columns, the rows of a markdown file; and what a click on a row of it asks for.
+    in property <string> kind;
+    in-out property <bool> view;
+    in property <[HlLine]> hl;
+    in property <int> hl-cols;
+    in property <[ChatRow]> md;
+    callback set-view(bool);
+    callback copy(string);
+    callback link(string);
 }
 
 export component FilesPanel inherits Rectangle {
@@ -179,11 +193,12 @@ export component FilesPanel inherits Rectangle {
                         }
                         Rectangle { horizontal-stretch: 1; }
                         VerticalLayout { alignment: center; Btn { text: "@  " + T.tr("fs_mention"); height: 28px; clicked => { Files.mention(Files.file); } } }
+                        if Files.kind != "": VerticalLayout { alignment: center; Btn { text: Files.view ? T.tr("fs_edit") : T.tr("fs_view"); height: 28px; clicked => { Files.set-view(!Files.view); } } }
                         VerticalLayout { alignment: center; Btn { text: T.tr("fs_save"); height: 28px; primary: true; enabled: !Files.readonly && Files.text != Files.orig; clicked => { Files.save(); } } }
                     }
                 }
                 if Files.file != "" && Files.note != "": Rectangle { height: nt.preferred-height + 14px; background: Theme.primary.with-alpha(0.08); nt := VerticalLayout { padding: 7px; padding-left: 14px; padding-right: 14px; WText { text: Files.note; fg: Theme.primary-soft; size: 12px; } } }
-                if Files.file != "": Rectangle {
+                if Files.file != "" && !Files.view: Rectangle {
                     vertical-stretch: 1; background: Theme.lowest; clip: true;
                     fl := Flickable {
                         content-width: max(self.width, ti.x + ti.preferred-width + 24px);
@@ -208,13 +223,52 @@ export component FilesPanel inherits Rectangle {
                         }
                     }
                 }
+                // The file as a reader sees it: source in colours, one line per row; a markdown file as the chat draws an answer.
+                if Files.file != "" && Files.view && Files.kind == "code": Rectangle {
+                    vertical-stretch: 1; background: Theme.lowest; clip: true;
+                    // The size of a character and a line of the mono face, measured (it differs between machines).
+                    probe := Text { x: 0px; y: 0px; text: "0000000000"; font-family: Theme.mono; font-size: 13px; opacity: 0; }
+                    property <length> cw: probe.preferred-width / 10;
+                    property <length> lh: probe.preferred-height + 3px;
+                    lv := ListView {
+                        width: parent.width; height: parent.height;
+                        // As wide as the longest line, so a long line scrolls sideways instead of being cut.
+                        content-width: max(self.visible-width, 76px + Files.hl-cols * cw + 48px);
+                        for l in Files.hl: Rectangle {
+                            height: lh; width: lv.content-width;
+                            Text { x: 0px; width: 52px; height: parent.height; text: l.n; color: Theme.outline.with-alpha(0.7); font-family: Theme.mono; font-size: 13px; horizontal-alignment: right; vertical-alignment: center; }
+                            HorizontalLayout {
+                                x: 64px; width: parent.width - 64px; alignment: start; spacing: 0px;
+                                for t in l.toks: Text {
+                                    text: t.text; font-family: Theme.mono; font-size: 13px; vertical-alignment: center;
+                                    color: t.kind == 1 ? Theme.violet : t.kind == 2 ? Theme.info : t.kind == 3 ? Theme.ok : t.kind == 4 ? Theme.outline : t.kind == 5 ? Theme.primary-soft : t.kind == 6 ? Theme.on-var : t.kind == 7 ? Theme.primary : Theme.on-surface;
+                                }
+                            }
+                        }
+                    }
+                }
+                if Files.file != "" && Files.view && Files.kind == "md": Rectangle {
+                    vertical-stretch: 1; background: Theme.surface; clip: true;
+                    if Files.md.length == 0: VerticalLayout { padding: 24px; WText { text: T.tr("fs_md_empty"); fg: Theme.outline; size: 13px; } }
+                    ListView {
+                        width: parent.width; height: parent.height;
+                        for row[i] in Files.md: Rectangle {
+                            height: rv.preferred-height + (i == 0 ? 12px : 0px);
+                            rv := RowView {
+                                x: 20px; y: i == 0 ? 12px : 0px; width: parent.width - 40px; r: row;
+                                copy(text) => { Files.copy(text); }
+                                link(url) => { Files.link(url); }
+                            }
+                        }
+                    }
+                }
                 if Files.file != "": Rectangle {
                     height: 30px; background: Theme.low;
                     Rectangle { y: 0px; height: 1px; background: Theme.hairline; }
                     HorizontalLayout {
                         padding-left: 14px; padding-right: 14px; spacing: 16px;
                         Text { text: "UTF-8"; color: Theme.on-var; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
-                        Text { text: "Ln " + Files.ln + ", Col " + Files.col; color: Theme.on-var; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+                        if !Files.view: Text { text: "Ln " + Files.ln + ", Col " + Files.col; color: Theme.on-var; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
                         if Files.readonly: Text { text: T.tr("fs_readonly_tag"); color: Theme.primary-soft; font-size: 11px; vertical-alignment: center; }
                     }

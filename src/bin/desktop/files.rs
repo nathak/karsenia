@@ -9,9 +9,11 @@ use serde_json::{json, Value};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use tenrec::view::files::{crumbs, fmt_size, from_editor, gutter, is_under, join, line_col, listing_view, parent, readonly_reason, single_name, to_editor, MAX_OPEN};
 use tenrec::server::project_fs::TRASH;
-use tenrec::view::i18n::{fill, tr};
+use tenrec::view::highlight::{highlight, view_of, View};
+use tenrec::view::i18n::{fill, tr, Lang};
+use tenrec::view::transcript::md_rows;
 
-use crate::{App, AppWindow, Files, FsCrumb, FsRow};
+use crate::{App, AppWindow, Files, FsCrumb, FsRow, HlLine, HlTok};
 
 struct Open {
     path: String,
@@ -95,6 +97,57 @@ fn close_file(ui: &AppWindow) {
     f.set_text(SharedString::new());
     f.set_orig(SharedString::new());
     f.set_note(SharedString::new());
+    clear_view(&f);
+}
+
+fn clear_view(f: &Files) {
+    f.set_kind(SharedString::new());
+    f.set_view(false);
+    f.set_hl(ModelRc::default());
+    f.set_hl_cols(0);
+    f.set_md(ModelRc::default());
+}
+
+/// Makes what the viewer draws from the text now in the editor: coloured lines for source, rows for markdown. False when this file
+/// has no viewer (or its text is too long for one): the editor stays, and the viewer's state is cleared.
+fn rebuild_view(ui: &AppWindow, lang: Lang) -> bool {
+    let f = ui.global::<Files>();
+    let (path, text) = (f.get_file().to_string(), f.get_text().to_string());
+    match view_of(&path) {
+        View::Code(code) => match highlight(code, &text) {
+            Some((lines, cols)) => {
+                let lines: Vec<HlLine> = lines
+                    .into_iter()
+                    .map(|l| HlLine { n: l.n as i32, toks: ModelRc::from(Rc::new(VecModel::from(l.toks.into_iter().map(|t| HlTok { text: t.text.into(), kind: t.kind.code() }).collect::<Vec<_>>()))) })
+                    .collect();
+                f.set_hl(ModelRc::from(Rc::new(VecModel::from(lines))));
+                f.set_hl_cols(cols as i32);
+                f.set_md(ModelRc::default());
+                f.set_kind("code".into());
+                true
+            }
+            None => {
+                // Too long to colour: the button stays (a click says why), so a text cut down again can still be viewed.
+                f.set_hl(ModelRc::default());
+                f.set_hl_cols(0);
+                f.set_md(ModelRc::default());
+                f.set_kind("code".into());
+                false
+            }
+        },
+        View::Markdown => {
+            let rows: Vec<_> = md_rows(&text, lang).iter().map(crate::to_slint).collect();
+            f.set_md(ModelRc::from(Rc::new(VecModel::from(rows))));
+            f.set_hl(ModelRc::default());
+            f.set_hl_cols(0);
+            f.set_kind("md".into());
+            true
+        }
+        View::Plain => {
+            clear_view(&f);
+            false
+        }
+    }
 }
 
 fn send(app: &App, mut op: Value) {
@@ -278,6 +331,10 @@ pub fn on_reply(ui: &AppWindow, app: &Arc<App>, kind: &str, data: Value) {
             f.set_text(shown.into());
             f.set_readonly(!reason.is_empty());
             f.set_note(note.into());
+            // A file is opened in its viewer; a file read again stays as it was shown.
+            let was_view = f.get_view();
+            let made = rebuild_view(ui, lang);
+            f.set_view(made && (!refreshing || was_view));
             if refreshing {
                 crate::toast(ui, tr(lang, "fs_disk_reloaded"));
             }
@@ -692,6 +749,26 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         FS.with(|s| s.borrow_mut().pending = Some(op.clone()));
         send(&a, op);
     });
+    let (weak, a) = (ui.as_weak(), app.clone());
+    files.on_set_view(move |on| {
+        let Some(ui) = weak.upgrade() else { return };
+        // The viewer is made from the text as it is now (what is typed and not yet saved shows too).
+        let shown = on && rebuild_view(&ui, a.lang);
+        let f = ui.global::<Files>();
+        f.set_view(shown);
+        if on && !shown {
+            crate::toast(&ui, tr(a.lang, "fs_view_too_long"));
+        }
+        if !on {
+            // The editor is made anew: its cursor is at the start.
+            f.set_ln(1);
+            f.set_col(1);
+        }
+    });
+    let a = app.clone();
+    files.on_copy(move |text| crate::copy_text(&a, text.to_string()));
+    let a = app.clone();
+    files.on_link(move |url| crate::copy_text(&a, url.to_string()));
     let (a, weak) = (app.clone(), ui.as_weak());
     files.on_close(move || {
         let Some(ui) = weak.upgrade() else { return };

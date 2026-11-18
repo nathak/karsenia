@@ -5,6 +5,7 @@ pub mod markdown;
 pub mod attach;
 pub mod files;
 pub mod git;
+pub mod highlight;
 pub mod guardfile;
 pub mod import;
 pub mod notify;

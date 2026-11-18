@@ -39,7 +39,8 @@ impl std::fmt::Debug for Shots {
 /// One row of the transcript list.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Row {
-    /// day, meta-user, user, meta-asst, para, heading, item, quote, code, rule, table, think, tool, note, note-err, note-sys
+    /// day, meta-user, user, meta-asst, para, heading, item, quote, code, rule, table, think, tool, steps (a long run of tools and
+    /// thoughts folded into one row), note, note-err, note-sys
     pub kind: &'static str,
     /// Nesting under sub-agent cards.
     pub depth: i32,
@@ -66,6 +67,63 @@ pub struct Row {
     pub images: Option<Shots>,
     /// A table's cells by row (the first row is the header).
     pub grid: Vec<Vec<String>>,
+}
+
+/// The row of a block as it is drawn when nothing folds (a code block is shown whole).
+fn flat_row(block: &Block, key: String, depth: i32) -> Row {
+    let row = |kind: &'static str| Row { kind, depth, key: key.clone(), ..Row::default() };
+    match block {
+        Block::Para(md) => Row { md: md.clone(), ..row("para") },
+        Block::Heading(level, md) => Row { md: format!("**{md}**"), extra: level.to_string(), ..row("heading") },
+        Block::Item { depth: d, marker, md } => Row { md: md.clone(), label: marker.clone(), indent: i32::from(*d), ..row("item") },
+        Block::Quote(md) => Row { md: md.clone(), ..row("quote") },
+        Block::Code { lang, text } => Row { text: text.clone(), label: if lang.is_empty() { "text".into() } else { lang.to_lowercase() }, ..row("code") },
+        Block::Rule => row("rule"),
+        Block::Table { text, grid } => Row { text: text.clone(), grid: grid.clone(), ..row("table") },
+    }
+}
+
+/// A leading front matter block (`---` … `---`, as markdown files of notes and sites have) and the text after it.
+fn split_front_matter(src: &str) -> (Option<&str>, &str) {
+    let mut lines = src.split_inclusive('\n');
+    let first = lines.next().unwrap_or_default();
+    if first.trim_end() != "---" {
+        return (None, src);
+    }
+    let mut at = first.len();
+    for (n, line) in lines.enumerate() {
+        if n >= 100 {
+            break;
+        }
+        if matches!(line.trim_end(), "---" | "...") {
+            return (Some(src[first.len()..at].trim_end()), &src[at + line.len()..]);
+        }
+        at += line.len();
+    }
+    (None, src)
+}
+
+/// What the file viewer draws for a markdown file: the chat's own rows (so a table, a list or a quote look as they do in an
+/// answer), a code block whole, a front matter block as a code block, no folding. Images and HTML are not drawn (as in a chat).
+pub fn md_rows(src: &str, lang: Lang) -> Vec<Row> {
+    let src = src.strip_prefix('\u{feff}').unwrap_or(src);
+    let (front, body) = split_front_matter(src);
+    let lines = |text: &str| fill(&tr(lang, "lines"), &[("n", text.lines().count().max(1).to_string())]);
+    let mut rows = Vec::new();
+    if let Some(front) = front {
+        rows.push(Row { kind: "code", key: "m-front".into(), text: front.to_owned(), label: "yaml".into(), extra: lines(front), ..Row::default() });
+    }
+    for (b, block) in blocks(body).iter().enumerate() {
+        let mut row = flat_row(block, format!("m{b}"), 0);
+        if row.kind == "code" {
+            row.extra = lines(&row.text);
+        }
+        rows.push(row);
+    }
+    if rows.is_empty() && !body.trim().is_empty() {
+        rows.push(Row { kind: "para", key: "m0".into(), md: super::markdown::escape(body), ..Row::default() });
+    }
+    rows
 }
 
 #[derive(Debug, Clone)]
@@ -165,6 +223,9 @@ fn cut(text: &str, max: usize, lang: Lang) -> String {
     }
     format!("{}\n{}", &text[..end], fill(&tr(lang, "cut"), &[("n", max.to_string())]))
 }
+
+/// A run of this many tools (with the thoughts between them) is folded into one row.
+const MIN_STEPS: usize = 3;
 
 fn first_line(text: &str) -> String {
     let line = text.lines().next().unwrap_or("").trim();
@@ -793,6 +854,13 @@ impl Transcript {
 
     /// Opens or closes a tool card, a thinking block, or a long code block.
     pub fn toggle(&mut self, key: &str) {
+        // A folded run of steps (`g:<first node>`): its own kind of key, which no tool id (`toolu_…`) or `n…` key can be.
+        if let Some(n) = key.strip_prefix("g:") {
+            if n.parse::<usize>().is_ok() && !self.expanded.remove(key) {
+                self.expanded.insert(key.to_owned());
+            }
+            return;
+        }
         if key.contains('-') && key.starts_with('n') {
             if !self.expanded.remove(key) {
                 self.expanded.insert(key.to_owned());
@@ -824,11 +892,102 @@ impl Transcript {
             }
         }
         let mut out = Vec::new();
-        for i in top {
-            let depth = i32::from(self.nodes[i].parent.is_some());
-            self.emit(i, depth, &children, &mut out);
+        let mut k = 0;
+        while k < top.len() {
+            // A run of tools and finished thoughts with nothing else between them.
+            let mut end = k;
+            while end < top.len() && self.groupable(top[end]) {
+                end += 1;
+            }
+            let run = &top[k..end];
+            if run.iter().filter(|&&i| matches!(self.nodes[i].item, Item::Tool(_))).count() >= MIN_STEPS {
+                self.emit_steps(run, &children, &mut out);
+                k = end;
+                continue;
+            }
+            // Too short to fold (or not a run at all): as they are.
+            let upto = if run.is_empty() { k + 1 } else { end };
+            for &i in &top[k..upto] {
+                let depth = i32::from(self.nodes[i].parent.is_some());
+                self.emit(i, depth, &children, &mut out);
+            }
+            k = upto;
         }
         out
+    }
+
+    /// A node that may be folded into a run of steps: a tool, or a thought that is finished (a thought being streamed stays on its own so
+    /// its text can be read as it comes), at the top level (a sub-agent's work stays under its card).
+    fn groupable(&self, i: usize) -> bool {
+        self.nodes[i].parent.is_none() && matches!(self.nodes[i].item, Item::Tool(_) | Item::Think { live: false, .. })
+    }
+
+    /// One row for a run of steps: how many, of what, and whether any is running, failed or held; the steps themselves follow it when it
+    /// is opened (a thought without text carries nothing and is left out: it is only counted).
+    fn emit_steps(&self, run: &[usize], children: &HashMap<&str, Vec<usize>>, out: &mut Vec<Row>) {
+        let key = format!("g:{}", run[0]);
+        let open = self.expanded.contains(&key);
+        let mut names: Vec<(String, usize)> = Vec::new();
+        let (mut tools, mut thinks, mut running, mut errs, mut guards) = (0, 0, 0, 0, 0);
+        // The tool that is running (the last of them, when several run side by side).
+        let mut latest: Option<(&Tool, String)> = None;
+        for &i in run {
+            match &self.nodes[i].item {
+                Item::Tool(t) => {
+                    tools += 1;
+                    let short = t.name.rsplit("__").next().unwrap_or(&t.name).to_owned();
+                    match names.iter_mut().find(|(n, _)| *n == short) {
+                        Some((_, c)) => *c += 1,
+                        None => names.push((short.clone(), 1)),
+                    }
+                    match t.state {
+                        "running" => {
+                            running += 1;
+                            latest = Some((t, short));
+                        }
+                        "err" => errs += 1,
+                        "guard" => guards += 1,
+                        _ => {}
+                    }
+                }
+                _ => thinks += 1,
+            }
+        }
+        // The most used names first; equal counts keep the order they came in.
+        names.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+        let mut text = names.iter().take(3).map(|(n, c)| format!("{n} {c}")).collect::<Vec<_>>().join(" · ");
+        if names.len() > 3 {
+            text.push_str(" · …");
+        }
+        if thinks > 0 {
+            text.push_str(&format!(" · {}", fill(&self.t("steps_think"), &[("n", thinks.to_string())])));
+        }
+        let mut status = Vec::new();
+        if running > 0 {
+            status.push(self.t("running_tool"));
+        }
+        if errs > 0 {
+            status.push(fill(&self.t("steps_err"), &[("n", errs.to_string())]));
+        }
+        if guards > 0 {
+            status.push(fill(&self.t("steps_guard"), &[("n", guards.to_string())]));
+        }
+        let state = if running > 0 { "running" } else if errs > 0 { "err" } else if guards > 0 { "guard" } else { "done" };
+        let status = if status.is_empty() { self.t("done") } else { status.join(" · ") };
+        // A run in progress shows its latest step, so that folding it does not hide what is going on.
+        let detail = match latest {
+            Some((t, short)) if !open => first_line(&format!("{short}: {}", t.head)),
+            _ => String::new(),
+        };
+        out.push(Row { kind: "steps", key, label: fill(&self.t("steps_title"), &[("n", tools.to_string())]), text, status, state, detail, open, ..Row::default() });
+        if open {
+            for &i in run {
+                if matches!(&self.nodes[i].item, Item::Think { text, .. } if text.is_empty()) {
+                    continue;
+                }
+                self.emit(i, 1, children, out);
+            }
+        }
     }
 
     fn emit(&self, i: usize, depth: i32, children: &HashMap<&str, Vec<usize>>, out: &mut Vec<Row>) {
@@ -843,10 +1002,6 @@ impl Transcript {
                 for (b, block) in blocks.iter().enumerate() {
                     let key = format!("n{i}-{b}");
                     out.push(match block {
-                        Block::Para(md) => Row { md: md.clone(), key, ..row("para") },
-                        Block::Heading(level, md) => Row { md: format!("**{md}**"), extra: level.to_string(), key, ..row("heading") },
-                        Block::Item { depth: d, marker, md } => Row { md: md.clone(), label: marker.clone(), indent: i32::from(*d), key, ..row("item") },
-                        Block::Quote(md) => Row { md: md.clone(), key, ..row("quote") },
                         Block::Code { lang, text } => {
                             // A block of more than 30 lines shows its first 12 until it is opened.
                             let n = text.lines().count().max(1);
@@ -855,8 +1010,7 @@ impl Transcript {
                             let shown = if foldable && !open { text.lines().take(12).collect::<Vec<_>>().join("\n") } else { text.clone() };
                             Row { text: shown, label: if lang.is_empty() { "text".into() } else { lang.to_lowercase() }, extra: fill(&self.t("lines"), &[("n", n.to_string())]), detail: if foldable { fill(&self.t(if open { "fold" } else { "show_all" }), &[("n", n.to_string())]) } else { String::new() }, open, add: i32::from(foldable), key, ..row("code") }
                         }
-                        Block::Rule => Row { key, ..row("rule") },
-                        Block::Table { text, grid } => Row { text: text.clone(), grid: grid.clone(), key, ..row("table") },
+                        other => flat_row(other, key, depth),
                     });
                 }
                 if out.len() == start && !src.trim().is_empty() {
@@ -1187,5 +1341,204 @@ mod tests {
         let row = rows.iter().find(|r| r.label == "TodoWrite").expect("todo card");
         assert_eq!(row.text, "1/3 todos");
         assert_eq!(row.detail, "[x] design\n[~] write[31m code\n[ ] test");
+    }
+}
+
+#[cfg(test)]
+mod steps_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn chat() -> Transcript {
+        let mut t = Transcript::new(Lang::Ko);
+        t.replaying = false;
+        t.apply("user", &json!({"text": "go"}), 0);
+        t.apply("claude", &json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "start"}]}}), 0);
+        t
+    }
+
+    /// A hidden thought and one tool call, in one assistant message.
+    fn step(t: &mut Transcript, id: &str, name: &str, cmd: &str) {
+        t.apply("claude", &json!({"type": "assistant", "message": {"content": [{"type": "redacted_thinking", "data": "X"}, {"type": "tool_use", "id": id, "name": name, "input": {"command": cmd}}]}}), 0);
+    }
+
+    fn result(t: &mut Transcript, id: &str, text: &str, is_error: bool) {
+        t.apply("claude", &json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": id, "is_error": is_error, "content": [{"type": "text", "text": text}]}]}}), 0);
+    }
+
+    fn end(t: &mut Transcript) {
+        t.apply("claude", &json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "finish"}]}}), 0);
+    }
+
+    fn kinds(t: &Transcript) -> Vec<&'static str> {
+        t.rows().iter().map(|r| r.kind).collect()
+    }
+
+    fn five_bash_and_a_read() -> Transcript {
+        let mut t = chat();
+        for i in 0..5 {
+            step(&mut t, &format!("b{i}"), "Bash", "ls");
+            result(&mut t, &format!("b{i}"), "ok", false);
+        }
+        step(&mut t, "r1", "Read", "x");
+        result(&mut t, "r1", "ok", false);
+        end(&mut t);
+        t
+    }
+
+    #[test]
+    fn a_long_run_of_tools_and_hidden_thinking_is_one_steps_row() {
+        let t = five_bash_and_a_read();
+        let rows = t.rows();
+        let at = rows.iter().position(|r| r.kind == "steps").expect("a steps row");
+        assert_eq!((rows[at - 1].kind, rows[at + 1].kind), ("para", "para"));
+        assert_eq!(rows.len(), at + 2, "nothing of the run is left beside it");
+        let row = &rows[at];
+        assert_eq!((row.label.as_str(), row.text.as_str(), row.state), ("작업 6단계", "Bash 5 · Read 1 · 생각 6", "done"));
+        assert!(row.key.starts_with("g:") && !row.open && row.detail.is_empty());
+    }
+
+    #[test]
+    fn opening_the_steps_row_lists_its_tools_without_empty_thinking_and_closes_again() {
+        let mut t = chat();
+        for i in 0..5 {
+            step(&mut t, &format!("b{i}"), "Bash", "ls");
+            result(&mut t, &format!("b{i}"), "ok", false);
+        }
+        // One thought with text stays in the list when it is opened.
+        t.apply("claude", &json!({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "a real thought"}]}}), 0);
+        step(&mut t, "r1", "Read", "x");
+        result(&mut t, "r1", "ok", false);
+        end(&mut t);
+        let key = t.rows().into_iter().find(|r| r.kind == "steps").unwrap().key;
+        t.toggle(&key);
+        let rows = t.rows();
+        let at = rows.iter().position(|r| r.kind == "steps").unwrap();
+        assert!(rows[at].open);
+        let inside: Vec<&str> = rows[at + 1..].iter().take_while(|r| r.kind != "para").map(|r| r.kind).collect();
+        assert_eq!(inside.iter().filter(|k| **k == "tool").count(), 6);
+        assert_eq!(inside.iter().filter(|k| **k == "think").count(), 1, "only the thought that has text");
+        assert!(rows[at + 1..].iter().take_while(|r| r.kind != "para").all(|r| r.depth == 1));
+        t.toggle(&key);
+        assert!(!t.rows().into_iter().find(|r| r.kind == "steps").unwrap().open);
+    }
+
+    #[test]
+    fn two_tools_stay_as_they_are() {
+        let mut t = chat();
+        for i in 0..2 {
+            step(&mut t, &format!("b{i}"), "Bash", "ls");
+            result(&mut t, &format!("b{i}"), "ok", false);
+        }
+        end(&mut t);
+        let k = kinds(&t);
+        assert!(!k.contains(&"steps"), "{k:?}");
+        assert_eq!(k.iter().filter(|k| **k == "tool").count(), 2);
+    }
+
+    #[test]
+    fn a_failed_or_held_step_shows_on_the_collapsed_row() {
+        let mut t = chat();
+        for i in 0..4 {
+            step(&mut t, &format!("b{i}"), "Bash", "ls");
+        }
+        result(&mut t, "b0", "ok", false);
+        result(&mut t, "b1", "boom", true);
+        result(&mut t, "b2", "SmartWorkbench team mode: not small", true);
+        result(&mut t, "b3", "ok", false);
+        end(&mut t);
+        let row = t.rows().into_iter().find(|r| r.kind == "steps").unwrap();
+        assert_eq!(row.state, "err");
+        assert!(row.status.contains("오류 1") && row.status.contains("차단 1"), "{}", row.status);
+    }
+
+    #[test]
+    fn a_run_in_progress_shows_its_latest_step() {
+        let mut t = chat();
+        for i in 0..3 {
+            step(&mut t, &format!("b{i}"), "Bash", "ls");
+            result(&mut t, &format!("b{i}"), "ok", false);
+        }
+        step(&mut t, "b3", "Bash", "make release");
+        let row = t.rows().into_iter().find(|r| r.kind == "steps").unwrap();
+        assert_eq!(row.state, "running");
+        assert!(row.detail.starts_with("Bash: make release"), "{}", row.detail);
+        assert!(row.status.contains("실행 중"));
+    }
+
+    #[test]
+    fn a_sub_agents_work_stays_under_its_card_in_a_run() {
+        let mut t = chat();
+        t.apply("claude", &json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "a1", "name": "Agent", "input": {"description": "look"}}]}}), 0);
+        t.apply("claude", &json!({"type": "assistant", "parent_tool_use_id": "a1", "message": {"content": [{"type": "tool_use", "id": "c1", "name": "Read", "input": {"file_path": "x"}}]}}), 0);
+        for i in 0..2 {
+            step(&mut t, &format!("b{i}"), "Bash", "ls");
+            result(&mut t, &format!("b{i}"), "ok", false);
+        }
+        end(&mut t);
+        let key = t.rows().into_iter().find(|r| r.kind == "steps").expect("three top-level tools make a run").key;
+        assert!(!t.rows().iter().any(|r| r.kind == "tool" && r.label == "Read"), "folded: the sub-agent's Read is not a row");
+        t.toggle(&key);
+        let read = t.rows().into_iter().find(|r| r.kind == "tool" && r.label == "Read").expect("opened: it is there");
+        assert_eq!(read.depth, 2);
+    }
+
+    #[test]
+    fn a_group_key_does_not_touch_code_folds_or_tools() {
+        let mut t = five_bash_and_a_read();
+        let before = t.expanded.clone();
+        t.toggle("g:x");
+        t.toggle("g:");
+        assert_eq!(t.expanded, before);
+        t.toggle("g:3");
+        assert!(t.expanded.contains("g:3") && t.rows().iter().filter(|r| r.kind == "tool").all(|r| !r.open));
+        t.toggle("g:3");
+        assert_eq!(t.expanded, before);
+    }
+}
+
+#[cfg(test)]
+mod md_rows_tests {
+    use super::*;
+
+    fn kinds(rows: &[Row]) -> Vec<&'static str> {
+        rows.iter().map(|r| r.kind).collect()
+    }
+
+    #[test]
+    fn a_markdown_file_is_drawn_with_the_rows_of_an_answer() {
+        let src = "# Title\n\nSome *text* and a [link](https://x.y).\n\n- one\n- two\n\n> quoted\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n---\n";
+        let rows = md_rows(src, Lang::En);
+        assert_eq!(kinds(&rows), ["heading", "para", "item", "item", "quote", "table", "rule"]);
+        assert_eq!(rows[0].extra, "1");
+        assert_eq!(rows[5].grid, vec![vec!["a".to_owned(), "b".to_owned()], vec!["1".to_owned(), "2".to_owned()]]);
+        assert!(rows.iter().all(|r| r.depth == 0 && !r.key.is_empty()));
+        let keys: std::collections::HashSet<_> = rows.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys.len(), rows.len(), "every row has its own key");
+    }
+
+    #[test]
+    fn a_front_matter_block_is_one_code_row_and_a_long_code_block_is_not_folded() {
+        let long: String = (0..40).map(|n| format!("line {n}\n")).collect();
+        let src = format!("---\ntitle: T\ntags: [a]\n---\n# After\n\n```rust\n{long}```\n");
+        let rows = md_rows(&src, Lang::En);
+        assert_eq!(kinds(&rows), ["code", "heading", "code"]);
+        assert_eq!((rows[0].label.as_str(), rows[0].text.as_str()), ("yaml", "title: T\ntags: [a]"));
+        assert_eq!(rows[2].label, "rust");
+        assert_eq!(rows[2].text.lines().count(), 40);
+        assert_eq!(rows[2].add, 0, "nothing folds in a file");
+        assert!(rows[2].extra.contains("40"), "{}", rows[2].extra);
+    }
+
+    #[test]
+    fn a_line_of_dashes_that_is_not_a_front_matter_stays_a_rule_and_a_byte_order_mark_is_dropped() {
+        let rows = md_rows("---\nnot closed\n\ntext\n", Lang::En);
+        assert!(!rows.iter().any(|r| r.label == "yaml"), "{:?}", kinds(&rows));
+        let rows = md_rows("\u{feff}# T\n", Lang::En);
+        assert_eq!(kinds(&rows), ["heading"]);
+        let far = format!("---\n{}---\n# T\n", "a: b\n".repeat(150));
+        assert!(!md_rows(&far, Lang::En).iter().any(|r| r.label == "yaml"), "a front matter that does not end in 100 lines is not one");
+        assert!(md_rows("", Lang::En).is_empty());
+        assert!(md_rows("  \n\n", Lang::En).is_empty());
     }
 }
