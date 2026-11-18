@@ -74,7 +74,7 @@ fn project(fx: &Fx, name: &str) -> PathBuf {
 }
 
 fn work(fx: &Fx) -> String {
-    fx.server.registry.add_account("Work").unwrap().id
+    fx.server.registry.add_account("Work", tenrec::accounts::AccountKind::Claude).unwrap().id
 }
 
 async fn turn(session: &SessionHandle, text: &str) {

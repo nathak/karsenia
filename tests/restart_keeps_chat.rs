@@ -99,3 +99,46 @@ async fn a_chat_named_but_never_talked_to_can_be_sent_to_after_a_restart() {
     chat.send("hello".into(), vec![]).await.expect("a message can be sent to it");
     idle(&mut rx).await;
 }
+
+#[tokio::test]
+async fn a_chat_nobody_named_that_has_a_conversation_is_started_again_with_its_title_as_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let scenario = format!("{{\"$wait\":\"user\"}}\n{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"{ID}\"}}\n{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}}\n{{\"$wait\":\"user\"}}\n");
+    std::fs::write(root.join("scenario.jsonl"), scenario).unwrap();
+    let wrapper = root.join("claude");
+    std::fs::write(&wrapper, format!("#!/bin/sh\nFAKE_SCENARIO='{}' FAKE_LOG='{}' exec '{}' \"$@\"\n", root.join("scenario.jsonl").display(), root.join("fake.log").display(), FAKE)).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let project = root.join("p");
+    std::fs::create_dir_all(&project).unwrap();
+    let config = || Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: None, extract: Default::default(), propose: Default::default(), sched: Default::default() };
+
+    let sid = {
+        let server = start(config()).await.unwrap();
+        let chat = server.registry.create_in(project.to_str().unwrap(), None, None, false, None).unwrap();
+        let (_, mut rx) = chat.subscribe(0).await.unwrap();
+        chat.send("check the build".into(), vec![]).await.unwrap();
+        idle(&mut rx).await;
+        let sid = chat.sid.clone();
+        assert!(!chat.info().await.unwrap().meta.named, "nobody named it: its title is the first message's words");
+        chat.stop();
+        drop(server);
+        sid
+    };
+    std::fs::remove_file(root.join("fake.log")).ok();
+
+    // The app is started again; no message is sent. Its `claude` is running anyway, resuming the session under the chat's title,
+    // because that is the name by which another Claude Code session finds it.
+    let server = start(config()).await.unwrap();
+    assert!(server.registry.get(&sid).is_some());
+    let mut argv = String::new();
+    for _ in 0..80 {
+        argv = std::fs::read_to_string(root.join("fake.log")).unwrap_or_default();
+        if argv.contains("ARGV") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(argv.lines().any(|l| l.starts_with("ARGV ") && l.contains(&format!("--resume {ID}")) && l.contains("--name check the build")), "{argv}");
+}

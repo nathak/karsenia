@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::{plain, AppState};
+use crate::accounts::AccountKind;
 
 fn result(out: &UnboundedSender<String>, rid: &Value, ok: bool, data: Value) {
     let mut body = data;
@@ -29,12 +30,16 @@ pub fn shell_quote(text: &str) -> String {
 }
 
 /// What the person types in their own terminal to log this account in.
-pub fn login_command(config_dir: &std::path::Path) -> String {
+pub fn login_command(kind: AccountKind, config_dir: &std::path::Path) -> String {
+    let (variable, command) = match kind {
+        AccountKind::Claude => ("CLAUDE_CONFIG_DIR", "claude auth login"),
+        AccountKind::Codex => ("CODEX_HOME", "codex login"),
+    };
     if cfg!(windows) {
         // PowerShell: a single-quoted string, a quote inside written twice.
-        return format!("$env:CLAUDE_CONFIG_DIR = '{}'; claude auth login", config_dir.to_string_lossy().replace('\'', "''"));
+        return format!("$env:{variable} = '{}'; {command}", config_dir.to_string_lossy().replace('\'', "''"));
     }
-    format!("CLAUDE_CONFIG_DIR={} claude auth login", shell_quote(&config_dir.to_string_lossy()))
+    format!("{variable}={} {command}", shell_quote(&config_dir.to_string_lossy()))
 }
 
 fn listing(state: &AppState) -> Value {
@@ -44,8 +49,12 @@ fn listing(state: &AppState) -> Value {
         .list()
         .into_iter()
         .map(|a| {
-            let open = registry.realm(Some(&a.id)).is_ok();
-            json!({"id": a.id, "name": a.name, "created": a.created, "open": open, "login": login_command(&crate::accounts::config_dir(registry.dir(), &a.id)), "dir": crate::accounts::config_dir(registry.dir(), &a.id).display().to_string()})
+            // Open: a Claude account has its realm, a Codex account its folder looked at again.
+            let open = match a.kind {
+                AccountKind::Claude => registry.realm(Some(&a.id)).is_ok(),
+                AccountKind::Codex => registry.codex_home(&a.id).is_ok(),
+            };
+            json!({"id": a.id, "name": a.name, "kind": a.kind.as_str(), "created": a.created, "open": open, "login": login_command(a.kind, &crate::accounts::config_dir(registry.dir(), &a.id)), "dir": crate::accounts::config_dir(registry.dir(), &a.id).display().to_string()})
         })
         .collect();
     json!({"accounts": accounts, "notice": registry.accounts_notice})
@@ -61,10 +70,10 @@ pub fn handle(state: &AppState, name: &str, op: &Value, out: &UnboundedSender<St
         "account_list" => {
             let _ = out.send(plain("accounts", None, listing(state)));
         }
-        "account_add" => match state.registry.add_account(&text("name")) {
+        "account_add" => match AccountKind::parse(&text("kind")).and_then(|kind| state.registry.add_account(&text("name"), kind)) {
             Ok(account) => {
                 changed(state);
-                let login = login_command(&crate::accounts::config_dir(state.registry.dir(), &account.id));
+                let login = login_command(account.kind, &crate::accounts::config_dir(state.registry.dir(), &account.id));
                 result(out, &rid, true, json!({"account": account, "login": login}));
             }
             Err(error) => result(out, &rid, false, json!({"error": error})),
@@ -139,6 +148,23 @@ pub fn handle(state: &AppState, name: &str, op: &Value, out: &UnboundedSender<St
             let id = op["id"].as_str().map(str::to_owned);
             tokio::spawn(async move {
                 let bin = state.registry.bin().to_owned();
+                let kind = id.as_deref().and_then(|id| state.registry.accounts().get(id)).map(|a| a.kind).unwrap_or_default();
+                // A Codex account is asked through the `codex` program; its answer has its own shape (see `codex::CodexAuth`).
+                if let (AccountKind::Codex, Some(id)) = (kind, &id) {
+                    let answer = async {
+                        let home = state.registry.codex_home(id)?;
+                        let path_var = std::env::var_os("PATH");
+                        let codex = crate::codex::bin(path_var.as_deref()).and_then(|b| b.to_str().map(str::to_owned)).ok_or_else(crate::codex::not_found)?;
+                        crate::codex::status(&codex, &home, &crate::codex::plan(&crate::claude::env::inherited_names(), &home)).await
+                    }
+                    .await;
+                    let data = match answer {
+                        Ok(auth) => json!({"req": req, "id": id, "kind": "codex", "status": auth}),
+                        Err(error) => json!({"req": req, "id": id, "kind": "codex", "error": error}),
+                    };
+                    let _ = out.send(plain("account_status", None, data));
+                    return;
+                }
                 let answer = match &id {
                     Some(id) => match state.registry.account_login(id) {
                         Ok((dir, env)) => crate::accounts::status(&bin, &dir, &env, Some(&dir)).await.map_err(|e| e.message()),
@@ -159,5 +185,26 @@ pub fn handle(state: &AppState, name: &str, op: &Value, out: &UnboundedSender<St
             });
         }
         _ => result(out, &rid, false, json!({"error": "unknown account operation"})),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn the_login_command_names_the_programs_own_folder_variable() {
+        let claude = login_command(AccountKind::Claude, Path::new("/d/a"));
+        let codex = login_command(AccountKind::Codex, Path::new("/d/a"));
+        if cfg!(windows) {
+            assert_eq!(codex, "$env:CODEX_HOME = '/d/a'; codex login");
+            assert_eq!(claude, "$env:CLAUDE_CONFIG_DIR = '/d/a'; claude auth login");
+        } else {
+            assert_eq!(codex, "CODEX_HOME='/d/a' codex login");
+            assert_eq!(claude, "CLAUDE_CONFIG_DIR='/d/a' claude auth login");
+            // A quote in the path is written so that it stays one word.
+            assert_eq!(login_command(AccountKind::Codex, Path::new("/d/it's")), "CODEX_HOME='/d/it'\\''s' codex login");
+        }
     }
 }

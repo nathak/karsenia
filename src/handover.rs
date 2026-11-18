@@ -23,8 +23,40 @@ pub fn session_path(config: &Path, cwd: &str, id: &str) -> PathBuf {
     config.join("projects").join(encode_dir(cwd)).join(format!("{id}.jsonl"))
 }
 
-/// Copies the session `id` of `cwd` from one config folder to another, without its `session-owner` line. Returns the new file.
+/// A fingerprint of a session file's conversation (its lines without the `session-owner` one): the same for the copy made for another
+/// account as for the original, and different as soon as a line is added. A change detector, not a security check.
+pub fn fingerprint(path: &Path) -> Option<u64> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_COPY_BYTES {
+        return None;
+    }
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for line in text.lines() {
+        if serde_json::from_str::<serde_json::Value>(line).map(|v| v["type"] == "session-owner").unwrap_or(false) {
+            continue;
+        }
+        for byte in line.bytes().chain(std::iter::once(b'\n')) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    Some(hash)
+}
+
+/// Copies the session `id` of `cwd` from one config folder to another, without its `session-owner` line. Returns the new file. A session
+/// the other account already has is never replaced.
 pub fn copy_session(from: &Path, to: &Path, cwd: &str, id: &str) -> Result<PathBuf, String> {
+    place(from, to, cwd, id, false)
+}
+
+/// As `copy_session`, but the file the other account has is replaced: only for the one case that was checked (that account's copy is the
+/// ancestor of this one and has not changed since, see `fingerprint`).
+pub fn replace_session(from: &Path, to: &Path, cwd: &str, id: &str) -> Result<PathBuf, String> {
+    place(from, to, cwd, id, true)
+}
+
+fn place(from: &Path, to: &Path, cwd: &str, id: &str, overwrite: bool) -> Result<PathBuf, String> {
     if !is_session_id(id) {
         return Err("not a session id".into());
     }
@@ -56,13 +88,19 @@ pub fn copy_session(from: &Path, to: &Path, cwd: &str, id: &str) -> Result<PathB
         return Err("the other account's project folder is not a plain folder".into());
     }
     crate::private::create_dir(folder).map_err(|e| e.to_string())?;
-    // Written whole beside the target, then put in place: a reader never sees half a file, and an older copy is replaced by the newer one.
+    // Written whole beside the target, then linked into place: a reader never sees half a file, and a file that is already there (the other
+    // account has this session, with turns of its own) is never replaced: the link is refused when the name exists, in one step.
     let tmp = folder.join(format!("{id}.jsonl.tenrec-tmp"));
     crate::private::write(&tmp, &out).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &dst).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        e.to_string()
-    })?;
+    if overwrite {
+        return std::fs::rename(&tmp, &dst).map(|()| dst).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            e.to_string()
+        });
+    }
+    let linked = std::fs::hard_link(&tmp, &dst);
+    let _ = std::fs::remove_file(&tmp);
+    linked.map_err(|e| if e.kind() == std::io::ErrorKind::AlreadyExists { "the other account already has this session; open it there".to_owned() } else { e.to_string() })?;
     Ok(dst)
 }
 
@@ -73,7 +111,7 @@ mod tests {
     const ID: &str = "748aa02c-6299-4224-8d60-1131a940bf14";
 
     #[test]
-    fn the_session_is_copied_without_its_owner_line_and_replaced_when_copied_again() {
+    fn the_session_is_copied_without_its_owner_line_and_never_replaced_once_the_other_account_has_it() {
         let dir = tempfile::tempdir().unwrap();
         let (from, to) = (dir.path().join("a"), dir.path().join("b"));
         let cwd = "/work/my project";
@@ -84,10 +122,10 @@ mod tests {
         assert_eq!(dst, session_path(&to, cwd, ID));
         let text = std::fs::read_to_string(&dst).unwrap();
         assert!(!text.contains("session-owner") && text.contains("\"hi\""), "{text}");
-        // A newer state of the session replaces the older copy.
+        // A session the other account already has is never replaced, even by a newer copy.
         std::fs::write(&src, "{\"type\":\"user\",\"message\":{\"content\":\"later\"}}\n").unwrap();
-        copy_session(&from, &to, cwd, ID).unwrap();
-        assert!(std::fs::read_to_string(&dst).unwrap().contains("later"));
+        assert!(copy_session(&from, &to, cwd, ID).unwrap_err().contains("already has this session"));
+        assert!(std::fs::read_to_string(&dst).unwrap().contains("kiwi") || std::fs::read_to_string(&dst).unwrap().contains("hi"));
         assert!(!dst.with_file_name(format!("{ID}.jsonl.tenrec-tmp")).exists());
     }
 

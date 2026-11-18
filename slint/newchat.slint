@@ -130,6 +130,7 @@ component AccountCard inherits Rectangle {
                     spacing: 8px; alignment: start;
                     Text { text: r.name; color: Theme.on-surface; font-size: 15px; font-weight: 600; vertical-alignment: center; overflow: elide; }
                     if r.is-default: VerticalLayout { alignment: center; Badge { text: T.tr("nc_default_tag"); tone: "info"; } }
+                    if r.kind == "codex": VerticalLayout { alignment: center; Badge { text: T.tr("acct_kind_codex"); tone: "info"; } }
                 }
                 if root.editing: LineEdit { text: r.name; init => { root.draft = r.name; self.focus(); } edited(t) => { root.draft = t; } accepted(t) => { Acct.rename(r.id, t); } }
                 Text { text: r.sub; color: Theme.outline; font-size: 12px; font-family: Theme.mono; overflow: elide; }
@@ -142,7 +143,7 @@ component AccountCard inherits Rectangle {
                 }
             }
         }
-        Text { text: T.tr("us_title") + ": " + (r.usage != "" ? r.usage : T.tr("us_none")); color: r.usage != "" ? Usage.tone(r.usage-level) : Theme.outline; font-size: 11px; font-family: Theme.mono; overflow: elide; }
+        if r.kind != "codex": Text { text: T.tr("us_title") + ": " + (r.usage != "" ? r.usage : T.tr("us_none")); color: r.usage != "" ? Usage.tone(r.usage-level) : Theme.outline; font-size: 11px; font-family: Theme.mono; overflow: elide; }
         HorizontalLayout {
             spacing: 6px;
             Rectangle {
@@ -176,12 +177,13 @@ component AccountCard inherits Rectangle {
                         padding: 12px; spacing: 8px;
                         HorizontalLayout { Label { text: T.tr("nc_terminal"); vertical-alignment: center; horizontal-stretch: 1; } Btn { text: T.tr("nc_copy_cmd"); height: 26px; clicked => { Acct.copy-login(r.id); } } }
                         SelText { text: r.login; size: 12px; mono: true; chars: true; fg: Theme.ok; }
+                        if r.kind == "codex": WText { text: T.tr("acct_codex_hint"); size: 11px; fg: Theme.outline; }
                         HorizontalLayout { alignment: end; Btn { text: T.tr("nc_recheck"); height: 28px; clicked => { Acct.status(r.id); } } }
                     }
                 }
             }
         }
-        if r.open: Rectangle {
+        if r.open && r.kind != "codex": Rectangle {
             height: pg.preferred-height;
             pg := VerticalLayout {
                 spacing: 6px;
@@ -232,8 +234,10 @@ export component AccountsManage inherits Rectangle {
         for r in Acct.rows: AccountCard { r: r; }
         if Acct.can-add: HorizontalLayout {
             spacing: 8px;
-            LineEdit { horizontal-stretch: 1; text <=> Acct.new-name; placeholder-text: T.tr("acct_name_ph"); accepted(t) => { if (t != "") { Acct.add(t); } } }
-            Btn { text: T.tr("acct_add"); height: 34px; enabled: Acct.new-name != ""; clicked => { Acct.add(Acct.new-name); } }
+            Btn { text: T.tr("acct_kind_claude"); height: 34px; primary: Acct.new-kind == "claude"; clicked => { Acct.new-kind = "claude"; } }
+            Btn { text: T.tr("acct_kind_codex"); height: 34px; primary: Acct.new-kind == "codex"; clicked => { Acct.new-kind = "codex"; } }
+            LineEdit { horizontal-stretch: 1; text <=> Acct.new-name; placeholder-text: T.tr("acct_name_ph"); accepted(t) => { if (t != "") { Acct.add(t, Acct.new-kind); } } }
+            Btn { text: T.tr("acct_add"); height: 34px; enabled: Acct.new-name != ""; clicked => { Acct.add(Acct.new-name, Acct.new-kind); } }
         }
     }
 }

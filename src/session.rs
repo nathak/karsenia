@@ -100,9 +100,28 @@ pub struct Meta {
     #[serde(default, skip_serializing_if = "crate::claude::perm::PermMode::is_default")]
     pub permission_mode: crate::claude::perm::PermMode,
     /// `title` was given by a person (when the chat was made or by renaming): it is then also the CLI's session name (`--name`), and a
-    /// first message does not replace it. False: the title is the first message's words and the CLI is told no name.
+    /// first message does not replace it. False: the title is the first message's words (see `Meta::cli_name` for what the CLI is told).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub named: bool,
+    /// The chat this one continues in another account (see `Registry::continue_as`) and the fingerprint of that chat's session file when
+    /// this one was made: coming back is a fast-forward of that chat only while its file is still what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed: Option<Handed>,
+}
+
+impl Meta {
+    /// The name the CLI is told (`--name`), which is the address another Claude Code session finds the chat by while its process runs:
+    /// what a person named it, or, for a chat that has a conversation, its title (the first message's words). A chat with neither has no
+    /// name, and none is invented.
+    pub fn cli_name(&self) -> Option<String> {
+        (self.named || (self.claude_session_id.is_some() && !self.title.is_empty())).then(|| self.title.clone())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Handed {
+    pub parent: String,
+    pub parent_hash: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -135,6 +154,10 @@ enum Cmd {
     Rename { title: String, reply: oneshot::Sender<Result<(), String>> },
     Remove { reply: oneshot::Sender<Result<(), String>> },
     Warm { reply: oneshot::Sender<Result<(), String>> },
+    /// Ends the idle process (refused while a turn runs or a question waits): the session file is about to be replaced.
+    Prepare { reply: oneshot::Sender<Result<(), String>> },
+    /// Takes the events another chat of the same session made since (shown as imported) and the new lineage.
+    Absorb { events: Vec<(u64, String, Value)>, handed: Handed, reply: oneshot::Sender<Result<(), String>> },
     Stop,
     Kill,
     UserTexts { after: u64, since: u64, reply: oneshot::Sender<Vec<(u64, String)>> },
@@ -185,6 +208,16 @@ impl SessionHandle {
             }
         }
         ask(&self.tx, |reply| Cmd::Send { text, images, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
+    /// See `Cmd::Prepare`.
+    pub async fn prepare(&self) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::Prepare { reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
+    /// See `Cmd::Absorb`.
+    pub async fn absorb(&self, events: Vec<(u64, String, Value)>, handed: Handed) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::Absorb { events, handed, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
     }
 
     /// Starts the chat's `claude` now (a chat the person named only: see `Actor::warm`), so that another Claude Code session can find
@@ -296,7 +329,7 @@ fn now_ms() -> u64 {
 }
 
 pub fn new_meta(cwd: PathBuf, model: Option<String>, provider: Option<ProviderRef>, container: bool, account: Option<AccountRef>) -> Meta {
-    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider, container, worktree: None, account, imported_from: None, permission_mode: Default::default(), named: false }
+    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider, container, worktree: None, account, imported_from: None, permission_mode: Default::default(), named: false, handed: None }
 }
 
 pub fn log_path(dir: &std::path::Path, sid: &str) -> PathBuf {
@@ -376,9 +409,14 @@ impl Actor {
     }
 
     fn emit(&mut self, kind: &str, data: Value) {
+        self.emit_at(kind, data, now_ms());
+    }
+
+    /// As `emit`, with the time the event happened (an event another chat made, taken over).
+    fn emit_at(&mut self, kind: &str, data: Value, ts: u64) {
         let data = self.scrub(data);
         self.seq += 1;
-        let envelope = Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, ts: now_ms(), kind: kind.to_owned(), data };
+        let envelope = Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, ts, kind: kind.to_owned(), data };
         if let Ok(line) = serde_json::to_string(&envelope) {
             let _ = crate::private::append_line(&log_path(&self.dir, &self.meta.sid), &line);
         }
@@ -581,6 +619,31 @@ impl Actor {
                     return events;
                 }
             }
+            Cmd::Prepare { reply } => {
+                if self.state == State::Running || !self.pending.is_empty() {
+                    let _ = reply.send(Err("a turn is running or a permission waits in that chat".to_owned()));
+                } else {
+                    if let Some(process) = self.process.take() {
+                        process.stop();
+                        if let Some(gate) = &self.mcp {
+                            gate.revoke(&self.meta.sid);
+                        }
+                        let _ = std::fs::remove_file(self.recall_path());
+                        let _ = std::fs::remove_dir_all(self.skills_path());
+                        self.set_state(State::Idle);
+                    }
+                    let _ = reply.send(Ok(()));
+                }
+            }
+            Cmd::Absorb { events, handed, reply } => {
+                for (ts, kind, mut data) in events {
+                    data["imported"] = Value::Bool(true);
+                    self.emit_at(&kind, data, ts);
+                }
+                self.meta.handed = Some(handed);
+                self.save_meta();
+                let _ = reply.send(Ok(()));
+            }
             Cmd::Warm { reply } => {
                 let (result, events) = self.warm();
                 let _ = reply.send(result);
@@ -673,13 +736,13 @@ impl Actor {
         None
     }
 
-    /// A chat the person named keeps a `claude` running between messages, so its name is a live address: another Claude Code session
-    /// finds it (and can message it) without a message having been sent first. No provider or container chat, nothing while a turn
-    /// runs, and no cost: the process waits for its first message.
+    /// A chat that has a name (one a person gave it, or its title once it has a conversation) keeps a `claude` running between
+    /// messages, so its name is a live address: another Claude Code session finds it (and can message it) without a message having
+    /// been sent first. No provider or container chat, nothing while a turn runs, and no cost: the process waits for its first message.
     fn warm(&mut self) -> (Result<(), String>, Option<mpsc::UnboundedReceiver<ProcEvent>>) {
         let held = self.process.is_some() || self.state == State::Running || self.gone || self.retiring || !self.pending.is_empty();
         let gone = self.realm.as_ref().is_some_and(|r| r.is_retired()) || self.meta.worktree.as_ref().is_some_and(|w| w.removed) || !self.meta.cwd.is_dir();
-        if !self.meta.named || self.meta.provider.is_some() || self.meta.container || held || gone {
+        if self.meta.cli_name().is_none() || self.meta.provider.is_some() || self.meta.container || held || gone {
             return (Ok(()), None);
         }
         match self.ensure_process() {
@@ -759,7 +822,7 @@ impl Actor {
                     return Err(message);
                 }
             };
-            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.named.then(|| self.meta.title.clone()), plugins_off: self.workbench_native(), guard_hook };
+            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.cli_name(), plugins_off: self.workbench_native(), guard_hook };
             match ClaudeProcess::spawn(&opts) {
                 Ok((process, rx)) => {
                     self.process = Some(process);

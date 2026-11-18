@@ -408,9 +408,10 @@ pub fn hits_view(data: &Value, lang: Lang, now: u64) -> Result<Vec<HitRow>, Stri
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AcctHead {
     pub notice: String,
-    /// Fewer than the eight accounts the app allows.
+    /// Fewer than the accounts the app allows (`accounts::MAX_ACCOUNTS`, both kinds together).
     pub can_add: bool,
-    /// The account picker's entries, the default account first, and the id behind each (None for the default one).
+    /// The account picker's entries, the default account first, and the id behind each (None for the default one). Only Claude accounts:
+    /// a chat runs in one of them, and a Codex account has no chats, tabs or notes to pick.
     pub names: Vec<String>,
     pub ids: Vec<Option<String>>,
 }
@@ -426,6 +427,8 @@ pub struct AcctRow {
     pub chats: usize,
     pub open: bool,
     pub is_default: bool,
+    /// "claude" or "codex" (the default account is a Claude one).
+    pub kind: String,
     /// What logs this account in from a terminal.
     pub login: String,
     /// The folder this account's `claude` keeps its login and history in.
@@ -436,7 +439,7 @@ pub struct AcctRow {
 /// ("" for the default one): no key when never asked, None while asking. `chats` counts the chats of each account.
 pub fn accounts_view(list: &Value, status: &HashMap<String, Option<Value>>, chats: &HashMap<String, usize>, lang: Lang) -> (AcctHead, Vec<AcctRow>) {
     let accounts = list["accounts"].as_array().cloned().unwrap_or_default();
-    let mut head = AcctHead { notice: s(list, "notice"), can_add: accounts.len() < 8, names: vec![tr(lang, "acct_default")], ids: vec![None] };
+    let mut head = AcctHead { notice: s(list, "notice"), can_add: accounts.len() < crate::accounts::MAX_ACCOUNTS, names: vec![tr(lang, "acct_default")], ids: vec![None] };
     // The state goes on the row's pill; the line under it says only what the pill does not (the email, the error).
     let describe = |key: &str, open: bool| -> (String, String) {
         if !open {
@@ -447,6 +450,22 @@ pub fn accounts_view(list: &Value, status: &HashMap<String, Option<Value>>, chat
             Some(None) => ("busy".into(), String::new()),
             Some(Some(data)) => match data.get("error").and_then(Value::as_str) {
                 Some(e) => ("error".into(), fill(&tr(lang, "acct_st_failed"), &[("e", e.to_owned())])),
+                // A Codex account's answer has its own shape (see `codex::CodexAuth`): how it was logged in, and whether the login is in its folder.
+                None if data["kind"] == "codex" => {
+                    let st = &data["status"];
+                    if st["known"] == false {
+                        ("error".into(), tr(lang, "acct_codex_unknown"))
+                    } else if st["logged_in"] == true {
+                        let how = match st["method"].as_str() {
+                            Some("chatgpt") => tr(lang, "acct_codex_chatgpt"),
+                            Some("api_key") => tr(lang, "acct_codex_api_key"),
+                            _ => tr(lang, "acct_codex_other"),
+                        };
+                        ("in".into(), if st["file"] == false { format!("{how} · {}", tr(lang, "acct_codex_file_missing")) } else { how })
+                    } else {
+                        ("out".into(), String::new())
+                    }
+                }
                 None if data["status"]["logged_in"] == true => {
                     let st = &data["status"];
                     let mut parts = Vec::new();
@@ -461,24 +480,29 @@ pub fn accounts_view(list: &Value, status: &HashMap<String, Option<Value>>, chat
             },
         }
     };
-    let row = |id: &str, name: String, open: bool, login: String, dir: String| {
+    let row = |id: &str, name: String, kind: &str, open: bool, login: String, dir: String| {
         let (state, mut sub) = describe(id, open);
         let n = chats.get(id).copied().unwrap_or(0);
         if n > 0 {
             let count = fill(&tr(lang, "acct_chats"), &[("n", n.to_string())]);
             sub = if sub.is_empty() { count } else { format!("{count} · {sub}") };
         }
-        AcctRow { id: id.to_owned(), name, sub, state, chats: n, open, is_default: id.is_empty(), login, dir }
+        AcctRow { id: id.to_owned(), name, sub, state, chats: n, open, is_default: id.is_empty(), kind: kind.to_owned(), login, dir }
     };
     // The default account lives where `claude` keeps its own files (CLAUDE_CONFIG_DIR, else ~/.claude).
     let default_dir = crate::accounts::default_config_dir(std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from).as_deref(), crate::platform::home_dir().as_deref()).map(|d| d.display().to_string()).unwrap_or_default();
-    let mut rows = vec![row("", tr(lang, "acct_default"), true, "claude auth login".to_owned(), default_dir)];
-    for a in &accounts {
-        let id = s(a, "id");
-        let name = s(a, "name");
-        head.names.push(name.clone());
-        head.ids.push(Some(id.clone()));
-        rows.push(row(&id, name, a["open"] != false, s(a, "login"), s(a, "dir")));
+    let mut rows = vec![row("", tr(lang, "acct_default"), "claude", true, "claude auth login".to_owned(), default_dir)];
+    // The Claude accounts, then the Codex ones (each in the order the host listed them).
+    for kind in ["claude", "codex"] {
+        for a in accounts.iter().filter(|a| a["kind"].as_str().unwrap_or("claude") == kind) {
+            let id = s(a, "id");
+            let name = s(a, "name");
+            if kind == "claude" {
+                head.names.push(name.clone());
+                head.ids.push(Some(id.clone()));
+            }
+            rows.push(row(&id, name, kind, a["open"] != false, s(a, "login"), s(a, "dir")));
+        }
     }
     (head, rows)
 }
@@ -685,5 +709,32 @@ mod tests {
         assert_eq!(tab_label("Work", seen.get("a1")), "⚠ 1 Work");
         assert_eq!(tab_label("Work", Some(&(0, 3))), "● Work");
         assert_eq!(tab_label("Work", None), "Work");
+    }
+
+    #[test]
+    fn a_codex_account_is_a_row_but_never_an_entry_of_the_picker_and_says_how_it_is_logged_in() {
+        let list = serde_json::json!({"accounts": [
+            {"id": "cx", "name": "Codex Work", "kind": "codex", "open": true, "login": "CODEX_HOME=x codex login", "dir": "/d/cx"},
+            {"id": "cl", "name": "Claude Work", "open": true, "login": "l", "dir": "/d/cl"},
+        ]});
+        let mut status = HashMap::new();
+        status.insert("cx".to_owned(), Some(serde_json::json!({"kind": "codex", "status": {"logged_in": true, "method": "chatgpt", "known": true, "file": true}})));
+        let (head, rows) = accounts_view(&list, &status, &HashMap::new(), Lang::En);
+        assert_eq!(head.names, vec!["Default account".to_owned(), "Claude Work".to_owned()], "a chat cannot be made in a Codex account");
+        assert_eq!(head.ids, vec![None, Some("cl".to_owned())]);
+        let kinds: Vec<(&str, &str)> = rows.iter().map(|r| (r.id.as_str(), r.kind.as_str())).collect();
+        assert_eq!(kinds, vec![("", "claude"), ("cl", "claude"), ("cx", "codex")], "Claude accounts first, then Codex ones");
+        let cx = &rows[2];
+        assert_eq!((cx.state.as_str(), cx.sub.as_str()), ("in", "Logged in with ChatGPT"));
+        // A login outside the account's folder, one that is out, and an answer that could not be read.
+        let ask = |status: serde_json::Value| {
+            let mut m = HashMap::new();
+            m.insert("cx".to_owned(), Some(serde_json::json!({"kind": "codex", "status": status})));
+            accounts_view(&list, &m, &HashMap::new(), Lang::En).1[2].clone()
+        };
+        let outside = ask(serde_json::json!({"logged_in": true, "method": "api_key", "known": true, "file": false}));
+        assert!(outside.sub.contains("API key") && outside.sub.contains("outside"), "{}", outside.sub);
+        assert_eq!(ask(serde_json::json!({"logged_in": false, "method": null, "known": true, "file": false})).state, "out");
+        assert_eq!(ask(serde_json::json!({"logged_in": false, "method": null, "known": false, "file": false})).state, "error");
     }
 }

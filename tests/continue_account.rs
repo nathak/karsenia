@@ -33,7 +33,7 @@ async fn a_chat_continues_in_another_account_with_its_conversation_and_session()
     let project = root.join("p");
     std::fs::create_dir_all(&project).unwrap();
     let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: None, extract: Default::default(), propose: Default::default(), sched: Default::default() }).await.unwrap();
-    let work = server.registry.add_account("Work").unwrap().id;
+    let work = server.registry.add_account("Work", tenrec::accounts::AccountKind::Claude).unwrap().id;
 
     // A chat of the default account has one turn.
     let chat = server.registry.create_in(project.to_str().unwrap(), None, None, false, None).unwrap();
@@ -51,7 +51,16 @@ async fn a_chat_continues_in_another_account_with_its_conversation_and_session()
     assert!(server.registry.continue_as(&chat.sid, None).await.is_err(), "already in that account");
     assert!(server.registry.continue_as("nope", Some(&work)).await.is_err());
 
+    // The guard and the contract of the chat: strict, paused, a locked contract and a pin.
+    use tenrec::workbench::{Op, Profile};
+    server.registry.workbench_apply(&chat.sid, Op::SetProfile { profile: Profile::Strict }).unwrap();
+    server.registry.workbench_apply(&chat.sid, Op::SetPaused { paused: true }).unwrap();
+    server.registry.workbench_apply(&chat.sid, Op::SetGoal { text: "ship".into() }).unwrap();
+    server.registry.workbench_apply(&chat.sid, Op::PinNote { text: "remember".into() }).unwrap();
+    server.registry.workbench_apply(&chat.sid, Op::Lock).unwrap();
     let moved = server.registry.continue_as(&chat.sid, Some(&work)).await.unwrap();
+    let carried = server.registry.workbench_get(&moved.sid).unwrap();
+    assert_eq!((carried.profile, carried.paused, carried.task.locked, carried.task.goal.as_str(), carried.pins.len()), (Profile::Strict, true, true, "ship", 1), "the guard and the contract come along");
     assert_ne!(moved.sid, chat.sid, "a new chat is made; the old one stays");
     let info = moved.info().await.unwrap();
     assert_eq!(info.meta.account.as_ref().map(|a| a.id.as_str()), Some(work.as_str()));
@@ -79,11 +88,36 @@ async fn a_chat_continues_in_another_account_with_its_conversation_and_session()
     let env = std::fs::read_to_string(root.join("env.log")).unwrap();
     assert!(env.contains(work_cfg.to_str().unwrap()), "the account's own folder is the one the CLI runs with: {env}");
 
-    // Back to the default account is refused: its first chat still carries this session, with its own turns.
+    // The chat in the other account goes on: a line is added to its session file (what Claude Code does) and its own guard changes.
     moved.stop();
-    let back = server.registry.continue_as(&moved.sid, None).await.err().unwrap_or_default();
-    assert!(back.contains("already has a chat"), "{back}");
-    // And a second carry to the same account is refused the same way.
-    let again = server.registry.continue_as(&chat.sid, Some(&work)).await.err().unwrap_or_default();
-    assert!(again.contains("already has a chat"), "{again}");
+    let work_file = tenrec::handover::session_path(&work_cfg, &cwd, ID);
+    let mut text = std::fs::read_to_string(&work_file).unwrap();
+    text.push_str("{\"type\":\"user\",\"message\":{\"content\":\"asked in the other account\"}}\n");
+    std::fs::write(&work_file, &text).unwrap();
+    server.registry.workbench_apply(&moved.sid, Op::SetProfile { profile: Profile::Permissive }).unwrap();
+
+    // Back to the default account: its first chat is brought up to date and reopened; no second chat is made there.
+    let before = server.registry.list().await.len();
+    let back = server.registry.continue_as(&moved.sid, None).await.unwrap();
+    assert_eq!(back.sid, chat.sid, "the original chat comes back");
+    assert_eq!(server.registry.list().await.len(), before, "no chat was added");
+    assert!(std::fs::read_to_string(&src).unwrap().contains("asked in the other account") && !std::fs::read_to_string(&src).unwrap().contains("session-owner"), "its session file is the newer one");
+    let (replay, _) = back.subscribe(0).await.unwrap();
+    assert!(replay.iter().any(|e| e.kind == "user" && e.data["text"] == "what was the word" && e.data["imported"] == true), "what was said in the other account is in the chat");
+    assert_eq!(server.registry.workbench_get(&chat.sid).unwrap().profile, Profile::Permissive, "the guard comes back with it");
+    // And on to the other account again: its chat is brought up to date the same way.
+    let again = server.registry.continue_as(&chat.sid, Some(&work)).await.unwrap();
+    assert_eq!(again.sid, moved.sid);
+
+    // Only an unchanged older chat is brought up to date: a session file that has changed since is never replaced.
+    let mut changed = std::fs::read_to_string(&src).unwrap();
+    changed.push_str("{\"type\":\"user\",\"message\":{\"content\":\"added at home\"}}\n");
+    std::fs::write(&src, changed).unwrap();
+    let refused = server.registry.continue_as(&moved.sid, None).await.err().unwrap_or_default();
+    assert!(refused.contains("has changed since"), "{refused}");
+    assert!(std::fs::read_to_string(&src).unwrap().contains("added at home"));
+    // A chat that is not an earlier state of this one is never replaced either, even after its chat in between was deleted.
+    server.registry.delete(&moved.sid).await.unwrap();
+    let after = server.registry.continue_as(&chat.sid, Some(&work)).await.err().unwrap_or_default();
+    assert!(after.contains("already has this session"), "{after}");
 }

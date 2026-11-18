@@ -37,7 +37,7 @@ async fn the_default_accounts_credentials_and_redirects_in_the_hosts_environment
         }
     }
     let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: None, extract: Default::default(), propose: Default::default(), sched: Default::default() }).await.unwrap();
-    let id = server.registry.add_account("Work").unwrap().id;
+    let id = server.registry.add_account("Work", tenrec::accounts::AccountKind::Claude).unwrap().id;
     let folder = root.join("p");
     std::fs::create_dir_all(&folder).unwrap();
 

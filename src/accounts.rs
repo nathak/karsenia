@@ -22,12 +22,56 @@ const NAME_MAX: usize = 40;
 const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const STATUS_MAX_BYTES: u64 = 64 * 1024;
 
+/// What an account is a login of. An entry without a kind (made before there was a choice) is a Claude login.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccountKind {
+    #[default]
+    Claude,
+    /// A Codex (OpenAI) login: its folder is the program's `CODEX_HOME`. Nothing of the app's own is kept for it (no notes, skills or history
+    /// index), and in this version no chat runs in it.
+    Codex,
+}
+
+impl AccountKind {
+    /// The kind a page or a message names; nothing named is Claude.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        match text.trim() {
+            "" | "claude" => Ok(Self::Claude),
+            "codex" => Ok(Self::Codex),
+            _ => Err("that kind of account is not known".to_owned()),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+
+    /// Whether an account of this kind has notes, skills and a history index of its own (see `realm`).
+    pub fn has_realm(self) -> bool {
+        match self {
+            Self::Claude => true,
+            Self::Codex => false,
+        }
+    }
+
+    fn is_claude(&self) -> bool {
+        *self == Self::Claude
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Account {
     pub id: String,
     pub name: String,
     pub created: u64,
     pub updated: u64,
+    /// Left out of the file for a Claude account, so an older file stays as it was.
+    #[serde(default, skip_serializing_if = "AccountKind::is_claude")]
+    pub kind: AccountKind,
 }
 
 /// What a chat keeps of its account: the id never changes, the name is what it was called when the chat was made.
@@ -77,6 +121,20 @@ pub fn default_config_dir(env: Option<&Path>, home: Option<&Path>) -> Option<Pat
     env.map(Path::to_path_buf).or_else(|| home.map(|h| h.join(".claude")))
 }
 
+/// The folder the default `codex` uses: what `CODEX_HOME` says, else `~/.codex`.
+pub fn default_codex_home(env: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
+    env.map(Path::to_path_buf).or_else(|| home.map(|h| h.join(".codex")))
+}
+
+/// The default account's folder of this kind, from this process's own environment.
+pub fn default_home_of(kind: AccountKind) -> Option<PathBuf> {
+    let home = crate::platform::home_dir();
+    match kind {
+        AccountKind::Claude => default_config_dir(std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).as_deref(), home.as_deref()),
+        AccountKind::Codex => default_codex_home(std::env::var_os("CODEX_HOME").map(PathBuf::from).as_deref(), home.as_deref()),
+    }
+}
+
 /// Looks at a folder this app made, every time it is about to be used: a real folder (not a link) of this user, private, whose
 /// parent is `parent`, and which is neither the default account's folder nor inside it. Nothing is repaired: a wrong mode or owner
 /// is refused, because someone else may have touched it. Returns the canonical path.
@@ -112,12 +170,17 @@ pub fn check_dir(path: &Path, parent: &Path, default_dir: Option<&Path>) -> Resu
     Ok(crate::platform::plain(real))
 }
 
-/// Makes the two folders of an account (private), under parents that are private too.
-pub fn make_dirs(data: &Path, id: &str) -> Result<(), String> {
+/// Makes the folders of an account (private), under parents that are private too: its settings folder, and, when the kind has a
+/// realm, the folder of its notes, skills and history index.
+pub fn make_dirs(data: &Path, id: &str, kind: AccountKind) -> Result<(), String> {
     if !valid_id(id) {
         return Err("not an account id".into());
     }
-    for (parent, leaf) in [(data.join("accounts"), config_dir(data, id)), (data.join("stores"), stores_dir(data, id))] {
+    let mut dirs = vec![(data.join("accounts"), config_dir(data, id))];
+    if kind.has_realm() {
+        dirs.push((data.join("stores"), stores_dir(data, id)));
+    }
+    for (parent, leaf) in dirs {
         crate::private::create_dir(&parent).and_then(|()| crate::private::create_dir(&leaf)).map_err(|e| format!("could not make the account's folders: {e}"))?;
     }
     Ok(())
@@ -166,7 +229,7 @@ impl AccountStore {
     }
 
     /// Adds an account and makes its folders. Nothing is kept when the file cannot be written.
-    pub fn add(&self, name: &str, now: u64) -> Result<Account, String> {
+    pub fn add(&self, name: &str, kind: AccountKind, now: u64) -> Result<Account, String> {
         let name = validate_name(name)?;
         let mut guard = self.lock();
         if guard.len() >= MAX_ACCOUNTS {
@@ -175,8 +238,8 @@ impl AccountStore {
         if guard.iter().any(|a| a.name == name) {
             return Err("another account has this name".into());
         }
-        let account = Account { id: crate::random_hex(8), name, created: now, updated: now };
-        make_dirs(&self.data, &account.id)?;
+        let account = Account { id: crate::random_hex(8), name, created: now, updated: now, kind };
+        make_dirs(&self.data, &account.id, kind)?;
         let mut list = guard.clone();
         list.push(account.clone());
         if let Err(error) = self.write(&list) {
@@ -262,8 +325,22 @@ impl StatusError {
 /// Runs `claude auth <args>` for one config folder and returns what it printed (at most 64 KB). It starts in that folder (a project's
 /// own settings are not read), with the credential variables of the account plan applied, and is ended after a time limit.
 async fn run_auth(bin: &str, dir: &Path, env: &EnvPlan, args: [&str; 2]) -> Result<(Vec<u8>, std::process::ExitStatus), String> {
+    run_capped(bin, dir, env, &args, Streams::Stdout).await
+}
+
+/// Which of the program's outputs are read: some programs say what they have to say on stderr.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Streams {
+    Stdout,
+    /// Both, stdout first (each cut at the same limit).
+    Both,
+}
+
+/// Runs a program with fixed arguments in one folder and returns what it printed (at most 64 KB of each stream) and how it ended: with the
+/// credential variables of the plan applied, in a group that can be ended as a whole, and ended after a time limit.
+pub(crate) async fn run_capped(bin: &str, dir: &Path, env: &EnvPlan, args: &[&str], streams: Streams) -> Result<(Vec<u8>, std::process::ExitStatus), String> {
     let mut command = Command::new(bin);
-    command.args(args).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    command.args(args).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(if streams == Streams::Both { Stdio::piped() } else { Stdio::null() }).kill_on_drop(true);
         crate::proc_group::configure(&mut command);
     for name in &env.remove {
         command.env_remove(name);
@@ -283,9 +360,22 @@ async fn run_auth(bin: &str, dir: &Path, env: &EnvPlan, args: [&str; 2]) -> Resu
         None => None,
     };
     let mut stdout = child.stdout.take().ok_or("no stdout")?;
+    let mut stderr = child.stderr.take();
     let work = async move {
         let mut bytes = Vec::new();
-        (&mut stdout).take(STATUS_MAX_BYTES).read_to_end(&mut bytes).await.map_err(|e| e.to_string())?;
+        let mut err_bytes = Vec::new();
+        let mut out_pipe = (&mut stdout).take(STATUS_MAX_BYTES);
+        let mut err_pipe = stderr.as_mut().map(|pipe| pipe.take(STATUS_MAX_BYTES));
+        // Both are read at once: a program that fills one pipe while the other is waited for would never end.
+        let (out, err) = tokio::join!(out_pipe.read_to_end(&mut bytes), async {
+            match err_pipe.as_mut() {
+                Some(pipe) => pipe.read_to_end(&mut err_bytes).await.map(|_| ()),
+                None => Ok(()),
+            }
+        });
+        out.map_err(|e| e.to_string())?;
+        err.map_err(|e| e.to_string())?;
+        bytes.extend(err_bytes);
         let status = child.wait().await.map_err(|e| e.to_string())?;
         Ok::<_, String>((bytes, status))
     };
@@ -359,7 +449,7 @@ mod tests {
         let dir = data();
         let (store, notice) = AccountStore::open(dir.path());
         assert!(notice.is_none() && store.list().is_empty());
-        let account = store.add("Work", 5).unwrap();
+        let account = store.add("Work", AccountKind::Claude, 5).unwrap();
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         for p in [config_dir(dir.path(), &account.id), stores_dir(dir.path(), &account.id), dir.path().join("accounts"), dir.path().join("stores")] {
             assert_eq!(mode(&p), 0o700, "{p:?}");
@@ -368,7 +458,7 @@ mod tests {
         assert_ne!(config_dir(dir.path(), &account.id), stores_dir(dir.path(), &account.id));
         let (again, _) = AccountStore::open(dir.path());
         assert_eq!(again.list(), vec![account.clone()]);
-        assert!(store.add("Work", 6).is_err(), "a name is used once");
+        assert!(store.add("Work", AccountKind::Claude, 6).is_err(), "a name is used once");
         store.rename(&account.id, "Company", 7).unwrap();
         assert_eq!(AccountStore::open(dir.path()).0.get(&account.id).unwrap().name, "Company");
         assert_eq!(AccountStore::open(dir.path()).0.get(&account.id).unwrap().id, account.id, "the id does not change");
@@ -403,7 +493,7 @@ mod tests {
         let (store, _) = AccountStore::open(dir.path());
         // A directory where the file goes: the write fails.
         std::fs::create_dir(dir.path().join("accounts.json")).unwrap();
-        assert!(store.add("Work", 1).is_err());
+        assert!(store.add("Work", AccountKind::Claude, 1).is_err());
         assert!(store.list().is_empty());
         assert_eq!(std::fs::read_dir(dir.path().join("accounts")).unwrap().count(), 0);
         assert_eq!(std::fs::read_dir(dir.path().join("stores")).unwrap().count(), 0);
@@ -413,7 +503,7 @@ mod tests {
     fn the_folder_is_looked_at_again_every_time_and_a_wrong_one_is_refused() {
         let dir = data();
         let (store, _) = AccountStore::open(dir.path());
-        let a = store.add("Work", 1).unwrap();
+        let a = store.add("Work", AccountKind::Claude, 1).unwrap();
         let parent = dir.path().join("accounts");
         let path = config_dir(dir.path(), &a.id);
         let real = check_dir(&path, &parent, None).unwrap();
@@ -472,5 +562,58 @@ mod tests {
         // A status that ends with a failure still gives its answer.
         let answer = status(&script("st", "echo '{\"loggedIn\":false}'; exit 1"), dir.path(), &env, None).await;
         assert!(answer.is_ok(), "{answer:?}");
+    }
+
+    #[test]
+    fn a_kind_is_named_or_it_is_claude_and_an_old_file_keeps_reading_as_claude() {
+        assert_eq!(AccountKind::parse("").unwrap(), AccountKind::Claude);
+        assert_eq!(AccountKind::parse(" codex ").unwrap(), AccountKind::Codex);
+        assert!(AccountKind::parse("gemini").is_err());
+        let dir = data();
+        let good = "0011223344556677";
+        std::fs::write(dir.path().join("accounts.json"), format!(r#"{{"v":1,"accounts":[{{"id":"{good}","name":"A","created":0,"updated":0}}]}}"#)).unwrap();
+        let (store, notice) = AccountStore::open(dir.path());
+        assert!(notice.is_none());
+        assert_eq!(store.get(good).unwrap().kind, AccountKind::Claude);
+        // A Claude account is written without a kind (an older file stays what it was); a Codex one with it.
+        store.rename(good, "B", 1).unwrap();
+        assert!(!std::fs::read_to_string(dir.path().join("accounts.json")).unwrap().contains("kind"));
+        let codex = store.add("Cx", AccountKind::Codex, 2).unwrap();
+        let text = std::fs::read_to_string(dir.path().join("accounts.json")).unwrap();
+        assert!(text.contains(r#""kind": "codex""#), "{text}");
+        assert_eq!(AccountStore::open(dir.path()).0.get(&codex.id).unwrap().kind, AccountKind::Codex);
+    }
+
+    #[test]
+    fn a_codex_account_has_a_folder_of_its_own_and_no_realm() {
+        let dir = data();
+        let (store, _) = AccountStore::open(dir.path());
+        let account = store.add("Cx", AccountKind::Codex, 5).unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&config_dir(dir.path(), &account.id)), 0o700);
+        assert!(!stores_dir(dir.path(), &account.id).exists(), "no notes, skills or history for it");
+        assert!(!AccountKind::Codex.has_realm() && AccountKind::Claude.has_realm());
+        // A failed save leaves no folder of either kind behind.
+        std::fs::remove_file(dir.path().join("accounts.json")).unwrap();
+        std::fs::create_dir(dir.path().join("accounts.json")).unwrap();
+        let before = std::fs::read_dir(dir.path().join("accounts")).unwrap().count();
+        assert!(store.add("Cy", AccountKind::Codex, 6).is_err());
+        assert_eq!(std::fs::read_dir(dir.path().join("accounts")).unwrap().count(), before);
+    }
+
+    #[test]
+    fn the_limit_and_the_names_are_shared_by_both_kinds_and_an_unknown_kind_is_left_alone() {
+        let dir = data();
+        let (store, _) = AccountStore::open(dir.path());
+        for i in 0..MAX_ACCOUNTS {
+            let kind = if i % 2 == 0 { AccountKind::Claude } else { AccountKind::Codex };
+            store.add(&format!("A{i}"), kind, 1).unwrap();
+        }
+        assert!(store.add("One more", AccountKind::Codex, 2).is_err(), "the limit counts both kinds");
+        assert!(store.add("A0", AccountKind::Codex, 2).is_err());
+        std::fs::write(dir.path().join("accounts.json"), r#"{"v":1,"accounts":[{"id":"0011223344556677","name":"A","created":0,"updated":0,"kind":"gemini"}]}"#).unwrap();
+        let (again, notice) = AccountStore::open(dir.path());
+        assert!(notice.is_some() && again.list().is_empty());
+        assert!(std::fs::read_to_string(dir.path().join("accounts.json")).unwrap().contains("gemini"), "opening does not overwrite");
     }
 }

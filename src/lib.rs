@@ -2,6 +2,7 @@
 pub mod accounts;
 pub mod cli_sessions;
 pub mod claude;
+pub mod codex;
 pub mod extract;
 pub mod handover;
 pub mod index;

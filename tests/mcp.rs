@@ -226,7 +226,7 @@ async fn notes_of(mcp: &mut Mcp, query: &str) -> String {
 #[tokio::test]
 async fn a_secret_given_to_an_account_chat_reaches_only_that_accounts_history_and_notes_in_both_directions() {
     let fx = fixture(true).await;
-    let id = fx.server.registry.add_account("Work").unwrap().id;
+    let id = fx.server.registry.add_account("Work", tenrec::accounts::AccountKind::Claude).unwrap().id;
     // The same folder name for both: only the account tells them apart.
     let personal = chat(&fx, "same", "PERSONALNEEDLE please").await;
     let work = work_chat(&fx, &id, "same", "WORKNEEDLE please").await;

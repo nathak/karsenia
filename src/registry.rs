@@ -58,7 +58,7 @@ pub fn check_mode(mode: PermMode, provider: bool, container: bool) -> Result<(),
 }
 
 /// The most named chats whose `claude` is started when the app starts.
-const MAX_WARM: usize = 8;
+const MAX_WARM: usize = 12;
 
 /// What a chat carried to another account keeps of the old one.
 struct Carry {
@@ -66,6 +66,7 @@ struct Carry {
     permission_mode: PermMode,
     named: bool,
     source: &'static str,
+    handed: Option<session::Handed>,
 }
 
 pub struct Registry {
@@ -194,6 +195,14 @@ impl Registry {
         shared.usage.retain(&accounts.list().into_iter().map(|a| a.id).collect());
         let mut realms = HashMap::new();
         for account in accounts.list() {
+            if !account.kind.has_realm() {
+                // A Codex account has no notes, skills or history of its own here: only its folder is looked at.
+                if let Err(error) = crate::accounts::check_dir(&crate::accounts::config_dir(&dir, &account.id), &dir.join("accounts"), crate::accounts::default_home_of(account.kind).as_deref()) {
+                    tracing::warn!("the account {} is off: {error}", account.name);
+                    accounts_notice = Some(format!("the account \"{}\" is off: {error}", account.name));
+                }
+                continue;
+            }
             match open_account_realm(&dir, &account.id, &shared) {
                 Ok(realm) => {
                     realms.insert(account.id.clone(), realm);
@@ -254,11 +263,15 @@ impl Registry {
         check_mode(mode, provider, container)
     }
 
-    /// Starts the `claude` of every chat the person named (at most `MAX_WARM`, the newest first), one after the other: a chat's name is
-    /// the address other Claude Code sessions find it by, and that exists only while its process runs. Nothing is sent to a model.
+    /// Starts the `claude` of the chats that have a name (see `Meta::cli_name`), one after the other and at most `MAX_WARM` of them, the
+    /// ones a person named first and each group newest first: a chat's name is the address other Claude Code sessions find it by, and
+    /// that exists only while its process runs. Nothing is sent to a model. A chat that is left out here starts with its next message.
     pub async fn warm_named(&self) {
-        let mut named: Vec<Info> = self.list().await.into_iter().filter(|i| i.meta.named && i.meta.provider.is_none() && !i.meta.container).collect();
-        named.sort_by_key(|i| std::cmp::Reverse(i.meta.created));
+        let mut named: Vec<Info> = self.list().await.into_iter().filter(|i| i.meta.cli_name().is_some() && i.meta.provider.is_none() && !i.meta.container).collect();
+        named.sort_by_key(|i| (!i.meta.named, std::cmp::Reverse(i.meta.created)));
+        if named.len() > MAX_WARM {
+            tracing::info!("{} chats have a name; the first {MAX_WARM} are started, the others start with their next message", named.len());
+        }
         for info in named.into_iter().take(MAX_WARM) {
             if let Some(handle) = self.get(&info.meta.sid) {
                 if let Err(error) = handle.warm().await {
@@ -366,6 +379,7 @@ impl Registry {
             meta.model = c.model;
             meta.permission_mode = c.permission_mode;
             meta.named = c.named;
+            meta.handed = c.handed;
         }
         // The log is written first, then the meta: a chat has a meta only when its log is whole.
         let mut log: Vec<Envelope> = Vec::with_capacity(history.events.len() + 1);
@@ -408,6 +422,11 @@ impl Registry {
             return Err("only a plain chat of a login account can be carried to another account".into());
         }
         let csid = meta.claude_session_id.clone().ok_or("this chat has not had a turn yet: make a new chat in the other account instead")?;
+        // Read first: a chat whose workbench cannot be read is not carried over (its guard would come out as a default).
+        let workbench = crate::workbench::store::load(&self.dir, &meta.sid).map_err(|key| format!("this chat's workbench cannot be read ({key})"))?;
+        // One handover at a time: two of them could both pass the check below before either made its chat.
+        static HANDOVER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let _one_at_a_time = HANDOVER.lock().await;
         let target = account.filter(|a| !a.is_empty());
         let current = meta.account.as_ref().map(|a| a.id.as_str());
         if target == current {
@@ -422,17 +441,23 @@ impl Registry {
                 None => default.clone().ok_or_else(|| "the default account's folder is not known".to_owned()),
             }
         };
-        // The other account already carries this session (it was continued there before): its chat has its own newer turns, and a copy
-        // over its file would discard them. Open that chat instead.
-        for other in self.list().await {
-            if other.meta.sid != meta.sid && other.meta.claude_session_id.as_deref() == Some(csid.as_str()) && other.meta.account.as_ref().map(|a| a.id.as_str()) == target {
-                return Err("that account already has a chat of this session; open it instead".into());
-            }
-        }
         let (from, to) = (folder_of(current)?, folder_of(target)?);
         let cwd = meta.cwd.to_string_lossy().into_owned();
+        // The other account may already carry this session (it was continued there before). Its chat has its own turns, so it is never
+        // overwritten, with one exception that is checked: this chat was made from that chat, and that chat's session file is still what it was
+        // when this one was made. Then this chat is simply ahead of it, and that chat is brought up to date (a fast-forward).
+        let mut existing = None;
+        for other in self.list().await {
+            if other.meta.sid != meta.sid && other.meta.claude_session_id.as_deref() == Some(csid.as_str()) && other.meta.account.as_ref().map(|a| a.id.as_str()) == target {
+                existing = Some(other);
+            }
+        }
+        if let Some(older) = existing {
+            return self.fast_forward(&handle, &meta, &workbench, older, (&from, &to), &cwd, &csid).await;
+        }
+        let parent_hash = crate::handover::fingerprint(&crate::handover::session_path(&from, &cwd, &csid));
         {
-            let (cwd, csid) = (cwd.clone(), csid.clone());
+            let (cwd, csid, from, to) = (cwd.clone(), csid.clone(), from.clone(), to.clone());
             tokio::task::spawn_blocking(move || crate::handover::copy_session(&from, &to, &cwd, &csid)).await.map_err(|e| e.to_string())??;
         }
         // What the chat showed, taken from the app's own record of it (not from the session file: that one may be too big, and loses
@@ -452,8 +477,49 @@ impl Registry {
         events.reverse();
         let total = log.iter().filter(|e| e.kind == "user" || e.kind == "claude").count();
         let history = crate::cli_sessions::History { total, dropped: total.saturating_sub(events.len()), events };
-        let carry = Carry { model: meta.model.clone(), permission_mode: meta.permission_mode, named: meta.named, source: "account" };
-        self.import_inner(&cwd, &csid, &meta.title, target, history, Some(carry)).await
+        let handed = parent_hash.map(|parent_hash| session::Handed { parent: meta.sid.clone(), parent_hash });
+        let carry = Carry { model: meta.model.clone(), permission_mode: meta.permission_mode, named: meta.named, source: "account", handed };
+        let made = self.import_inner(&cwd, &csid, &meta.title, target, history, Some(carry)).await?;
+        // The guard settings, the contract and the pins go with the conversation: a chat that continues must not come out with a weaker guard.
+        if let Err(key) = crate::workbench::store::save(&self.dir, &made.sid, &workbench) {
+            let _ = self.delete(&made.sid).await;
+            return Err(format!("the chat's workbench could not be carried over ({key}); nothing was made"));
+        }
+        Ok(made)
+    }
+
+    /// Coming back to an account that already has an older chat of this session: that chat is brought up to date with this one and
+    /// returned, instead of a second chat being made. Only when this chat was made from it and its session file has not changed since.
+    #[allow(clippy::too_many_arguments)]
+    async fn fast_forward(&self, src: &SessionHandle, meta: &Meta, workbench: &crate::workbench::Workbench, older: Info, folders: (&Path, &Path), cwd: &str, csid: &str) -> Result<SessionHandle, String> {
+        let (from, to) = folders;
+        let reopen = "that account already has a chat of this session that is not an earlier state of this one; open it instead";
+        let handed = meta.handed.as_ref().filter(|h| h.parent == older.meta.sid).ok_or(reopen)?;
+        let target_file = crate::handover::session_path(to, cwd, csid);
+        let still = {
+            let file = target_file.clone();
+            tokio::task::spawn_blocking(move || crate::handover::fingerprint(&file)).await.map_err(|e| e.to_string())?
+        };
+        if still != Some(handed.parent_hash) {
+            return Err("that account's session has changed since this chat was made from it; open its chat instead".into());
+        }
+        if older.state == session::State::Running || older.pending > 0 {
+            return Err("a turn is running or a permission waits in the older chat".into());
+        }
+        let older_handle = self.get(&older.meta.sid).ok_or("no such chat")?;
+        // What this chat made on its own since it was carried over: the events that are not themselves taken over from another chat.
+        let (log, _) = src.subscribe(0).await.ok_or("no such chat")?;
+        let news: Vec<(u64, String, serde_json::Value)> = log.iter().filter(|e| (e.kind == "user" || e.kind == "claude") && e.data["imported"] != true).map(|e| (e.ts, e.kind.clone(), e.data.clone())).collect();
+        // The older chat's process is ended first (it holds the old session in memory), then the file is replaced, then the events are added.
+        older_handle.prepare().await?;
+        {
+            let (cwd, csid, from, to) = (cwd.to_owned(), csid.to_owned(), from.to_owned(), to.to_owned());
+            tokio::task::spawn_blocking(move || crate::handover::replace_session(&from, &to, &cwd, &csid)).await.map_err(|e| e.to_string())??;
+        }
+        let parent_hash = crate::handover::fingerprint(&target_file).ok_or("the session file could not be read after it was placed")?;
+        crate::workbench::store::save(&self.dir, &older.meta.sid, workbench).map_err(|key| format!("the chat's workbench could not be carried back ({key})"))?;
+        older_handle.absorb(news, session::Handed { parent: meta.sid.clone(), parent_hash }).await?;
+        Ok(older_handle)
     }
 
     /// A new session in its own git worktree: `cwd` must be a git project on a branch with a commit (not a worktree already). The chat's
@@ -571,6 +637,11 @@ impl Registry {
             return Err("a chat is of an account or of a provider, not both".into());
         }
         let entry = self.accounts.get(id).ok_or("no such account")?;
+        // Said before the realm is looked for: a Codex account has none, and "no such account" would be the wrong reason.
+        match entry.kind {
+            crate::accounts::AccountKind::Claude => {}
+            crate::accounts::AccountKind::Codex => return Err("this is a Codex account: in this version a chat runs only in a Claude account".into()),
+        }
         if self.realm(Some(id))?.is_retired() {
             return Err("this account is being removed".into());
         }
@@ -590,9 +661,12 @@ impl Registry {
         &self.bin
     }
 
-    /// Adds an extra account: its folders, its entry in the accounts file and its own empty notes, skills and history.
-    pub fn add_account(&self, name: &str) -> Result<crate::accounts::Account, String> {
-        let account = self.accounts.add(name, crate::now_ms())?;
+    /// Adds an extra account: its folders, its entry in the accounts file and, for a Claude login, its own empty notes, skills and history.
+    pub fn add_account(&self, name: &str, kind: crate::accounts::AccountKind) -> Result<crate::accounts::Account, String> {
+        let account = self.accounts.add(name, kind, crate::now_ms())?;
+        if !kind.has_realm() {
+            return Ok(account);
+        }
         match open_account_realm(&self.dir, &account.id, &self.shared) {
             Ok(realm) => {
                 self.realms.write().unwrap_or_else(|p| p.into_inner()).insert(account.id.clone(), realm);
@@ -609,7 +683,11 @@ impl Registry {
 
     /// Where an extra account's login lives and the environment its `claude` runs with, after looking at the folder again.
     pub fn account_login(&self, id: &str) -> Result<(PathBuf, EnvPlan), String> {
-        self.accounts.get(id).ok_or("no such account")?;
+        let entry = self.accounts.get(id).ok_or("no such account")?;
+        match entry.kind {
+            crate::accounts::AccountKind::Claude => {}
+            crate::accounts::AccountKind::Codex => return Err("this is a Codex account; it has no Claude login".into()),
+        }
         let home = crate::platform::home_dir();
         let default = crate::accounts::default_config_dir(std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).as_deref(), home.as_deref());
         let real = crate::accounts::check_dir(&crate::accounts::config_dir(&self.dir, id), &self.dir.join("accounts"), default.as_deref())?;
@@ -617,10 +695,52 @@ impl Registry {
         Ok((real, env))
     }
 
+    /// Where a Codex account's login lives (its `CODEX_HOME`), after looking at the folder again. An account of another kind is refused.
+    pub fn codex_home(&self, id: &str) -> Result<PathBuf, String> {
+        let entry = self.accounts.get(id).ok_or("no such account")?;
+        match entry.kind {
+            crate::accounts::AccountKind::Codex => {}
+            crate::accounts::AccountKind::Claude => return Err("this is not a Codex account".into()),
+        }
+        crate::accounts::check_dir(&crate::accounts::config_dir(&self.dir, id), &self.dir.join("accounts"), crate::accounts::default_home_of(entry.kind).as_deref())
+    }
+
+    /// A Codex account has no chats, notes or history to take with it: its login is dropped through the program (best effort) and its
+    /// folder is removed. Returns what could not be cleaned up.
+    async fn delete_codex_account(&self, id: &str) -> Result<Vec<&'static str>, String> {
+        let mut warnings = Vec::new();
+        let path_var = std::env::var_os("PATH");
+        match (self.codex_home(id), crate::codex::bin(path_var.as_deref()).and_then(|b| b.to_str().map(str::to_owned))) {
+            (Ok(home), Some(bin)) => {
+                let env = crate::codex::plan(&crate::claude::env::inherited_names(), &home);
+                if crate::codex::logout(&bin, &home, &env).await.is_err() {
+                    warnings.push("logout_failed");
+                }
+            }
+            _ => warnings.push("logout_failed"),
+        }
+        self.accounts.remove_entry(id)?;
+        self.shared.usage.forget(id);
+        let default = crate::accounts::default_home_of(crate::accounts::AccountKind::Codex);
+        // Looked at again: only the real, private folder this app made is removed, never what a link points to.
+        match crate::accounts::check_dir(&crate::accounts::config_dir(&self.dir, id), &self.dir.join("accounts"), default.as_deref()) {
+            Ok(real) => {
+                if std::fs::remove_dir_all(&real).is_err() {
+                    warnings.push("folder_left");
+                }
+            }
+            Err(_) => warnings.push("folder_left"),
+        }
+        Ok(warnings)
+    }
+
     /// Removes an extra account together with its notes, skills, history and login. Its chats stay readable but can no longer be
     /// started (they are told to make a new chat). Refused while one of them is running a turn. Returns what could not be cleaned up.
     pub async fn delete_account(&self, id: &str) -> Result<Vec<&'static str>, String> {
-        self.accounts.get(id).ok_or("no such account")?;
+        let entry = self.accounts.get(id).ok_or("no such account")?;
+        if entry.kind == crate::accounts::AccountKind::Codex {
+            return self.delete_codex_account(id).await;
+        }
         let realm = self.realms.read().unwrap_or_else(|p| p.into_inner()).get(id).cloned();
         // Retired before anything is looked at: a chat that starts from now on, and every worker, is refused by the flag, which the
         // chats of the account (they hold the realm) and its workers see; taking the realm out of the map would not reach them.

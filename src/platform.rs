@@ -44,8 +44,13 @@ pub fn runnable_claude(path: &Path) -> bool {
 
 /// The first `claude` program on `path_var` (a PATH-style list) this build will run.
 pub fn find_claude(path_var: &std::ffi::OsStr) -> Option<PathBuf> {
-    let name = if cfg!(windows) { "claude.exe" } else { "claude" };
-    std::env::split_paths(path_var).map(|dir| dir.join(name)).find(|p| p.is_file() && runnable_claude(p))
+    find_program(path_var, "claude")
+}
+
+/// The first program called `stem` on `path_var` this build will run (on Windows only an `.exe`, for the reason given at `runnable_claude`).
+pub fn find_program(path_var: &std::ffi::OsStr, stem: &str) -> Option<PathBuf> {
+    let name = if cfg!(windows) { format!("{stem}.exe") } else { stem.to_owned() };
+    std::env::split_paths(path_var).map(|dir| dir.join(&name)).find(|p| p.is_file() && runnable_claude(p))
 }
 
 /// Windows only: the data folder must sit inside the user's profile, whose default access list names the user, the

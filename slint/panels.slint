@@ -16,7 +16,7 @@ export struct TeamRole { role: string, model: string, effort: string }
 export struct WbItem { id: int, text: string, tag: string, on: bool }
 export struct GfRule { policy: string, tool: string, command: string, path: string, reason: string }
 export struct PlugRow { id: string, busy: bool }
-export struct AcctRow { id: string, name: string, sub: string, state: string, chats: int, open: bool, is-default: bool, usage: string, usage-level: string, login: string, dir: string, plug-open: bool, plug-note: string, plugs: [PlugRow] }
+export struct AcctRow { id: string, name: string, sub: string, state: string, chats: int, open: bool, is-default: bool, usage: string, usage-level: string, kind: string, login: string, dir: string, plug-open: bool, plug-note: string, plugs: [PlugRow] }
 export struct UsageWin { label: string, pct: string, frac: float, level: string, reset: string }
 
 // The Claude logins (personal, work...). Each has its own notes, skills and history; the panels show one of them.
@@ -35,6 +35,8 @@ export global Acct {
     // The id of the account being renamed ("" for none).
     in-out property <string> editing;
     in-out property <string> new-name;
+    // The kind of the account to add: "claude" or "codex".
+    in-out property <string> new-kind: "claude";
     callback status(string);
     callback login(string);
     callback copy-login(string);
@@ -42,7 +44,7 @@ export global Acct {
     callback plugins-toggle(string);
     callback plugin-install(string, string);
     callback copy-path(string);
-    callback add(string);
+    callback add(string, string);
     callback rename(string, string);
     callback delete(string);
     callback view-chosen(int);
@@ -233,9 +235,6 @@ export global Team {
     // A button of the "SmartWorkbench commands" card: its key (the host maps it to the plug-in's fixed command text).
     callback swb-cmd(string);
     // The contract (goal, rules, done conditions, pins) has no command: a request in words goes to the chat (kind, text).
-    in-out property <string> req-kind: "goal";
-    in-out property <string> req-text;
-    callback contract-request(string, string);
     // What the plug-in's snapshot says (src/view/swb.rs): "" | nochat | missing | refused | found, and the reason line otherwise.
     in property <string> swb-state;
     in property <string> swb-note;

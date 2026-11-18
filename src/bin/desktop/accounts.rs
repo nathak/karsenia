@@ -25,6 +25,8 @@ thread_local! {
     static APPLIED_SID: RefCell<Option<String>> = const { RefCell::new(None) };
     // The login command of each account, for the copy button.
     static LOGINS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    // The ids of the Codex accounts: they are not in the picker (`IDS`), but their login is checked like the others'.
+    static CODEX_IDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     // Plug-ins: the cards whose section is open, the host's last answer per account, and the installs under way ("account/plugin").
     static PLUG_OPEN: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     static PLUGS: RefCell<HashMap<String, Value>> = RefCell::new(HashMap::new());
@@ -54,12 +56,13 @@ pub fn render(ui: &AppWindow, app: &App) {
     acct.set_notice(head.notice.into());
     acct.set_can_add(head.can_add);
     LOGINS.with(|l| *l.borrow_mut() = rows.iter().map(|r| (r.id.clone(), r.login.clone())).collect());
+    CODEX_IDS.with(|c| *c.borrow_mut() = rows.iter().filter(|r| r.kind == "codex").map(|r| r.id.clone()).collect());
     let slint_rows: Vec<AcctRow> = rows
         .into_iter()
         .map(|r| {
             let (usage, usage_level) = crate::usage::compact(&r.id, app);
             let (plug_open, plug_note, plugs) = plug_view(&r.id, app.lang);
-            AcctRow { id: r.id.into(), name: r.name.into(), sub: r.sub.into(), state: r.state.into(), chats: r.chats as i32, open: r.open, is_default: r.is_default, usage: usage.into(), usage_level: usage_level.into(), login: r.login.into(), dir: r.dir.into(), plug_open, plug_note: plug_note.into(), plugs: ModelRc::from(std::rc::Rc::new(VecModel::from(plugs))) }
+            AcctRow { id: r.id.into(), name: r.name.into(), sub: r.sub.into(), state: r.state.into(), chats: r.chats as i32, open: r.open, is_default: r.is_default, usage: usage.into(), usage_level: usage_level.into(), kind: r.kind.into(), login: r.login.into(), dir: r.dir.into(), plug_open, plug_note: plug_note.into(), plugs: ModelRc::from(std::rc::Rc::new(VecModel::from(plugs))) }
         })
         .collect();
     crate::panels::set_rows(acct.get_rows(), slint_rows, |m| acct.set_rows(m));
@@ -81,6 +84,16 @@ pub fn render(ui: &AppWindow, app: &App) {
     if ui.get_new_acct() as usize >= head.ids.len() {
         ui.set_new_acct(0);
     }
+}
+
+/// The accounts whose login is checked: the default one (""), the Claude ones in the picker and the Codex ones.
+fn status_keys() -> Vec<String> {
+    std::iter::once(String::new()).chain(IDS.with(|i| i.borrow().iter().flatten().cloned().collect::<Vec<_>>())).chain(CODEX_IDS.with(|c| c.borrow().clone())).collect()
+}
+
+/// What kind of account this id is (the default account, and one that is not listed, are Claude ones).
+fn kind_of(id: &str) -> tenrec::accounts::AccountKind {
+    LIST.with(|l| l.borrow().as_ref().and_then(|l| l["accounts"].as_array().and_then(|list| list.iter().find(|x| x["id"] == id).and_then(|x| x["kind"].as_str().and_then(|k| tenrec::accounts::AccountKind::parse(k).ok()))))).unwrap_or_default()
 }
 
 /// Every account id the host listed, or None before the list came (an extra account's chat is then only under its own account).
@@ -135,8 +148,7 @@ pub fn ask_status(ui: &AppWindow, app: &App, key: &str) {
 /// Settings opened: the accounts never checked in this run are checked once.
 pub fn panel_open(ui: &AppWindow, app: &App) {
     app.bus.post_quiet(json!({"op": "account_list"}));
-    let keys: Vec<String> = std::iter::once(String::new()).chain(IDS.with(|i| i.borrow().iter().flatten().cloned().collect::<Vec<_>>())).collect();
-    for key in keys {
+    for key in status_keys() {
         if STATUS.with(|s| !s.borrow().contains_key(&key)) {
             ask_status(ui, app, &key);
         }
@@ -185,8 +197,7 @@ pub fn on_reply(ui: &AppWindow, app: &Arc<App>, kind: &str, data: Value) {
             render(ui, app);
             // Settings is open and an account has not been checked yet (the list came late, or an account was just added).
             if ui.get_side() == 5 || ui.get_new_open() {
-                let keys: Vec<String> = IDS.with(|i| i.borrow().iter().flatten().cloned().collect());
-                for key in keys {
+                for key in status_keys().into_iter().filter(|k| !k.is_empty()) {
                     if STATUS.with(|s| !s.borrow().contains_key(&key)) {
                         ask_status(ui, app, &key);
                     }
@@ -261,7 +272,7 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         }
     });
     let a = app.clone();
-    acct.on_add(move |name| a.bus.post(json!({"op": "account_add", "name": name.trim()})));
+    acct.on_add(move |name, kind| a.bus.post(json!({"op": "account_add", "name": name.trim(), "kind": kind.as_str()})));
     let a = app.clone();
     acct.on_rename(move |id, name| a.bus.post(json!({"op": "account_rename", "id": id.as_str(), "name": name.trim()})));
     let (a, weak) = (app.clone(), ui.as_weak());
@@ -269,7 +280,10 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         let Some(ui) = weak.upgrade() else { return };
         let name = LIST.with(|l| l.borrow().as_ref().and_then(|l| l["accounts"].as_array().and_then(|list| list.iter().find(|x| x["id"] == id.as_str()).map(|x| x["name"].as_str().unwrap_or_default().to_owned())))).unwrap_or_default();
         let n = CHATS.with(|c| c.borrow().get(id.as_str()).copied().unwrap_or(0));
-        let body = fill(&tr(a.lang, "acct_delete_confirm"), &[("name", name), ("n", n.to_string())]);
+        let body = match kind_of(id.as_str()) {
+            tenrec::accounts::AccountKind::Claude => fill(&tr(a.lang, "acct_delete_confirm"), &[("name", name), ("n", n.to_string())]),
+            tenrec::accounts::AccountKind::Codex => fill(&tr(a.lang, "acct_delete_confirm_codex"), &[("name", name)]),
+        };
         let (b, id) = (a.clone(), id.to_string());
         crate::panels::ask(&ui, body, tr(a.lang, "acct_delete"), true, Box::new(move |ok| {
             if ok {
@@ -336,19 +350,31 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
     });
 }
 
-/// "Open login window": a console of its own runs `claude auth login` for the account; when it closes, the status is checked
-/// again. Nothing it prints passes through the app.
+/// "Open login window": a console of its own runs `claude auth login` (or `codex login`) for the account; when it closes, the status is
+/// checked again. Nothing it prints passes through the app.
 #[cfg(windows)]
 fn login(ui: &AppWindow, app: &Arc<App>, key: String) {
-    let account = if key.is_empty() {
-        None
-    } else {
-        match app.registry.account_login(&key) {
-            Ok(found) => Some(found),
-            Err(error) => return crate::toast(ui, fill(&tr(app.lang, "acct_login_failed"), &[("e", error)])),
-        }
+    use tenrec::accounts::AccountKind;
+    let kind = if key.is_empty() { AccountKind::Claude } else { kind_of(&key) };
+    let failed = |error: String| crate::toast(ui, fill(&tr(app.lang, "acct_login_failed"), &[("e", error)]));
+    let (bin, account) = match (kind, key.is_empty()) {
+        (AccountKind::Claude, true) => (app.registry.bin().to_owned(), None),
+        (AccountKind::Claude, false) => match app.registry.account_login(&key) {
+            Ok(found) => (app.registry.bin().to_owned(), Some(found)),
+            Err(error) => return failed(error),
+        },
+        (AccountKind::Codex, _) => match app.registry.codex_home(&key) {
+            Ok(home) => {
+                let env = tenrec::codex::plan(&tenrec::claude::env::inherited_names(), &home);
+                // The full path of the program (a `.cmd` shim is named by it, so the shell does not pick a `.ps1` that a policy refuses); the
+                // name only when none was found.
+                let bin = tenrec::codex::bin(std::env::var_os("PATH").as_deref()).and_then(|b| b.to_str().map(str::to_owned)).unwrap_or_else(|| "codex".to_owned());
+                (bin, Some((home, env)))
+            }
+            Err(error) => return failed(error),
+        },
     };
-    match open_login(app.registry.bin(), &tr(app.lang, "acct_login_wait"), account) {
+    match open_login(&bin, kind, &tr(app.lang, "acct_login_wait"), account) {
         Ok(mut child) => {
             crate::toast(ui, tr(app.lang, "acct_login_started"));
             let a = app.clone();
@@ -370,11 +396,17 @@ fn login(ui: &AppWindow, app: &Arc<App>, _key: String) {
 /// The console's command line is fixed: the program and the account's folder go in as environment variables, never into the
 /// text PowerShell reads, so no path needs quoting.
 #[cfg(windows)]
-fn open_login(bin: &str, wait: &str, account: Option<(std::path::PathBuf, tenrec::claude::env::EnvPlan)>) -> std::io::Result<std::process::Child> {
+fn open_login(bin: &str, kind: tenrec::accounts::AccountKind, wait: &str, account: Option<(std::path::PathBuf, tenrec::claude::env::EnvPlan)>) -> std::io::Result<std::process::Child> {
+    use tenrec::accounts::AccountKind;
     use std::os::windows::process::CommandExt;
     let ps = std::env::var_os("SystemRoot").map(|r| std::path::PathBuf::from(r).join(r"System32\WindowsPowerShell\v1.0\powershell.exe")).unwrap_or_else(|| "powershell.exe".into());
     let mut cmd = std::process::Command::new(ps);
-    cmd.args(["-NoLogo", "-NoProfile", "-Command", "& $env:TENREC_LOGIN_BIN auth login; if (-not $?) { Read-Host $env:TENREC_LOGIN_WAIT }"]).env("TENREC_LOGIN_BIN", bin).env("TENREC_LOGIN_WAIT", wait);
+    // A fixed line for each kind: nothing of the account goes into it.
+    let script = match kind {
+        AccountKind::Claude => "& $env:TENREC_LOGIN_BIN auth login; if (-not $?) { Read-Host $env:TENREC_LOGIN_WAIT }",
+        AccountKind::Codex => "& $env:TENREC_LOGIN_BIN login; if (-not $?) { Read-Host $env:TENREC_LOGIN_WAIT }",
+    };
+    cmd.args(["-NoLogo", "-NoProfile", "-Command", script]).env("TENREC_LOGIN_BIN", bin).env("TENREC_LOGIN_WAIT", wait);
     if let Some((dir, env)) = account {
         for name in &env.remove {
             cmd.env_remove(name);

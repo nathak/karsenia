@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tenrec</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <link rel="stylesheet" href="/theme.css">
 </head>
 <body>
@@ -57,6 +58,7 @@
       <div id="acct-list" class="mem-list"></div>
       <button id="acct-new" type="button" class="wide" data-i="acctNew"></button>
       <form id="acct-form" class="note-card" hidden autocomplete="off">
+        <label><span data-i="acctKind"></span><select id="ac-kind"><option value="claude">Claude</option><option value="codex">Codex</option></select></label>
         <label><span data-i="acctName"></span><input id="ac-name" type="text" maxlength="40" autocomplete="off"></label>
         <div class="row"><button type="submit" class="primary" data-i="acctAdd"></button><button type="button" id="ac-cancel" data-i="cancel"></button></div>
       </form>

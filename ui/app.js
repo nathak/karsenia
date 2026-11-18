@@ -81,8 +81,8 @@ const TEXT = {
     ctrRuntime: '실행 파일 (절대 경로, docker 또는 podman)', ctrImage: '이미지 (미리 받아 둔 것, 자동으로 받지 않습니다)', ctrReady: '컨테이너 대화를 만들 수 있습니다.', ctrNotReady: '실행 파일과 이미지를 모두 적어야 컨테이너 대화를 만들 수 있습니다.', ctrBanner: '이 대화는 컨테이너 안에서 실행됩니다.', ctrTag: '컨테이너',
     acct: '계정', acctDefault: '기본 계정 (개인)', acctNote: '고른 계정의 로그인으로 실행되고, 그 계정의 메모·스킬·대화 기록만 씁니다. 계정은 새 대화를 만들 때만 고를 수 있고 바꿀 수 없습니다.', acctView: '보는 계정', acctTag: '계정',
     acctTitle: '계정 (개인·회사 분리)', acctIntro: '로그인을 계정별로 나눕니다. 기본 계정은 이 컴퓨터의 claude가 이미 쓰는 로그인이고, 추가한 계정은 설정 폴더와 메모·스킬·대화 기록 색인이 따로 생겨 서로 보이지 않습니다. 격리가 아니라 용도 분리입니다. 같은 사용자가 실행하는 명령은 두 계정의 폴더를 모두 읽을 수 있습니다. 예약 실행은 기본 계정으로만 돕니다.',
-    acctNew: '＋ 새 계정', acctName: '이름 (예: 회사)', acctAdd: '추가', acctCheck: '로그인 상태 확인', acctLogin: '로그인 명령 복사', acctHow: '로그인 방법', acctLoginNote: '아래 명령을 터미널에서 직접 실행해 로그인하세요. 이 앱은 토큰이나 인증 코드를 보지도 저장하지도 않습니다.', acctCopied: '복사했습니다.',
-    acctRename: '이름 변경', acctDelete: '삭제', acctRenamePrompt: '새 이름', acctDeleteConfirm: '이 계정을 삭제할까요? 이 계정의 로그인, 메모, 스킬, 기록 색인이 지워집니다. 이 계정의 대화 {n}개는 기록만 남고 더 이어 갈 수 없습니다.',
+    acctNew: '＋ 새 계정', acctKind: '종류', acctName: '이름 (예: 회사)', acctAdd: '추가', acctCheck: '로그인 상태 확인', acctLogin: '로그인 명령 복사', acctHow: '로그인 방법', acctLoginNote: '아래 명령을 터미널에서 직접 실행해 로그인하세요. 이 앱은 토큰이나 인증 코드를 보지도 저장하지도 않습니다.', acctCopied: '복사했습니다.',
+    acctRename: '이름 변경', acctDelete: '삭제', acctRenamePrompt: '새 이름', acctDeleteConfirmCodex: '이 Codex 계정을 삭제할까요? 이 계정의 폴더와 로그인이 지워집니다.', acctDeleteConfirm: '이 계정을 삭제할까요? 이 계정의 로그인, 메모, 스킬, 기록 색인이 지워집니다. 이 계정의 대화 {n}개는 기록만 남고 더 이어 갈 수 없습니다.',
     acctLoggedIn: '로그인됨', acctLoggedOut: '로그인 안 됨', acctUnknown: '상태를 확인하지 못했습니다', acctChats: '대화', acctNone: '추가한 계정이 없습니다.', acctClosed: '열리지 않음 (폴더를 확인하세요)', acctDefaultRow: '기본 계정', acctChecking: '확인하는 중…',
     acctW_logout_failed: '로그아웃을 확인하지 못했습니다. claude에서 직접 로그아웃해 두세요.', acctW_folder_left: '일부 폴더를 지우지 못했습니다. 데이터 폴더에서 직접 지워야 합니다.', acctNeedsLogin: '이 계정은 아직 로그인되어 있지 않습니다. 계정 패널의 명령으로 로그인하세요.',
     wtUse: '격리된 worktree에서 시작 (새 git 브랜치)', wtUseNote: '원본 폴더의 현재 커밋에서 새 브랜치를 만듭니다. 커밋 안 된 변경과 .env 같은 무시된 파일은 따라오지 않습니다.', wtTag: 'worktree', wtGone: 'worktree 정리됨', wtBelowTop: '프로젝트 안의 하위 폴더가 아니라 worktree의 맨 위 폴더에서 시작했습니다.',
@@ -168,8 +168,8 @@ const TEXT = {
     ctrRuntime: 'Program (absolute path, docker or podman)', ctrImage: 'Image (already pulled; it is never pulled for you)', ctrReady: 'Container chats can be made.', ctrNotReady: 'Both the program and the image are needed before a container chat can be made.', ctrBanner: 'This chat runs inside a container.', ctrTag: 'container',
     acct: 'Account', acctDefault: 'Default account (personal)', acctNote: 'The chat runs with the chosen account\'s login and uses only that account\'s notes, skills and chat history. An account can only be chosen when a chat is made and cannot be changed.', acctView: 'Account shown', acctTag: 'account',
     acctTitle: 'Accounts (personal and work apart)', acctIntro: 'Logins are kept apart. The default account is the login the claude on this computer already uses; an added account gets a settings folder, notes, skills and a history index of its own, and none of one is visible from another. This keeps uses apart; it is not isolation: a command run by the same user can read both accounts\' folders. Scheduled runs use the default account only.',
-    acctNew: '＋ New account', acctName: 'Name (for example: Work)', acctAdd: 'Add', acctCheck: 'Check login', acctLogin: 'Copy login command', acctHow: 'How to log in', acctLoginNote: 'Run the command below in your own terminal to log in. This app never sees or stores a token or a code.', acctCopied: 'Copied.',
-    acctRename: 'Rename', acctDelete: 'Delete', acctRenamePrompt: 'New name', acctDeleteConfirm: 'Delete this account? Its login, notes, skills and history index are removed. Its {n} chats stay readable and cannot be continued.',
+    acctNew: '＋ New account', acctKind: 'Kind', acctName: 'Name (for example: Work)', acctAdd: 'Add', acctCheck: 'Check login', acctLogin: 'Copy login command', acctHow: 'How to log in', acctLoginNote: 'Run the command below in your own terminal to log in. This app never sees or stores a token or a code.', acctCopied: 'Copied.',
+    acctRename: 'Rename', acctDelete: 'Delete', acctRenamePrompt: 'New name', acctDeleteConfirmCodex: 'Delete this Codex account? Its folder and login are removed.', acctDeleteConfirm: 'Delete this account? Its login, notes, skills and history index are removed. Its {n} chats stay readable and cannot be continued.',
     acctLoggedIn: 'Logged in', acctLoggedOut: 'Not logged in', acctUnknown: 'The status could not be read', acctChats: 'chats', acctNone: 'No account was added.', acctClosed: 'Not open (check its folder)', acctDefaultRow: 'Default account', acctChecking: 'Checking…',
     acctW_logout_failed: 'The logout could not be confirmed. Log out in claude yourself.', acctW_folder_left: 'Some folders could not be removed. Remove them from the data folder yourself.', acctNeedsLogin: 'This account is not logged in yet. Use the command in the Accounts panel.',
     wtUse: 'Start in an isolated worktree (new git branch)', wtUseNote: 'A new branch is made from the folder\'s current commit. Uncommitted changes and ignored files such as .env are not carried over.', wtTag: 'worktree', wtGone: 'worktree removed', wtBelowTop: 'The chat started at the top of the worktree, not in the folder inside the project.',
@@ -490,7 +490,7 @@ function setAcct(id) {
 
 // ---- sessions ----
 /** Every account id the host listed (open or not), or null before the list came. */
-const knownAccounts = () => (S.accounts ? S.accounts.accounts.map(a => a.id) : null)
+const knownAccounts = () => (S.accounts ? S.accounts.accounts.filter(isClaudeAcct).map(a => a.id) : null)
 
 function renderSessions() {
   const list = $('sessions')
@@ -1994,7 +1994,7 @@ function acctStatusText(id) {
   const st = S.acctStatus.get(acctKey(id))
   if (!st) return ''
   if (st.pending) return t('acctChecking')
-  if (st.error !== undefined) return t('acctUnknown')
+  if (st.error !== undefined || (st.status && st.status.known === false)) return t('acctUnknown')
   const who = st.status.email ? ` · ${st.status.email}` : ''
   return (st.status.logged_in ? t('acctLoggedIn') : t('acctLoggedOut')) + who
 }
@@ -2022,10 +2022,12 @@ function acctResult(d) {
   }
   if (last && last.op === 'account_delete') for (const w of d.warnings || []) toast(t('acctW_' + w))
 }
+/** An account with notes, skills and chats: a Claude one (an entry without a kind is one). */
+const isClaudeAcct = a => (a.kind || 'claude') === 'claude'
 function acctRow(a) {
   const card = el('div', 'mem')
   const chats = S.sessions.filter(x => x.account && x.account.id === a.id).length
-  card.append(el('div', 't', a.name), el('div', 'd', `${a.open ? acctStatusText(a.id) || t('acctUnknown') : t('acctClosed')} · ${t('acctChats')} ${chats}`))
+  card.append(el('div', 't', isClaudeAcct(a) ? a.name : `${a.name} · Codex`), el('div', 'd', `${a.open ? acctStatusText(a.id) || t('acctUnknown') : t('acctClosed')} · ${t('acctChats')} ${chats}`))
   // How to log in is folded away once the account is logged in; it is open while it is not.
   const how = el('details')
   const known = S.acctStatus.get(a.id)
@@ -2035,6 +2037,7 @@ function acctRow(a) {
   card.append(how)
   // Plugins of the default account that this account lacks, installed by a click (the host runs Claude Code's own plugin commands as the account).
   const plug = el('details')
+  plug.hidden = !isClaudeAcct(a)
   plug.open = S.acctPlug.has(a.id)
   plug.addEventListener('toggle', () => {
     if (plug.open) { S.acctPlug.add(a.id); askPlugins(a.id) } else S.acctPlug.delete(a.id)
@@ -2073,7 +2076,7 @@ function acctRow(a) {
   button(t('acctCheck'), () => askAcctStatus(a.id))
   button(t('acctLogin'), () => { navigator.clipboard?.writeText(a.login).then(() => toast(t('acctCopied')), () => {}) })
   button(t('acctRename'), () => { const name = prompt(t('acctRenamePrompt'), a.name); if (name && name.trim()) acctSend({ op: 'account_rename', id: a.id, name }) })
-  button(t('acctDelete'), () => { if (confirm(t('acctDeleteConfirm').replace('{n}', String(chats)))) acctSend({ op: 'account_delete', id: a.id, confirm: true }) }, 'danger')
+  button(t('acctDelete'), () => { if (confirm(isClaudeAcct(a) ? t('acctDeleteConfirm').replace('{n}', String(chats)) : t('acctDeleteConfirmCodex'))) acctSend({ op: 'account_delete', id: a.id, confirm: true }) }, 'danger')
   card.append(row)
   return card
 }
@@ -2097,12 +2100,14 @@ function renderAccounts() {
   for (const a of d.accounts) list.appendChild(acctRow(a))
   // The chooser of a new chat: only accounts that are open can be chosen.
   const row = $('new-acct-row')
-  row.hidden = d.accounts.length === 0
+  // A chat runs in a Claude account only: a Codex account is not offered.
+  const claudeAccounts = d.accounts.filter(isClaudeAcct)
+  row.hidden = claudeAccounts.length === 0
   const select = $('new-account')
   const keep = select.value
   select.replaceChildren(Object.assign(el('option', '', t('acctDefault')), { value: '' }))
-  for (const a of d.accounts) if (a.open) select.append(Object.assign(el('option', '', a.name), { value: a.id }))
-  select.value = d.accounts.some(a => a.open && a.id === keep) ? keep : ''
+  for (const a of claudeAccounts) if (a.open) select.append(Object.assign(el('option', '', a.name), { value: a.id }))
+  select.value = claudeAccounts.some(a => a.open && a.id === keep) ? keep : ''
   // The account a panel shows is gone: the panels go back to the default account.
   if (S.acct && !d.accounts.some(a => a.id === S.acct)) setAcct(null)
   updateNewChat()
@@ -2112,7 +2117,7 @@ function renderAccounts() {
 }
 /** The bar over the search and the two panels: shown only when there is an account besides the default one. */
 function renderAcctBar() {
-  const accounts = S.accounts?.accounts || []
+  const accounts = (S.accounts?.accounts || []).filter(isClaudeAcct)
   $('acct-bar').hidden = accounts.length === 0 || !['chats', 'memory', 'skills'].includes(S.side)
   const select = $('acct-view')
   // What waits or runs under an account that is not shown is told on its entry: a chat there is not in the list.
@@ -2138,7 +2143,7 @@ $('ac-cancel').addEventListener('click', () => { $('acct-form').hidden = true; $
 $('acct-form').addEventListener('submit', event => {
   event.preventDefault()
   const name = $('ac-name').value.trim()
-  if (name) acctSend({ op: 'account_add', name })
+  if (name) acctSend({ op: 'account_add', name, kind: $('ac-kind').value })
 })
 $('acct-box').addEventListener('toggle', () => { if ($('acct-box').open) { askAccounts(); askAcctStatus(null); for (const a of S.accounts?.accounts || []) if (a.open) askAcctStatus(a.id) } })
 

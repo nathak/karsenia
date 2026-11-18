@@ -48,7 +48,7 @@ async fn turn(chat: &SessionHandle) {
 async fn an_account_chats_limits_are_kept_for_that_account_and_survive_a_restart_and_go_with_it() {
     let fx = fixture();
     let folder = fx.root.join("p");
-    let id = fx.registry.add_account("Work").unwrap().id;
+    let id = fx.registry.add_account("Work", tenrec::accounts::AccountKind::Claude).unwrap().id;
     assert!(fx.registry.usage().snapshot().is_empty());
 
     let chat = fx.registry.create_in(folder.to_str().unwrap(), None, None, false, Some(&id)).unwrap();
