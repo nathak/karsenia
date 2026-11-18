@@ -1,2 +1,5 @@
 target/
 dist/
+*.pfx
+*.p12
+*.cer
