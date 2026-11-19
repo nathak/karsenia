@@ -6,10 +6,13 @@ mod clap_free {
         pub data: Option<std::path::PathBuf>,
         pub claude: Option<String>,
         pub terminal: bool,
+        /// The live view's port (`--live` for the default, `--live-port N`), and whether prompts are cut short in it.
+        pub live: Option<u16>,
+        pub live_short: bool,
     }
 
     pub fn parse() -> Result<Args, String> {
-        let mut args = Args { port: 0, data: None, claude: None, terminal: false };
+        let mut args = Args { port: 0, data: None, claude: None, terminal: false, live: None, live_short: false };
         let mut it = std::env::args().skip(1);
         while let Some(flag) = it.next() {
             match flag.as_str() {
@@ -17,7 +20,10 @@ mod clap_free {
                 "--data" => args.data = Some(it.next().ok_or("--data needs a folder")?.into()),
                 "--claude" => args.claude = Some(it.next().ok_or("--claude needs a program")?),
                 "--terminal" => args.terminal = true,
-                "-h" | "--help" => return Err("usage: tenrec [--port N] [--data FOLDER] [--claude PROGRAM] [--terminal]".into()),
+                "--live" => args.live = Some(tenrec::live::server::DEFAULT_PORT),
+                "--live-port" => args.live = Some(it.next().and_then(|v| v.parse().ok()).ok_or("--live-port needs a number")?),
+                "--live-short" => args.live_short = true,
+                "-h" | "--help" => return Err("usage: tenrec [--port N] [--data FOLDER] [--claude PROGRAM] [--terminal] [--live | --live-port N] [--live-short]".into()),
                 other => return Err(format!("unknown option {other}")),
             }
         }
@@ -63,6 +69,20 @@ async fn main() {
         Ok(running) => {
             println!("Tenrec is running. Open:\n  {}", running.url());
             let tenrec::server::Running { registry, task, .. } = running;
+            // The live view (read only, its own port and token): kept for as long as the app runs.
+            let _live = match args.live {
+                Some(port) => match tenrec::live::server::start(registry.clone(), port, if args.live_short { tenrec::live::Prompts::Short } else { tenrec::live::Prompts::Full }).await {
+                    Ok(live) => {
+                        println!("Live view (read only; it shows prompts and commands, secrets masked):\n  {}", live.url(None, "ko"));
+                        Some(live)
+                    }
+                    Err(error) => {
+                        eprintln!("the live view could not start: {error:#}");
+                        None
+                    }
+                },
+                None => None,
+            };
             tokio::select! {
                 _ = task => {}
                 _ = tokio::signal::ctrl_c() => {}

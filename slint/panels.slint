@@ -234,6 +234,14 @@ export global Team {
     callback set-role(string, string, string);
     // A button of the "SmartWorkbench commands" card: its key (the host maps it to the plug-in's fixed command text).
     callback swb-cmd(string);
+    // The live view card (src/bin/desktop/live.rs): whether the local web server runs, its label, and whether prompts are cut short in it.
+    in property <bool> live-on;
+    in property <string> live-label;
+    in-out property <bool> live-short;
+    callback live-toggle();
+    callback live-open();
+    callback live-copy();
+    callback live-short-set(bool);
     // The contract (goal, rules, done conditions, pins) has no command: a request in words goes to the chat (kind, text).
     // What the plug-in's snapshot says (src/view/swb.rs): "" | nochat | missing | refused | found, and the reason line otherwise.
     in property <string> swb-state;

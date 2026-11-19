@@ -6,6 +6,7 @@ pub mod codex;
 pub mod extract;
 pub mod handover;
 pub mod index;
+pub mod live;
 pub mod mcp;
 pub mod view;
 pub mod platform;

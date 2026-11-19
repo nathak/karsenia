@@ -161,6 +161,28 @@ export component TeamPage inherits Rectangle {
             if Team.seen-stale: WText { text: T.tr("tm_swb_stale"); size: 12px; fg: Theme.primary-soft; }
             if Team.team-note != "": WText { text: Team.team-note; size: 12px; fg: Theme.primary-soft; }
             if !Team.show: EmptyState { text: T.tr("tm_not_wired"); }
+            // The live view: this app's own web page of what the chats do (read only, on this computer, behind a token).
+            Rectangle {
+                background: Theme.low; border-radius: 12px; border-width: 1px; border-color: Theme.hairline; height: live.preferred-height;
+                live := VerticalLayout {
+                    padding: 16px; spacing: 10px;
+                    HorizontalLayout { spacing: 10px;
+                        Text { text: T.tr("live_title"); color: Theme.on-surface; font-size: 15px; font-weight: 600; vertical-alignment: center; }
+                        if Team.live-on: Badge { text: Team.live-label; tone: "primary"; mono: true; }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    WText { text: T.tr("live_note"); size: 12px; fg: Theme.on-var; }
+                    HorizontalLayout { spacing: 8px; alignment: start;
+                        Btn { text: Team.live-on ? T.tr("live_stop") : T.tr("live_start"); height: 30px; primary: !Team.live-on; clicked => { Team.live-toggle(); } }
+                        if Team.live-on: Btn { text: T.tr("live_open"); height: 30px; primary: true; clicked => { Team.live-open(); } }
+                        if Team.live-on: Btn { text: T.tr("live_copy"); height: 30px; clicked => { Team.live-copy(); } }
+                    }
+                    HorizontalLayout { spacing: 10px;
+                        Toggle { checked <=> Team.live-short; toggled(on) => { Team.live-short-set(on); } }
+                        Text { text: T.tr("live_short"); color: Theme.on-var; font-size: 13px; vertical-alignment: center; }
+                    }
+                }
+            }
             // SmartWorkbench's own commands, sent to this chat as typed (the goal, rules, done conditions and pins are edited in the workbench card below).
             Rectangle {
                 background: Theme.low; border-radius: 12px; border-width: 1px; border-color: Theme.hairline; height: cmds.preferred-height;

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tenrec Live</title>
+<link rel="icon" href="/favicon.png">
+<link rel="stylesheet" href="/live.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><img src="/favicon.png" alt="" width="20" height="20"><b>Tenrec</b><span class="muted">live</span></div>
+  <div class="status" role="status" aria-live="polite"><span id="conn" class="conn off">…</span><span id="last" class="muted"></span><span id="paused" class="chip warn" hidden></span></div>
+  <div class="spacer"></div>
+  <span id="mode" class="chip" hidden></span>
+  <button id="pause" type="button"></button>
+  <button id="lang" type="button">EN</button>
+  <button id="theme" type="button"></button>
+</header>
+<nav id="tabs" class="tabs" aria-label="chats"></nav>
+<main>
+  <section id="notice" class="notice" hidden></section>
+  <section class="tiles" id="tiles"></section>
+  <section class="timeline-wrap">
+    <div class="timeline-head"><h2 id="h-timeline"></h2><button id="newer" type="button" class="newer" hidden></button></div>
+    <div id="timeline" class="timeline"></div>
+  </section>
+  <aside id="detail" class="detail" hidden></aside>
+</main>
+<script src="/live.js"></script>
+</body>
+</html>

@@ -29,6 +29,16 @@ pub fn origin_ok(headers: &HeaderMap, port: u16) -> bool {
     origin == format!("http://127.0.0.1:{port}") || origin == format!("http://localhost:{port}")
 }
 
+/// A request a page of another site made (the browser says so with `Sec-Fetch-Site`): refused by the servers that only their own page may use.
+pub fn cross_site(headers: &HeaderMap) -> bool {
+    headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("cross-site"))
+}
+
+/// No Origin (a plain request), or exactly one of this server's own addresses.
+pub fn origin_absent_or_own(headers: &HeaderMap, port: u16) -> bool {
+    headers.get(header::ORIGIN).is_none() || origin_ok(headers, port)
+}
+
 pub fn bearer_ok(headers: &HeaderMap, token: &str) -> bool {
     headers
         .get(header::AUTHORIZATION)

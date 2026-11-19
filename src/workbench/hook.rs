@@ -105,27 +105,46 @@ pub fn answer(data: &Path, project: &Path, sid: &str, input_text: &str) -> Answe
     if names_data_folder(&call.input, data) {
         return Answer::Deny("SmartWorkbench guard (tenrec-data): a call may not name the app's data folder".into());
     }
-    // The project's rule file, read the way the editor reads it (a plain file, not too big): a link, a pipe or a huge file put in its place
-    // is a sign of tampering, and a hook that waits on it would be let through when it times out. Its profile may only raise the chat's own.
-    let (rule_list, file_profile) = match crate::view::guardfile::read_text(&crate::view::guardfile::path_of(project)) {
-        Ok(Some(text)) => match rules::parse_guard_file(&text) {
-            Ok(file) => (file.rules, file.profile),
-            // A rule file that is not valid JSON would leave the project's block rules silently out: it is a block, until it is fixed.
-            Err(_) => return closed("the project's rule file is not valid JSON; fix it (the Team page shows it)"),
-        },
-        Ok(None) => (Vec::new(), None),
-        Err(_) => return closed("the project's rule file is not a plain file of a usual size"),
+    let ev = match evaluate(&wb, project, &call.cwd, &call.tool, &call.input) {
+        Ok(ev) => ev,
+        Err(why) => return closed(why),
     };
-    let profile = effective_profile(wb.profile, file_profile);
-    let rule = rules::match_rule_in(&rule_list, &call.tool, &call.input, project.to_str().or(call.cwd.to_str()));
-    let verdict = apply_rule(classify(&call.tool, &call.input), rule);
-    match decide(&verdict, profile, wb.paused) {
+    let verdict = ev.verdict;
+    match ev.policy {
         Policy::Allow => Answer::Silent,
         // In a mode where Claude Code does not put a question to the person, an ask would not be asked: it is a block.
         Policy::Ask if matches!(call.mode.as_str(), "bypassPermissions" | "dontAsk") => Answer::Deny(format!("{} (a question cannot be asked in {} mode)", reason_text(&verdict), call.mode)),
         Policy::Ask => Answer::Ask(reason_text(&verdict)),
         Policy::Block => Answer::Deny(reason_text(&verdict)),
     }
+}
+
+/// What the guard makes of one call: the verdict (with the project's rule applied), the profile in force and the policy it comes to.
+pub struct Evaluation {
+    pub verdict: super::risk::Verdict,
+    pub profile: super::Profile,
+    pub policy: Policy,
+}
+
+/// The decision part of `answer`, for whoever wants to know what the guard would say about a call (the live view shows it): the chat's
+/// profile and pause switch, the project's rule file (looked for in `project`, read the way the editor reads it: a plain file, not too big;
+/// a link, a pipe or a huge file put in its place is a sign of tampering, and a hook that waits on it would be let through when it times out)
+/// and the call itself. The rule file's profile may only raise the chat's own. An Err is why the guard cannot decide (the hook blocks then).
+pub fn evaluate(wb: &super::Workbench, project: &Path, cwd: &Path, tool: &str, input: &Value) -> Result<Evaluation, &'static str> {
+    let (rule_list, file_profile) = match crate::view::guardfile::read_text(&crate::view::guardfile::path_of(project)) {
+        Ok(Some(text)) => match rules::parse_guard_file(&text) {
+            Ok(file) => (file.rules, file.profile),
+            // A rule file that is not valid JSON would leave the project's block rules silently out: it is a block, until it is fixed.
+            Err(_) => return Err("the project's rule file is not valid JSON; fix it (the Team page shows it)"),
+        },
+        Ok(None) => (Vec::new(), None),
+        Err(_) => return Err("the project's rule file is not a plain file of a usual size"),
+    };
+    let profile = effective_profile(wb.profile, file_profile);
+    let rule = rules::match_rule_in(&rule_list, tool, input, project.to_str().or(cwd.to_str()));
+    let verdict = apply_rule(classify(tool, input), rule);
+    let policy = decide(&verdict, profile, wb.paused);
+    Ok(Evaluation { verdict, profile, policy })
 }
 
 /// Prints an answer and ends the process with 0.
