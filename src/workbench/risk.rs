@@ -393,6 +393,17 @@ static BASH_RULES: LazyLock<Vec<BashRule>> = LazyLock::new(|| {
             fancy(TENREC_DATA_PATTERN),
             "touches the data folder of this app: its workbench files, accounts, run files or provider settings",
         ),
+        raw_rule(
+            Category::SecretOutput,
+            Risk::Medium,
+            Policy::Ask,
+            fancy(
+                r"(?i)(^|[;&|]\s*)(env|printenv|set)\s*($|[;&|])|{BS}(cat|less|head|tail|grep){BE}[^;&|\n]*((^|[^0-9A-Za-z_.])\.env(?!\.(example|sample|template){BE})(\.[{WC}-]+)?(?=$|[^{WC}-])|credentials|\.npmrc|\.netrc|id_(?:rsa|dsa|ecdsa|ed25519)|\.git-credentials|\.envrc|\.pgpass|\.pypirc|\.pem{BE})|\$\{?{SECRET_NAME}|{BS}printenv\s+(?:-\S+\s+)*{SECRET_NAME}|{BS}gh\s+auth\s+token{BE}",
+            ),
+            "may print secrets",
+        ),
+        // After the secret-output rule: a command that both prints a secrets file and changes a lint setting must keep the stricter
+        // secrets handling (the live feed hides the input and output of that category).
         rule(
             Category::HookBypass,
             Risk::Medium,
@@ -407,20 +418,11 @@ static BASH_RULES: LazyLock<Vec<BashRule>> = LazyLock::new(|| {
             Risk::Medium,
             Policy::Ask,
             fancy(
-                &r#"(?i)(?:{BS}tee{BE}|{BS}sed\s+(?:-[a-z]*i|--in-place){BE}|{BS}(?:cp|mv|install|ln){BE}|>)[^;&|\n]*?(?:^|[\s"'/=])(?:{TOOL_DIRS}|(?:{TOOL_FILES})(?=$|[\s"';&|)]))"#
+                &r#"(?i)(?:{BS}tee{BE}|{BS}sed\s+(?:-[a-z]*i|--in-place){BE}|{BS}(?:cp|mv|install|ln){BE}|>)[^;&|\n]*?(?:^|[\s"'/=]|(?<=>))(?:{TOOL_DIRS}|(?:{TOOL_FILES})(?=$|[\s"';&|)]))"#
                     .replace("{TOOL_DIRS}", TOOL_DIRS)
                     .replace("{TOOL_FILES}", TOOL_FILES),
             ),
             "changes CI, git hook or lint and format settings from the shell",
-        ),
-        raw_rule(
-            Category::SecretOutput,
-            Risk::Medium,
-            Policy::Ask,
-            fancy(
-                r"(?i)(^|[;&|]\s*)(env|printenv|set)\s*($|[;&|])|{BS}(cat|less|head|tail|grep){BE}[^;&|\n]*((^|[^0-9A-Za-z_.])\.env(?!\.(example|sample|template){BE})(\.[{WC}-]+)?(?=$|[^{WC}-])|credentials|\.npmrc|\.netrc|id_(?:rsa|dsa|ecdsa|ed25519)|\.git-credentials|\.envrc|\.pgpass|\.pypirc|\.pem{BE})|\$\{?{SECRET_NAME}|{BS}printenv\s+(?:-\S+\s+)*{SECRET_NAME}|{BS}gh\s+auth\s+token{BE}",
-            ),
-            "may print secrets",
         ),
         raw_rule(
             Category::CodexTransfer,
@@ -1539,6 +1541,8 @@ mod tests {
             "cp x .git/hooks/pre-commit",
             "mv a clippy.toml",
             "echo x > '.claude/settings.local.json'",
+            "echo '{}' >tsconfig.json",
+            "echo x>>.github/workflows/ci.yml",
         ] {
             let v = bash(command);
             assert_eq!((v.category, v.policy), (Category::ToolingConfig, Policy::Ask), "{command}");
@@ -1547,6 +1551,12 @@ mod tests {
         for command in ["cat tsconfig.json", "echo hi > out.txt", "echo x > tsconfig.json.bak", "sed -n 1,5p .eslintrc.json", "grep a .github/workflows/ci.yml", "ls .husky/", "cargo clippy"] {
             assert_eq!(bash(command).category, Category::Shell, "{command}");
         }
+    }
+
+    #[test]
+    fn a_command_that_prints_a_secrets_file_and_also_changes_a_lint_setting_stays_secret_output() {
+        let v = bash("cat .env; echo x > tsconfig.json");
+        assert_eq!(v.category, Category::SecretOutput, "the stricter handling wins: its input and output are hidden in the feed");
     }
 
     #[test]
