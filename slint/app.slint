@@ -104,6 +104,8 @@ export component AppWindow inherits Window {
     in property <string> state-label;
     in property <string> turn-cost;
     in property <string> turn-tokens;
+    // How full the model's context window is: 0 fine, 1 from 70%, 2 from 80%, 3 from 90%.
+    in property <int> ctx-level;
     // The width of the header: what does not fit goes first (the connection chip, the cost, then the folder).
     // Set when the window is sized (a binding on the width would loop through the header's own size).
     property <length> hw: 1000px;
@@ -446,7 +448,7 @@ export component AppWindow inherits Window {
                             tk := HorizontalLayout {
                                 padding-left: 10px; padding-right: 10px; spacing: 6px;
                                 Label { text: T.tr("hdr_tokens"); vertical-alignment: center; }
-                                Text { text: root.turn-tokens == "" ? "—" : root.turn-tokens; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; font-weight: 600; vertical-alignment: center; }
+                                Text { text: root.turn-tokens == "" ? "—" : root.turn-tokens; color: root.ctx-level >= 3 ? Theme.error : root.ctx-level == 2 ? Theme.primary : root.ctx-level == 1 ? Theme.primary-soft : Theme.on-surface; font-size: 12px; font-family: Theme.mono; font-weight: 600; vertical-alignment: center; }
                                 Rectangle { width: 1px; height: 14px; y: 7px; background: Theme.hairline; }
                                 Label { text: T.tr("hdr_cost"); vertical-alignment: center; }
                                 Text { text: root.turn-cost == "" ? "—" : root.turn-cost; color: Theme.ok; font-size: 12px; font-family: Theme.mono; font-weight: 600; vertical-alignment: center; }

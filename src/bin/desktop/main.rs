@@ -961,6 +961,7 @@ fn open_chat(app: &Arc<App>, sid: String) {
         ui.set_deny_text(SharedString::new());
         ui.set_turn_cost(SharedString::new());
         ui.set_turn_tokens(SharedString::new());
+        ui.set_ctx_level(0);
         ui.set_crumb_branch(SharedString::new());
         term::reset(&ui, app);
         // Shell mode belongs to the chat it was turned on in.
@@ -1122,9 +1123,18 @@ fn push(app: &Arc<App>) {
             ui.set_turn_cost(cost.clone().unwrap_or_default().into());
             ui.set_turn_tokens(tokens.clone().unwrap_or_default().into());
         }
-        // The chat's size against the model's window, when a result has named the window.
-        if let Some(line) = tenrec::view::transcript::context_line(head.ctx_used, head.ctx_max) {
-            ui.set_turn_tokens(line.into());
+        // The chat's size against the model's window, when a result has named the window; the colour says how full it is.
+        let level = match (head.ctx_used, head.ctx_max) {
+            (Some(used), Some(max)) => tenrec::view::transcript::context_pressure(used, max).1.level(),
+            _ => 0,
+        };
+        ui.set_ctx_level(level);
+        let mut tokens = tenrec::view::transcript::context_line(head.ctx_used, head.ctx_max).or_else(|| head.turn.as_ref().and_then(|t| t.1.clone()));
+        if let (Some(text), Some(pct)) = (tokens.as_mut(), head.cache_pct) {
+            text.push_str(&format!(" · {} {pct}%", tr(lang, "cache_hit")));
+        }
+        if let Some(text) = tokens {
+            ui.set_turn_tokens(text.into());
         }
         if let Some(model) = &head.model {
             ui.set_model_name(model_label(model).into());

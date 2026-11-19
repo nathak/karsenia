@@ -248,17 +248,18 @@ export component RowView inherits Rectangle {
             padding-bottom: 14px;
             WText { text: r.text; fg: Theme.outline; size: 12px; mono: true; }
         }
-        if r.kind == "note-sys" || r.kind == "note-err": VerticalLayout {
+        if r.kind == "note-sys" || r.kind == "note-err" || r.kind == "note-warn": VerticalLayout {
             padding-bottom: 12px;
-            Rectangle {
-                background: r.kind == "note-err" ? Theme.error.with-alpha(0.1) : Theme.container; border-radius: 8px;
-                border-width: r.kind == "note-err" ? 1px : 0px; border-color: Theme.error.with-alpha(0.35);
+            card := Rectangle {
+                property <color> accent: r.kind == "note-err" ? Theme.error : r.kind == "note-warn" ? Theme.primary : Theme.info;
+                background: r.kind == "note-sys" ? Theme.container : accent.with-alpha(0.1); border-radius: 8px;
+                border-width: r.kind == "note-sys" ? 0px : 1px; border-color: accent.with-alpha(0.35);
                 height: nr.preferred-height;
                 nr := HorizontalLayout {
                     padding: 10px; padding-left: 14px; padding-right: 14px; spacing: 10px;
-                    Rectangle { width: 6px; height: 6px; y: 7px; border-radius: 3px; background: r.kind == "note-err" ? Theme.error : Theme.info; }
-                    Text { text: r.kind == "note-err" ? "ERROR" : "SYSTEM NOTICE"; color: r.kind == "note-err" ? Theme.error : Theme.info; font-size: 11px; font-weight: 600; font-family: Theme.mono; letter-spacing: 0.8px; vertical-alignment: top; }
-                    WText { horizontal-stretch: 1; text: r.text; fg: r.kind == "note-err" ? Theme.error : Theme.on-var; size: 13px; }
+                    Rectangle { width: 6px; height: 6px; y: 7px; border-radius: 3px; background: card.accent; }
+                    Text { text: r.kind == "note-err" ? "ERROR" : r.kind == "note-warn" ? "WARNING" : "SYSTEM NOTICE"; color: card.accent; font-size: 11px; font-weight: 600; font-family: Theme.mono; letter-spacing: 0.8px; vertical-alignment: top; }
+                    WText { horizontal-stretch: 1; text: r.text; fg: r.kind == "note-sys" ? Theme.on-var : card.accent; size: 13px; }
                 }
             }
         }

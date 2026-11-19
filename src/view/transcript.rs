@@ -40,7 +40,7 @@ impl std::fmt::Debug for Shots {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Row {
     /// day, meta-user, user, meta-asst, para, heading, item, quote, code, rule, table, think, tool, steps (a long run of tools and
-    /// thoughts folded into one row), note, note-err, note-sys
+    /// thoughts folded into one row), note, note-err, note-sys, note-warn
     pub kind: &'static str,
     /// Nesting under sub-agent cards.
     pub depth: i32,
@@ -186,6 +186,8 @@ pub struct Head {
     /// The size of the conversation as of the last model call (tokens), and the model's context window when a result named it.
     pub ctx_used: Option<u64>,
     pub ctx_max: Option<u64>,
+    /// The share of the last result's calls that the prompt cache served (whole percent).
+    pub cache_pct: Option<u32>,
     /// Whether the last `system/init` listed the SmartWorkbench plug-in's agents (None before any init).
     pub swb: Option<bool>,
     /// The last team-mode state the chat showed (see `view::team`).
@@ -219,6 +221,8 @@ pub struct Transcript {
     pub first_text: Option<String>,
     /// Long code blocks opened in full (by row key).
     expanded: std::collections::HashSet<String>,
+    /// The highest context level already said in the transcript since the chat was last below it (so each is said once).
+    ctx_warned: Pressure,
 }
 
 const MAX_RESULT: usize = 20_000;
@@ -430,10 +434,54 @@ fn short_count(n: u64) -> String {
     }
 }
 
-/// "45k / 200k" when the window is known, else None (the header then shows the old per-turn count).
+/// How full the context window is. The levels are where it is worth saying something: from `High` a manual `/compact` between two
+/// phases of the work is better than the automatic one at an arbitrary point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum Pressure {
+    #[default]
+    Ok,
+    Warn,
+    High,
+    Crit,
+}
+
+impl Pressure {
+    /// 0..=3, for the header's colour.
+    pub fn level(self) -> i32 {
+        self as i32
+    }
+}
+
+/// The share of the window the chat takes (whole percent, at most 999) and its level: 70% and more warns, 80% is high, 90% is critical.
+/// Only a window a result named gives a share: a guessed window would make the number a guess too.
+pub fn context_pressure(used: u64, max: u64) -> (u32, Pressure) {
+    if max == 0 {
+        return (0, Pressure::Ok);
+    }
+    let pct = (used.saturating_mul(100) / max).min(999) as u32;
+    let level = match pct {
+        90.. => Pressure::Crit,
+        80.. => Pressure::High,
+        70.. => Pressure::Warn,
+        _ => Pressure::Ok,
+    };
+    (pct, level)
+}
+
+/// The share of what a result's calls were given that came from the prompt cache, in whole percent (None when nothing was given).
+/// A high share is cheap tokens; a low one in a long chat means the start of the prompt keeps changing.
+pub fn cache_hit(usage: &Value) -> Option<u32> {
+    let n = |k: &str| usage.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let (fresh, read, written) = (n("input_tokens"), n("cache_read_input_tokens"), n("cache_creation_input_tokens"));
+    let all = fresh.saturating_add(read).saturating_add(written);
+    (all > 0).then(|| (read.saturating_mul(100) / all) as u32)
+}
+
+/// "45k / 200k · 22%" when the window is known, else None (the header then shows the old per-turn count).
 pub fn context_line(used: Option<u64>, max: Option<u64>) -> Option<String> {
     let (used, max) = (used?, max?);
-    Some(format!("{} / {}", short_count(used), short_count(max)))
+    let (pct, _) = context_pressure(used, max);
+    Some(format!("{} / {} · {pct}%", short_count(used), short_count(max)))
 }
 
 /// `claude-sonnet-4-5-20250929` → `sonnet-4-5`.
@@ -456,7 +504,7 @@ fn local(ms: u64) -> Option<(String, String)> {
 
 impl Transcript {
     pub fn new(lang: Lang) -> Self {
-        Self { lang, nodes: Vec::new(), tools: HashMap::new(), live_text: None, live_think: None, think_ms: None, asst_meta: false, day: String::new(), ts: 0, team_cmd: false, cmd_status: false, team_cand: None, head: Head::default(), pending: Vec::new(), replaying: true, first_text: None, expanded: Default::default() }
+        Self { lang, nodes: Vec::new(), tools: HashMap::new(), live_text: None, live_think: None, think_ms: None, asst_meta: false, day: String::new(), ts: 0, team_cmd: false, cmd_status: false, team_cand: None, head: Head::default(), pending: Vec::new(), replaying: true, first_text: None, expanded: Default::default(), ctx_warned: Pressure::Ok }
     }
 
     fn t(&self, key: &str) -> String {
@@ -493,6 +541,23 @@ impl Transcript {
     fn note(&mut self, text: String, kind: &'static str) {
         if !text.trim().is_empty() {
             self.push(Item::Note { text, kind }, None);
+        }
+    }
+
+    /// Says once, in the transcript, that the window is filling up (it is said again only after the chat has dropped below the level,
+    /// for example after a compaction). The same results give the same notes on a replay as when following.
+    fn context_notice(&mut self) {
+        let (Some(used), Some(max)) = (self.head.ctx_used, self.head.ctx_max) else { return };
+        let (_, level) = context_pressure(used, max);
+        if level < Pressure::High {
+            self.ctx_warned = level;
+            return;
+        }
+        if level > self.ctx_warned {
+            self.ctx_warned = level;
+            let key = if level == Pressure::Crit { "ctx_crit" } else { "ctx_high" };
+            let text = self.t(key);
+            self.note(text, "note-warn");
         }
     }
 
@@ -752,6 +817,8 @@ impl Transcript {
                 if let Some(max) = context_window(d, self.head.model.as_deref()) {
                     self.head.ctx_max = Some(max);
                 }
+                self.head.cache_pct = d.get("usage").and_then(cache_hit);
+                self.context_notice();
                 let line = fmt_turn(d);
                 if s(d, "subtype") == "error_during_execution" {
                     let text = if line.is_empty() { self.t("interrupted") } else { format!("{} · {line}", self.t("interrupted")) };
@@ -1380,10 +1447,63 @@ mod tests {
         assert_eq!(context_line(t.head.ctx_used, t.head.ctx_max), None, "no window yet: the old count stays");
         t.apply("claude", &json!({"type": "result", "total_cost_usd": 0.1, "usage": {"input_tokens": 5}, "modelUsage": {"claude-haiku": {"contextWindow": 100000}, "claude-opus": {"contextWindow": 200000}}}), 0);
         assert_eq!(t.head.ctx_max, Some(200000), "no model known: the largest window");
-        assert_eq!(context_line(t.head.ctx_used, t.head.ctx_max).as_deref(), Some("2.1k / 200k"));
+        assert_eq!(context_line(t.head.ctx_used, t.head.ctx_max).as_deref(), Some("2.1k / 200k · 1%"));
         t.head.model = Some("claude-haiku".into());
         t.apply("claude", &json!({"type": "result", "total_cost_usd": 0.1, "modelUsage": {"claude-haiku": {"contextWindow": 100000}, "claude-opus": {"contextWindow": 200000}}}), 0);
         assert_eq!(t.head.ctx_max, Some(100000), "the chat's own model wins");
+    }
+
+    #[test]
+    fn the_context_share_has_levels_and_never_divides_by_zero() {
+        assert_eq!(context_pressure(0, 200_000), (0, Pressure::Ok));
+        assert_eq!(context_pressure(139_999, 200_000), (69, Pressure::Ok));
+        assert_eq!(context_pressure(140_000, 200_000), (70, Pressure::Warn));
+        assert_eq!(context_pressure(160_000, 200_000), (80, Pressure::High));
+        assert_eq!(context_pressure(180_000, 200_000), (90, Pressure::Crit));
+        assert_eq!(context_pressure(5_000_000, 200_000), (999, Pressure::Crit), "the number stays short");
+        assert_eq!(context_pressure(10, 0), (0, Pressure::Ok));
+        assert_eq!(Pressure::Crit.level(), 3);
+    }
+
+    #[test]
+    fn the_cache_share_counts_what_the_prompt_cache_served() {
+        assert_eq!(cache_hit(&json!({"input_tokens": 100, "cache_read_input_tokens": 800, "cache_creation_input_tokens": 100, "output_tokens": 50})), Some(80));
+        assert_eq!(cache_hit(&json!({"input_tokens": 10})), Some(0));
+        assert_eq!(cache_hit(&json!({"output_tokens": 50})), None, "nothing was given to the model");
+        assert_eq!(cache_hit(&json!({})), None);
+        let mut t = chat();
+        t.apply("claude", &json!({"type": "result", "usage": {"input_tokens": 50, "cache_read_input_tokens": 50}}), 0);
+        assert_eq!(t.head.cache_pct, Some(50));
+        t.apply("claude", &json!({"type": "result"}), 0);
+        assert_eq!(t.head.cache_pct, None, "a result without usage clears it");
+    }
+
+    fn warnings(t: &Transcript) -> usize {
+        t.rows().iter().filter(|r| r.kind == "note-warn").count()
+    }
+
+    #[test]
+    fn a_full_window_is_said_once_per_level_and_again_after_it_dropped() {
+        let used = |t: &mut Transcript, n: u64| {
+            t.apply("claude", &json!({"type": "assistant", "message": {"usage": {"input_tokens": n}, "content": []}}), 0);
+            t.apply("claude", &json!({"type": "result", "modelUsage": {"m": {"contextWindow": 200000}}}), 0);
+        };
+        let mut t = chat();
+        used(&mut t, 150_000);
+        assert_eq!(warnings(&t), 0, "70% only colours the header");
+        used(&mut t, 165_000);
+        assert_eq!(warnings(&t), 1);
+        used(&mut t, 170_000);
+        assert_eq!(warnings(&t), 1, "the same level is not said twice");
+        used(&mut t, 185_000);
+        assert_eq!(warnings(&t), 2, "a higher level is");
+        used(&mut t, 20_000);
+        used(&mut t, 170_000);
+        assert_eq!(warnings(&t), 3, "after a compaction it says it again");
+        // Before any result named the window nothing can be said.
+        let mut early = chat();
+        early.apply("claude", &json!({"type": "assistant", "message": {"usage": {"input_tokens": 199_000}, "content": []}}), 0);
+        assert_eq!(warnings(&early), 0);
     }
 
     #[test]
@@ -1392,7 +1512,7 @@ mod tests {
         assert_eq!(short_count(1000), "1k");
         assert_eq!(short_count(45_200), "45k");
         assert_eq!(short_count(1_000_000), "1M");
-        assert_eq!(context_line(Some(0), Some(0)).as_deref(), Some("0 / 0"));
+        assert_eq!(context_line(Some(0), Some(0)).as_deref(), Some("0 / 0 · 0%"));
         assert_eq!(context_line(None, Some(5)), None);
     }
 

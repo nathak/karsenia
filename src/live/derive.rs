@@ -327,6 +327,22 @@ mod tests {
     }
 
     #[test]
+    fn one_message_written_as_several_events_is_not_counted_several_times() {
+        // Claude Code writes one line per content block of a message and repeats the message's usage on each: the size of the context
+        // is the last call's own number (it replaces), and the cost is the result's single figure, so nothing adds up per line.
+        let mut d = Deriver::new(Prompts::Full, None);
+        let items = run(&mut d, vec![
+            env(1, 1, "claude", assistant(json!([]), None)),
+            env(2, 2, "claude", assistant(json!([]), None)),
+            env(3, 3, "claude", assistant(json!([]), None)),
+            env(4, 4, "claude", json!({"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.5, "modelUsage": {"claude-sonnet-4-5": {"contextWindow": 200000}}})),
+        ]);
+        let Body::TurnEnd(t) = &items[0].body else { panic!("{items:?}") };
+        assert_eq!(t.context, Some(Context { used: 105, window: 200000 }), "not 315");
+        assert_eq!(t.cost_usd, Some(0.5));
+    }
+
+    #[test]
     fn secrets_are_masked_a_secret_file_shows_no_input_or_result_and_the_short_mode_hides_prompts() {
         let key = format!("sk-ant-{}", "z9y8x7w6v5".repeat(6));
         let mut d = Deriver::new(Prompts::Full, None);
