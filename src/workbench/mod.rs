@@ -123,9 +123,9 @@ pub enum Op {
 
 pub const LINKS: [&str; 5] = ["test", "build", "typecheck", "lint", "ci"];
 
-/// Control characters out, ends trimmed, cut to the limit; None when nothing is left.
+/// Control and invisible characters out, ends trimmed, cut to the limit; None when nothing is left.
 pub fn clean(text: &str, max: usize) -> Option<String> {
-    let t: String = text.chars().filter(|c| !c.is_control() || *c == ' ').collect::<String>().trim().chars().take(max).collect();
+    let t: String = text.chars().filter(|c| (!c.is_control() && !risk::is_invisible(*c)) || *c == ' ').collect::<String>().trim().chars().take(max).collect();
     (!t.is_empty()).then_some(t)
 }
 

@@ -244,6 +244,33 @@ fn group<'a>(caps: &'a fancy_regex::Captures<'_, str>, n: usize) -> &'a str {
     caps.get(n).map_or("", |m| m.as_str())
 }
 
+/// A character that cannot be seen but changes what a text says or how it reads: a control character (a newline and a tab are not
+/// one), the bidirectional marks and overrides that reorder text on screen, zero-width and joiner characters, a soft hyphen, and the
+/// "tag" characters that can carry a message no one sees. A path or a command that holds one is not what it looks like.
+pub fn is_invisible(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{061C}' | '\u{FEFF}' | '\u{00AD}' | '\u{E0000}'..='\u{E007F}')
+        || (c.is_control() && c != '\n' && c != '\t')
+}
+
+/// The text without its invisible characters, for a place that only shows it (the live feed).
+pub fn strip_invisible(text: &str) -> String {
+    text.chars().filter(|c| !is_invisible(*c)).collect()
+}
+
+/// The text with each invisible character written out as `<U+202E>`: for a place where a person decides from what they read (the
+/// permission dialog), so that what would run is shown, not hidden, and nothing is quietly dropped.
+pub fn reveal_invisible(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if is_invisible(c) {
+            out.push_str(&format!("<U+{:04X}>", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Hides what looks like a secret in text that leaves for the live feed. A heuristic, not a guarantee: a value under a name that
 /// does not look secret (DB=xyz) and a bare pasted token without a known prefix stay visible. Text the patterns cannot be run on
 /// to the end is hidden whole.
@@ -1412,5 +1439,18 @@ mod tests {
         assert_eq!(pol("git rm -r dir"), Policy::Allow);
         assert_eq!(pol("git  rm -r dir"), Policy::Allow);
         assert_eq!(pol("xgit rm -r dir"), Policy::Block);
+    }
+
+    #[test]
+    fn invisible_characters_are_told_from_text_and_can_be_dropped_or_written_out() {
+        for c in ['\u{202E}', '\u{2066}', '\u{200B}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{00AD}', '\u{E0041}', '\u{061C}', '\u{7}', '\r'] {
+            assert!(is_invisible(c), "{c:?}");
+        }
+        for c in ['a', ' ', '\n', '\t', '한', '\u{00E9}', '\u{2028}'] {
+            assert!(!is_invisible(c), "{c:?}");
+        }
+        assert_eq!(strip_invisible("echo\u{200B} hi\u{202E} x\n한"), "echo hi x\n한");
+        assert_eq!(reveal_invisible("a\u{202E}b\u{E0041}c\r\n"), "a<U+202E>b<U+E0041>c<U+000D>\n");
+        assert_eq!(reveal_invisible("plain 한글"), "plain 한글", "nothing to write out");
     }
 }

@@ -1,6 +1,6 @@
-//! A text made fit to leave the app: control characters out, secrets hidden (`risk::redact`, which hides the whole text when it cannot be
+//! A text made fit to leave the app: control and invisible characters out, secrets hidden (`risk::redact`, which hides the whole text when it cannot be
 //! scanned to its end), then cut to a length. The order matters: redacting first means a secret cut in half by the limit is never shown.
-use crate::workbench::risk::redact;
+use crate::workbench::risk::{is_invisible, redact};
 
 /// The most that is scanned of a text (a longer one is cut before it is read, so a huge result costs little).
 const SCAN: usize = 64 * 1024;
@@ -8,7 +8,8 @@ const SCAN: usize = 64 * 1024;
 /// The text, masked and cut to `limit` characters, and whether it was cut.
 pub fn mask(text: &str, limit: usize) -> (String, bool) {
     let mut cut = false;
-    let mut scanned: String = text.chars().filter(|c| *c == '\n' || *c == '\t' || !c.is_control()).take(SCAN + 1).collect();
+    // Invisible characters go before the secrets are looked for: a zero-width character inside `sk-` would otherwise hide a key from the patterns.
+    let mut scanned: String = text.chars().filter(|c| !is_invisible(*c)).take(SCAN + 1).collect();
     if scanned.chars().count() > SCAN {
         scanned = scanned.chars().take(SCAN).collect();
         cut = true;
@@ -28,6 +29,15 @@ pub fn mask_text(text: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_invisible_character_inside_a_secret_does_not_hide_it_from_the_patterns() {
+        let split = format!("sk-\u{200B}ant-{}", "a1b2c3d4e5".repeat(6));
+        let (out, _) = mask(&format!("use {split} now"), 2000);
+        assert!(!out.contains("a1b2c3d4e5"), "{out}");
+        let (out, _) = mask("ls\u{202E}gnp.txt\u{E0041}", 2000);
+        assert_eq!(out, "lsgnp.txt", "reordering and tag characters are gone");
+    }
 
     #[test]
     fn secrets_are_hidden_and_a_secret_cut_by_the_limit_is_never_shown() {

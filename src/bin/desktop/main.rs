@@ -1174,6 +1174,9 @@ fn push(app: &Arc<App>) {
 
 fn perm_view(perm: Option<(serde_json::Value, usize)>, lang: Lang, cwd: &str, sid: &str) -> PermView {
     let Some((p, count)) = perm else { return PermView::default() };
+    // A person decides from what this card says: an invisible character (a right-to-left override, a zero-width one) is written out
+    // as <U+202E>, not dropped, so that what would run is shown as it is. Secrets are not hidden here: the person has to see what they allow.
+    let see = |text: &str| -> SharedString { tenrec::workbench::risk::reveal_invisible(text).into() };
     let tool = p["tool_name"].as_str().unwrap_or_default();
     let title = p["display_name"].as_str().filter(|s| !s.is_empty()).unwrap_or(tool);
     let suggestions = match p.get("permission_suggestions") {
@@ -1188,21 +1191,20 @@ fn perm_view(perm: Option<(serde_json::Value, usize)>, lang: Lang, cwd: &str, si
     PermView {
         visible: true,
         request_id: p["request_id"].as_str().unwrap_or_default().into(),
-        title: title.into(),
+        title: see(title),
         more: if count > 1 { format!("+{} {}", count - 1, tr(lang, "perm_more")).into() } else { SharedString::new() },
         description: {
             // Why Claude Code asks, when a hook (the guard) or a rule is the reason, goes under what the tool says it is for.
             let purpose = p["description"].as_str().unwrap_or_default();
             match p["decision_reason"].as_str().filter(|r| !r.is_empty()) {
-                Some(why) if purpose.is_empty() => why.to_owned(),
-                Some(why) => format!("{purpose}\n{why}"),
-                None => purpose.to_owned(),
+                Some(why) if purpose.is_empty() => see(why),
+                Some(why) => see(&format!("{purpose}\n{why}")),
+                None => see(purpose),
             }
-            .into()
         },
-        input: serde_json::to_string_pretty(input).unwrap_or_default().into(),
-        blocked: p["blocked_path"].as_str().unwrap_or_default().into(),
-        suggestions: suggestions.into(),
+        input: see(&serde_json::to_string_pretty(input).unwrap_or_default()),
+        blocked: see(p["blocked_path"].as_str().unwrap_or_default()),
+        suggestions: see(&suggestions),
         // Offered for this app's own read-only search tool only; Claude Code keeps the rule for this chat's process.
         can_remember: tool == "mcp__tenrec__search_history",
         grant_session: p["grants"]["session"].as_str().unwrap_or_default().into(),
@@ -1221,11 +1223,11 @@ fn perm_view(perm: Option<(serde_json::Value, usize)>, lang: Lang, cwd: &str, si
             }
             note.join(" ").into()
         },
-        tool: title.into(),
-        cwd: cwd.into(),
+        tool: see(title),
+        cwd: see(cwd),
         warn: !command.is_empty() || writes,
-        command: command.into(),
-        file: file.into(),
+        command: see(&command),
+        file: see(&file),
         file_state: if writes { "modified" } else { "read" }.into(),
         sid: sid.chars().take(8).collect::<String>().into(),
     }
@@ -1566,6 +1568,21 @@ mod tests {
 
     fn chat(sid: &str, group: &str, wt: bool) -> SessionItem {
         SessionItem { sid: sid.into(), folder: "proj".into(), title: sid.into(), when: SharedString::new(), state: "idle".into(), active: false, tags: SharedString::new(), pending: 1, head: false, group: group.into(), open: false, count: 0, wt, sub: SharedString::new() }
+    }
+
+    #[test]
+    fn the_permission_card_writes_invisible_characters_out_and_keeps_the_rest_as_it_is() {
+        let request = serde_json::json!({
+            "request_id": "r1", "tool_name": "Bash", "input": {"command": "cat notes\u{202E}txt.sh"}, "description": "reads\u{200B} it",
+            "blocked_path": "/tmp/a\u{E0041}b",
+        });
+        let view = perm_view(Some((request, 1)), Lang::En, "/proj", "abcdef123456");
+        assert_eq!(view.command.as_str(), "cat notes<U+202E>txt.sh");
+        assert_eq!(view.description.as_str(), "reads<U+200B> it");
+        assert_eq!(view.blocked.as_str(), "/tmp/a<U+E0041>b");
+        assert!(view.input.as_str().contains("<U+202E>"), "the pretty input shows it too: {}", view.input);
+        assert_eq!(view.title.as_str(), "Bash");
+        assert_eq!(view.cwd.as_str(), "/proj");
     }
 
     #[test]
