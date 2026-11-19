@@ -1,459 +1,151 @@
 # Tenrec
 
-Started as a companion app to the SmartWorkbench Claude Code plugin; now a separate project.
+**English** · [한국어](#한국어)
 
-A desktop-style host for [Claude Code](https://claude.com/claude-code): a Rust core runs `claude` headless
-(`--input-format stream-json --output-format stream-json`) and serves a custom chat UI on this machine only.
-MVP 1 is a browser UI over HTTP + WebSocket with a file tree, a text editor and an optional terminal; a Tauri wrap and a second agent
-backend (Hermes Agent) come later.
+A desktop-style host for [Claude Code](https://claude.com/claude-code). A Rust core runs the `claude` CLI headless
+(`--input-format stream-json --output-format stream-json`) and gives it a chat window of its own: a native desktop app
+(Slint, no browser, no network listener) or a local web page.
 
-한국어: Claude Code를 헤드리스로 띄워 JSON 이벤트로 주고받고, 직접 만든 채팅 화면(이미지 붙여넣기·표시, 도구 호출 카드,
-승인 대화상자, 중단, 다시 열기)을 보여 주는 로컬 앱입니다. 지금은 브라우저 화면(파일 트리·텍스트 에디터, 시작 옵션을 준 경우의 터미널 포함)이며, Tauri·헤르메스는 다음 단계입니다.
+> Status: early (v0.1.0). It is used daily by its author, mostly on Windows with builds cross-compiled from Linux.
+> The Linux test suite is large; Windows has no automated tests, only hand use. Expect rough edges.
 
-## Run
+## Download
 
-```sh
-cargo run            # prints  http://127.0.0.1:PORT/#t=TOKEN  — open that address
-cargo run -- --port 4311 --data ./data --claude /path/to/claude
-cargo run -- --terminal   # also turns on the terminal (see below); TENREC_TERMINAL=1 does the same
-```
+Prebuilt Windows app: **[Releases](https://github.com/nathak/tenrec/releases/latest)** → `tenrec-desktop-0.1.0-windows-x86_64.zip`
+(check it against the `.sha256` file next to it). Unzip, then double-click `tenrec-desktop.exe`.
 
-The token is in the address fragment (never sent over HTTP); the page moves it to `sessionStorage` and clears the address.
-Sessions are kept in `~/.local/share/tenrec` (`TENREC_DATA` or `--data` to change; a folder an older build made as `~/.local/share/smart-workbench-app`, or named by `SWB_APP_DATA`, is still used where it is): a meta file and an event log each,
-so a chat can be reopened and replayed, and continues with `claude --resume` after a restart.
-
-`TENREC_UI_DIR=./ui cargo run` serves the UI from disk, so editing it needs no rebuild.
-
-### Building on a machine without a C compiler
-
-Rust needs a linker driver named `cc`, and the bundled SQLite is C. If there is no compiler (and no `sudo`), a user-level Zig works as one:
-
-```sh
-mkdir -p ~/.cache/swb-tools/bin
-pip install --target ~/.cache/swb-tools/py ziglang
-cat > ~/.cache/swb-tools/bin/cc <<'WRAPPER'
-#!/bin/sh
-# zig cc as a cc: zig spells the target x86_64-linux-gnu, rustc and cc-rs say x86_64-unknown-linux-gnu.
-for a in "$@"; do
-  shift
-  case "$a" in --target=x86_64-unknown-linux-gnu) a=--target=x86_64-linux-gnu ;; --target=aarch64-unknown-linux-gnu) a=--target=aarch64-linux-gnu ;; esac
-  set -- "$@" "$a"
-done
-PYTHONPATH=$HOME/.cache/swb-tools/py exec python3 -m ziglang cc "$@"
-WRAPPER
-chmod +x ~/.cache/swb-tools/bin/cc
-export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=~/.cache/swb-tools/bin/cc CC=~/.cache/swb-tools/bin/cc
-```
+- It needs `claude` (Claude Code) on your `PATH`.
+- The `.exe` is **not signed**. Windows SmartScreen or a company security product may warn about an unknown program.
+  `sign-windows.ps1` in the zip signs it on your own PC with a self-signed certificate; that makes the file tamper-evident,
+  but it does not make a security product trust it. Do not try to get around a company's security product: ask its administrator
+  to allow the file.
 
 ## What it does
 
-- One `claude` process per chat, stdin kept open for several turns, `--include-partial-messages` for streaming text.
-- **Permissions**: it starts `claude` with `--permission-prompt-tool stdio`, so a permission request that Claude Code decides to
-  ask arrives here as a `can_use_tool` control request and waits for a click. This host approves nothing on its own: no timeout,
-  no auto-allow, a closed page leaves the request pending, an answer carries the request's own `input` (never one the page
-  sent), each request is answered once, a request that the turn's end or the CLI cancels is withdrawn, Esc in the dialog is a refusal.
-  **Claude Code's own settings still apply**: an `allow` rule, a permission mode or a hook in the user, project or local
-  settings decides before anything reaches this app, so a project whose `.claude/settings.json` allows `Bash(*)` runs commands
-  without a click here, exactly as in the terminal. Open only projects you would run `claude` in.
-- **Images**: paste, drop or pick (png, jpeg, gif, webp, 5 MB each, five per message) go in as base64 image blocks; images in tool
-  results show in the tool card; an image file inside the project that a tool names (or a result mentions) is fetched through
-  `GET /api/file`, which needs the token, resolves links and refuses anything outside the project or not an image (no SVG).
-- **Interrupt** sends the CLI's `interrupt` control request; the turn ends with `error_during_execution`.
-- Events the host does not know are passed to the UI as raw JSON (and shown in the debug drawer), so a new CLI version cannot break parsing.
+- **Chats.** One `claude` process per chat with several turns, streaming text, images (paste, pick), tool cards with input and
+  result, sub-agents nested under their card, thinking lines, code blocks with copy and folding, tables, cost and token counts,
+  a "view as text" mode where a whole conversation can be selected and copied, interrupt, and reopen or resume after a restart.
+- **Permissions stay yours.** The host starts `claude` with `--permission-prompt-tool stdio`. A permission request waits for your
+  click: no timeout, no auto-allow, an answer is bound to the request shown. Claude Code's own settings (allow rules, modes,
+  hooks) still decide first, as in a terminal, so open only projects you would run `claude` in.
+- **Accounts.** Several logins (for example personal and work) kept apart, each with its own notes, skills, history and usage
+  limits; Codex logins can be managed too (chats run through Claude Code only).
+- **Memory, skills, search.** Notes that Claude proposes and you approve; skills with a risk report and version history;
+  full-text search over all chats.
+- **Scheduled tasks** (read-only file tasks or web tasks), **model providers** (Anthropic-compatible endpoints, optionally in a
+  container), chats in their **own git worktree**.
+- **Files.** A project file tree and editor; Markdown is rendered and source files are syntax-coloured. Paths outside the
+  project and dangerous paths are refused.
+- **Live view.** A read-only local web page of what the chats do (prompts, tool calls with risk and guard marks, tokens), opened
+  from the Team page or with `tenrec --live`. Bound to `127.0.0.1`, token in the address fragment, secrets masked.
+- **Team page** for the SmartWorkbench Claude Code plug-in (team mode, guard level, done conditions).
+- Interface in Korean and English.
 
-## Search your history (step 1 of the Hermes-like features)
+The long design notes, behaviour details and known limits are in [docs/NOTES.md](docs/NOTES.md).
 
-- **Index**: every chat's log is indexed in SQLite FTS5 (`<data>/index.sqlite`, `0600`), one row per message block: what you wrote, what
-  Claude answered, a tool call's name and summary, and the first 2 KB of a tool result. Images, thinking, sub-agent messages,
-  permissions, stderr and the search tool's own results are not indexed. The index is only a cache of the `.jsonl` logs: it is
-  brought up to date at start, is rebuilt when it is old or damaged, and drops chats that are gone.
-- **Sidebar search** (Korean and English, any part of a word; a two-letter Korean word works too): the match is marked, a click opens the chat
-  and scrolls to the message.
-- **`search_history` for Claude**: each chat's `claude` is started with an MCP server (`tenrec mcp`, stdio) that asks the host over
-  a `0600` Unix socket. It searches this chat's **project folder** only (there is deliberately no wider scope for Claude: a session allow rule covers the tool whatever its arguments, and searching every chat is for the person, in the sidebar), returns at most
-  six short excerpts, and frames them as untrusted data quoted from the past (old tool outputs can carry instructions). The chat is
-  identified by a per-process secret in a `0600` config file, never by an argument the model passes; the secret and the file go when the process ends.
-  Calls go through Claude Code's normal permission flow, so the dialog asks; **"Allow this tool in this chat"** (shown for this tool only)
-  adds a session allow rule that Claude Code applies until that process ends. The host never approves on its own.
+## Build and run
 
-## Memory (step 2 of the Hermes-like features)
+Rust (stable) is needed; the bundled SQLite is C, so a C compiler (or a user-level Zig, see the notes) is needed as well.
 
-Short notes the app keeps between chats, in `<data>/memory.sqlite` (`0600`; unlike the history index this is primary data and is never
-rebuilt: a file that cannot be read is renamed `.broken` and you are told). A note is at most 300 characters, either about a
-**project folder** or about **you**, and has a source: you, Claude (through a tool you approved), or auto-save.
+```sh
+cargo run                                   # web UI: prints http://127.0.0.1:PORT/#t=TOKEN, open that address
+cargo run -- --port 4311 --data ./data --claude /path/to/claude
+cargo run --features desktop --bin tenrec-desktop     # native desktop app (Slint)
+cargo test                                  # no model calls: a fake `claude` replays scenarios
+```
 
-- **Checks every save goes through**: size, caps (200 notes / 32 KB per project, 100 / 16 KB for you, 50 waiting; a full store refuses,
-  nothing is evicted), a secret filter (keys, tokens, `password is ...`, 32+ hex digits, long mixed strings: refused, never redacted; a manual note can be
-  kept after a confirmation), duplicates (the same words, and for automatic sources near-duplicates), and an order-like check
-  (`always`, `never`, `ignore`, `from now on`, `run ...`, `curl`, a link, a shell operator, `항상`, `앞으로`, ...): such a note from Claude or auto-save
-  waits for a click and is not given to chats until you approve it. Notes you write or edit yourself are trusted and used.
-- **The Memory tab** (sidebar): waiting notes (approve / reject), this project's notes, notes about you, recent auto-saves with a link
-  back to the message they came from, other projects, deleted notes (undo for 7 days), add / edit / pin / delete, export as JSON.
-- **Claude's tools** (`mcp__tenrec__...`): `memory_search` (read-only, this project and your notes) and `memory_save` (at most five a
-  minute). A save is **active only if you allowed that exact input in the permission dialog**; otherwise, and always for a note about you,
-  it is saved as waiting. "Allow this tool in this chat" is offered for the read-only tools only, never for `memory_save`.
-- **Recall**: a new (or resumed) chat is started with `--append-system-prompt-file` naming a `0600` file with up to 20 notes / 2 KB
-  (pinned first, then yours, then the project's; waiting and order-like notes left out; `<` in a note is neutralised), framed as
-  background facts and not instructions. The notes are never in argv. The chat shows how many notes Claude was given.
-- **Auto-save** (off by default; the switch is in the Memory tab, `settings.json`): after a turn ends well, and 20 seconds of quiet (or
-  three turns), a separate small `claude` run (`haiku`, `--tools ""`, no MCP, no slash commands, no settings, no session, an empty
-  folder, 60 s limit) reads **only your own messages since the last run and since you switched auto-save on** (what was said while it was off is never read;
-  not Claude's text, not tool results; nothing over 2000 characters, nothing with a code fence or a secret; at most the latest ten
-  messages, about 8000 characters) and proposes at most three notes as strict JSON; an answer that does not parse is
-  discarded whole. The host then applies the checks above, and the setting decides which scopes may be saved (this project only, or
-  also about you; a note about you always waits for a click because it reaches every project). One run at a time, 40 runs a day (retries count,
-  and the count is kept on disk), about $0.0005 each. A saved note appears at once with an Undo toast; progress is
-  kept per chat, so a restart never reads old messages again.
+Windows build from Linux (needs `zig` as the linker):
+`cargo build --release --target x86_64-pc-windows-gnu --features desktop --bin tenrec-desktop`
+(set `CC_x86_64_pc_windows_gnu` and `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` to a `zig cc` wrapper; see the notes).
 
-## Skills (step 3 of the Hermes-like features)
-
-A skill is a procedure Claude follows when it applies (`SKILL.md`). It is **instructions for Claude**, so the app never enables one by itself:
-a proposal always waits, you read the whole file, and only then it is approved. (That is a promise of this app, not of the file system: a chat
-with broad Bash permission can write the data folder, and a skill planted there would pass only the block checks when a chat starts.)
-
-- **Proposals**: the **Skills** tab has "Propose a skill from this chat" (with an optional hint, a scope, and "improve skill X"), and an
-  optional **automatic** mode (off by default): after a turn that used 8 or more tools and ended well, 90 seconds of quiet, at most one per
-  chat a day and five a day in all (counted on disk), and **never** in a chat that used, at any time, a web tool, an outside MCP tool, a
-  subagent (`Task`/`Agent`) or a shell command that fetches (`curl`, `wget`, a URL): third-party text may have shaped it. An automatic proposal only creates new skills, never changes one.
-- **What the proposer reads**: a separate `claude -p --model sonnet` run (no tools, no MCP, no slash commands, no settings, no session, an
-  empty folder, 120 s) reads **your own messages** and **one-line summaries of the tool calls that succeeded** (never tool results, never
-  Claude's own text, nothing with a secret), plus your hint, plus the names of existing skills (or, when improving, the current text). It
-  answers in strict JSON; anything else discards the run. About $0.03-0.06 a run.
-- **Checks the host does itself**, on the text as it will be written and again at every approval (the report is shown next to the full text):
-  *blocks* (Approve is not offered until fixed): a bad or reserved name, a description that is not one line without `---`/`<`/`>`, a body
-  that starts with `---`, a `` !`command` `` or a ```` ```! ```` block that would run when the skill loads, a secret, control, invisible or direction-changing
-  characters (also in the name and the description, which every chat loads), a line over 1000 characters, a body over 7 KB or 200 lines. *Warnings* (you must tick "I read the warnings"): `curl | sh`,
-  `sudo`, `rm -rf`, `eval`, `$(...)`, `base64 -d`, ssh/scp/nc, URLs, "ignore the rules / without asking / silently", permission words
-  (`settings.json`, `allowed-tools`), credential paths, HTML or comments, long lines. Editing then approving goes through the same checks.
-- **What is written**: the host builds `SKILL.md` itself: the frontmatter holds `name` and `description` and **nothing else** (no
-  `allowed-tools`, hooks, model, context), whatever was proposed. Up to 30 skills, 20 waiting, the newest 5 versions kept.
-- **Improvements** are proposals against a skill (a diff against the active version is shown); approving makes a new version, a stale one is
-  refused, and rollback copies an old version forward, so the history only grows.
-- **How Claude gets them**: each chat is started with `--plugin-dir` naming a one-off folder (`0700`/`0600`, plugin name `tenrec`, so the
-  skills are `tenrec:<name>`) with the enabled skills of the user and of that project. It is rebuilt at every start and removed when the
-  process ends, so a skill turned off or deleted is simply not in the next chat, and a running chat is never changed. The chat shows which
-  skills it was given, and the tab shows when each was last used.
-
-## Scheduled tasks (step 4 of the Hermes-like features)
-
-The Schedule tab holds tasks you write: an instruction, a folder or the web, and a time. While the app is open and the switch is on,
-the host looks at the wall clock every 30 seconds and runs what is due with one `claude -p`, **one run at a time**, with nobody to
-click a permission prompt. So a run is given nothing to be asked about:
-
-- **Two profiles that never mix.** *Files*: `Read`, `Grep`, `Glob` inside one project folder. *Web*: `WebFetch` (only the sites
-  you list for the task) and `WebSearch`, in an empty folder of the app's own. A run that could read files and also fetch could carry a file out in an address.
-  Writing, editing and running commands do not exist in a scheduled run (`--tools` names exactly the profile's tools; a
-  `--disallowedTools` list backs it up).
-- **No allow rule for the file tools.** `--allowedTools Read` would cover every path; without it Claude Code reads inside the
-  project folder and refuses a path outside it and a link that leads outside it (checked with the real `claude`, see the live
-  test). The refused requests are kept with the run. The web profile has allow rules, since nobody can answer for each address: `WebSearch` and one
-  `WebFetch(domain:<site>)` for each site listed on the task, never a bare `WebFetch`.
-- **Nothing of the project's own is loaded:** `--setting-sources ""` (so a hook in a project you do not trust cannot run
-  unattended, and your own user settings do not widen the run), `--strict-mcp-config` with no config, no plugins, no skills or
-  slash commands, no session saved, no `--resume`. This is a deliberate exception to "Claude Code's own settings decide first".
-- **Limits per run:** the model you chose, at most 50 turns, `--max-budget-usd` (default $0.50, at most $5), a time limit
-  (default 10 minutes, at most 30; the whole process group is killed). Per day: 20 runs including "run now" (counted on disk, so a
-  restart does not reset it). An interval is at least 15 minutes. Three failures in a row pause a task, and a change or a
-  switch-on starts it fresh. A folder inside the app's data folder, or one that holds it, is refused when the task is made and again when it runs.
-- **Time:** daily at a time of day on chosen weekdays, or every N minutes, in the machine's time zone (`localtime_r`/`mktime`; one run
-  on the day clocks go forward, one at the first of a repeated wall-clock time when they go back). Times that pass while the app is
-  off or the machine asleep are not run: one "missed" note is made (more than 10 minutes late) and the next time is counted from
-  now. A task still running when its next time comes is skipped; a run that waited 15 minutes behind another is skipped.
-- **Only you make tasks.** The only way to create or change one is the Schedule tab (`sched_*` on the WebSocket, which needs the
-  token); there is no MCP tool for it, so a chat, or anything Claude read, cannot schedule a run of its own. Switching the whole
-  thing on is yours too, and starts with every task's time counted from that moment.
-- **A result is only shown.** It is stored in `schedule.sqlite` (0600, 64 KB each, the last 50 runs of a task), shown with the
-  same Markdown sanitising as a chat (with a reminder that a web result may carry outside text), and carries the definition it ran
-  with. Nothing reads it and acts: it does not reach memory, skill proposals or the search index. A toast and an unread count tell you it finished.
-- **Web runs open only the sites listed on the task.** A web task needs 1 to 20 host names (`example.com`, one per line in the
-  form); the run may fetch from those and from nothing else. A name is exactly that host: `www.example.com` is another name and is
-  listed on its own; there are no wildcards. A listed host is open on every port (a port cannot be typed into the list, but it is not part of the rule). IP addresses (also decimal and hex forms), ports, paths, `localhost` and private-network
-  names (`.local`, `.internal`, `.lan`, `.home`, `.arpa`, …) are refused when the task is saved, and the list is checked again when a run
-  starts and when a task is switched on. Measured with the real `claude`, see the live test: an address that is not listed, a
-  sub-domain of a listed name, `127.0.0.1` and `localhost` are refused without any connection being made (the refusal is kept with the
-  run); a listed site is read (WebFetch raises `http` to `https`); a redirect to another host is not followed, and the model's second
-  fetch of the target is refused (measured by hand against a public redirect, not in the test). If an upgrade fails (a full disk, say), the file is not set aside: it is left as it was, scheduled tasks stay off and the page says why. `WebSearch` stays: it runs on the
-  provider's side and reaches nothing local, but a page it finds outside the list cannot be opened. A web task made before the lists
-  existed was switched off when the file was upgraded, with a reason; it runs again after you list its sites (the old file is kept as
-  `schedule.sqlite.v1`; an older app cannot open the upgraded file). The earlier name refusals (`localhost`, `127.0.0.1`, `[::1]`,
-  `0.0.0.0`, the cloud metadata names) stay in `--disallowedTools` as a second layer.
-  **The CLI's own pre-approved sites are open too.** Claude Code's `WebFetch` has a built-in list of documentation hosts that it fetches
-  without a rule (measured: with only `example.com` listed, `docs.python.org`, `developer.mozilla.org` and `nodejs.org` were all read).
-  They are public documentation sites, so this does not reach your network, but "nothing else" holds for everything except that list,
-  which belongs to the CLI and changes with it. A `WebFetch(domain:…)` deny rule does close one of them (measured), but the list is not
-  ours to copy, so none is denied.
-  **What the list cannot do:** it trusts the names you give. A public name that points at a private address (the live test uses
-  `a.localtest.me`, which points at this computer, and it is reached when listed), a name whose address is changed after the check
-  (DNS rebinding), a listed site that redirects inside its own host, and a listed site that lets anyone put content on it (a code host,
-  a paste site) are all open. List only sites you would open yourself. Links in a result are shown as text with their whole address and
-  cannot be clicked.
-- **What stays outside the app's control:** a managed (organisation) policy of Claude Code applies to a scheduled run whatever the flags
-  say. A project's own settings, hooks, allow rules and `CLAUDE.md` do not (live test with a hostile project folder), and the CLI's
-  auto-memory is switched off for the run.
-- **Stop:** each running task has a Stop button, which ends the run and everything it started and takes a waiting run out of the line; a stop is
-  not counted as a failure. "Run now" works whatever the switch says, because you pressed it.
-- **Switching off:** a run waiting in line that the clock queued is looked at again when its turn comes, and is skipped if the task or the whole scheduler was switched off meanwhile ("run now" is yours and still runs). A run already going is not stopped by switching off (press Stop); it ends by its own time limit. Task numbers are never reused, so a queued or running run cannot reach a task made later.
-- **Not a daemon:** nothing runs while the app is closed. A run that was going when the app ended is marked failed at the next start.
-
-## Model providers (step 5 of the Hermes-like features)
-
-A chat can be made against another Anthropic-compatible address (a gateway, a company proxy, a local server) instead of your Claude
-account. You add it in the **Model providers** box of the Chats tab (name, address, how the key is sent, the key, optional model names)
-and pick it in the new-chat form. The app still never calls any API itself: the chat's `claude` process is simply started with that
-address, and a chat keeps its provider for its whole life (it cannot be changed; make a new chat).
-
-**What was measured, and why the setup is what it is.** With only `ANTHROPIC_BASE_URL` changed, a `claude` that is logged in to
-an account sends the account's own OAuth token to that address (tested against a local capture server). So a provider chat:
-
-- always has a token of its own set (your key; a placeholder for an address that needs none), so the account's token is never used;
-- runs in a settings folder of its own (`<data>/chatcfg/<chat id>`, `0700`), so the account's credentials file is out of the CLI's reach;
-- loses every inherited variable that could carry or redirect a credential (`ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `CLAUDE_CODE_OAUTH*`, `AWS_BEARER_TOKEN_BEDROCK`, `CLAUDE_CONFIG_DIR`, …; prefixes, so a variable a later version adds is covered);
-- does not read the project's `.claude/settings.json` (`--setting-sources user`) and has its address pinned on the command line. Measured: a project's `env.ANTHROPIC_BASE_URL` replaces the one the host sets, and the key would follow it; a project hook ran next to the key. A normal chat has that same exposure (see Known limits).
-
-Each of these is held by a test; the live test (`TENREC_LIVE=1`) starts the real `claude` in a hostile project folder (its settings redirect
-the address, bring a token and a key helper, and run a hook) and checks that the provider's address gets exactly its own key, a second
-server gets nothing, and the hook does not run.
-
-**The provider sees the whole chat**, including files Claude read and command output. The chat shows a banner and the list shows
-`→ host` so it is never a surprise. Because it is a third party, the account's side of the app is cut off in **both** directions:
-a provider chat gets no notes, no skills and no history-search tool, is not read by auto-save or by skill proposals (their runs go to your
-account), and is not put into the history index (so it is not found by search, and the account's chats cannot pull its text across).
-Scheduled tasks always use the default account (see Accounts).
-
-**The key.** Stored in `<data>/providers.json` (`0600`). The page is never sent it again (`has_token` and the host only), it is passed to
-the process in the environment (never in the arguments, which any user can read), and anything of the chat that would be shown or stored
-is scrubbed of it (`[provider key]`; it catches the key as one piece of text, not an encoded or split one; a key must be at least 8 characters). Providers are made and
-changed only by you in the page: there is no MCP tool for it. An `https://` address is required, except for this computer (`localhost`,
-`127.0.0.1`, `[::1]`), no user name, query or fragment. If a chat's provider is deleted, or its address (host) is changed, the chat does
-not start again (it was made for another party): make a new chat. A changed key or path on the same host is used at the next start.
-
-Limits worth knowing: tools that run on this computer (a command, a file read) run as you, so one you approve can read
-`providers.json` or the account's credentials file, and a provider chat's permission prompts are the only guard (read them; the container option below narrows what a command can reach). The chat's `claude` and the commands it runs inherit the key in their environment. Your own plugins, hooks and
-permission rules in `~/.claude` do not apply in a provider chat (its settings folder is empty), nor do the project's settings. Claude Code's
-background model (haiku) goes to the same address: if the address names models differently, fill in the model names. Managed
-organisation policy applies whatever the flags say. The transcripts Claude Code keeps for a provider chat are in its own settings
-folder under `chatcfg/` and are not removed when the provider is.
-
-### Running a provider chat in a container (experimental)
-
-In the Model providers box, give the absolute path of `docker` or `podman` and the name of an image that contains `claude` (pulled by you
-beforehand: the app passes `--pull=never`, so a mistyped name fails instead of fetching another image). A new chat on a provider then
-offers "Run inside a container". **This part has not been run against a real docker or podman**: it was written from their documented
-options and tested with a stand-in runtime that records what it was asked and starts the fake `claude` (`tests/container.rs`), so it
-checks what the app asks for and how it cleans up, not what the runtime does with it. Try it on something unimportant first.
-
-What the app asks for: `run --rm -i --init --pull=never --cap-drop=ALL --security-opt=no-new-privileges --read-only`, a small `/tmp`
-tmpfs, `--pids-limit=512 --memory=4g`, your user id (`--userns=keep-id` for podman), exactly two mounts (the project folder at its own path,
-read-write, and the chat's own settings folder), no host network, and the provider's key by name only (`-e NAME`, the value comes from the
-runtime client's environment, so it is not in any argument). The home folder, the data folder and the account's credentials are not mounted.
-The container has a name and a label of this data folder: stop, kill and process exit remove it by name (`rm -f`), because killing the
-`docker run` client does not stop the container, and the next start of the app removes any left by a crash (never one of its own run: every name carries a tag of the run). Only one app should use a data folder at a time: a second one started on the same folder takes the first one's running containers for leftovers and removes them (there is no lock on the folder). Stop and exit start the removal and do not wait for it, so a container can outlive an app that is killed hard until the next start sweeps it (with the client gone, its stdin closes, which should end `claude`; that is not checked with a real runtime).
-
-Limits: only provider chats (an account chat would need the account's credentials inside, where a command could read them); the project
-folder is mounted read-write, so the container does not protect it, and **what a command writes there outlives the container**: a `.claude/settings.json` with an `env` or a hook, a `.git/hook`, an `.envrc` written by an approved command is read later by an account chat opened in the same folder, and an `env` there sends the account's token to another address (measured). The same holds for a provider chat outside a container once you approve a write. Read what a command writes into the project before you open an account chat there; the network is open (the provider, the web, your LAN); an address on
-this computer (`localhost`) is refused because a container's `localhost` is not this computer's; no notes, skills or history search
-(as for any provider chat); a path with `:` `,` or a backslash cannot be mounted; a project folder that is, holds, or lies inside the data folder, or that is the home folder, holds it, or lies in `~/.claude`, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config`, `~/.kube`, `~/.docker` or `~/.local` is refused (the account's credentials and the app's key file are there), and so is `/tmp`, `/var/tmp`, `/dev/shm`, `/run`, the user's runtime folder, any folder that holds one of them, and any folder inside `/run` or the runtime folder (programs keep sockets there, tmux, ssh-agent, gpg-agent and the runtime's own, which a container running as you could drive); the folder is looked at again at every start and a link put in its place stops the chat; a container chat is refused when the home folder is not known; whoever can run `docker inspect` (the docker group is
-root-equivalent) sees the key in the container's environment; the settings are checked again at every start, so a changed one stops the chat
-instead of quietly running it outside a container.
-
-## Accounts (a personal and a work login kept apart)
-
-The login the `claude` program already has (its own `~/.claude`) is the **default account**: it is the account of every chat made before this
-existed, and nothing about it changes. You can add more accounts in the **Accounts** box of the Chats tab (a name; up to 8). A chat is made
-with one account in the new-chat form and keeps it for life (`--resume` runs in the same settings folder, so the CLI finds its session).
-
-- **The login is made by you, in your own terminal.** The box shows the command to run, `CLAUDE_CONFIG_DIR='<data>/accounts/<id>' claude auth login`. This app never reads, receives or stores a token or a code; `accounts.json` holds names and ids only. The terminal tab of a chat of an account starts its shell with that account's `CLAUDE_CONFIG_DIR`, so a `claude` typed there belongs to the same account. The status ("logged in", the e-mail) is what `claude auth status` prints for that folder, asked in the background (10 s limit, its output is not kept); a chat of an account that is not logged in is refused with the way to log in, and a status that reports another settings folder than the account's is refused too.
-- **What is apart.** Each account has its own folder for the CLI (`<data>/accounts/<id>`, `0700`) and its own **notes, skills and history index** (`<data>/stores/<id>/`), plus its own auto-save and skill-proposal workers, which run `claude` as that account (so what a work chat says is read only by a run on the work login, and a personal chat's only by one on the personal login). The default account keeps the files it always had in the data folder. The boundary is one type, `Realm`: a chat, an MCP request, a page's message or a worker is handed one realm and has no way to reach another one's files, so there is no query with a filter that could be forgotten. `Registry::realm` never answers with the default account's when an extra account's is asked for. A message about notes, skills or search must name its account (`"account": "<id>"`, or `null` for the default one) and is refused without the key; the search, the Memory tab and the Skills tab have a switch at the top, which follows the open chat and shows whose data it is. Nothing is copied from one account to another, and nothing is shown merged. The chat list follows the same rule: it lists the chats of the account shown (a provider chat, which has no account, and a chat of an account that was deleted are listed under the default account, so none becomes unreachable). Another account's entry in the switch (web) or its header tab (desktop) says with `⚠ n` that a chat there waits for an answer and with `●` that one is working; the desktop's system notification is not limited to the account shown. Known limit: on Windows, removing an account whose chats are still readable can leave its notes, skills and history files behind (their database files are still held open by those chats); the app reports it and the folder can be removed by hand. Not verified on Windows.
-- **What a chat of an account gets.** The environment of the default account's credentials is removed (`ANTHROPIC_*`, `CLAUDE_CODE_OAUTH*`, `CLAUDE_CODE_USE_*`, `CLAUDE_CODE_SKIP_*`, `CLAUDE_CODE_API_KEY*`, `CLAUDE_CONFIG_DIR`, `AWS_BEARER_TOKEN_BEDROCK`, the app's own MCP variables) and `CLAUDE_CONFIG_DIR` is set to the account's folder. A proxy, a certificate, the locale and `PATH` stay, because a work network needs them. Unlike a provider chat nothing is pinned: your own project settings, hooks and permissions apply as in any chat. The folder is looked at again at every start (a real folder, not a link, yours, `0700`, under `<data>/accounts`, and not the default account's folder) and a different one stops the chat. An account and a provider (so a container too) cannot be mixed; a worktree can.
-- **Removing an account** needs a confirmation and deletes its login (the program is asked to log out), notes, skills and history index. Its chats stay readable and cannot be started again. It is refused while a turn runs in one of them.
-- **Scheduled tasks always run as the default account**; they read no note, no skill and no history, and the run's environment is the app's own.
-
-Limits, plainly: **this keeps uses apart; it is not isolation.** Anything that runs as your user (a command Claude runs, a terminal, a hook) can read every account's folder and files, the same as it can read `~/.claude`. A work account's chat reads and writes your project folders like any chat: a note or skill of one account is not visible to the other, but a file in a project folder is. The history search shown to you and the one given to Claude are per account, so a chat of an account is not found when you search as another one. The daily limits of auto-save and proposals are per account, so the total is as many times larger as there are accounts, and each run is billed to the account it ran as. The project folder, and everything Claude Code reads from it (`CLAUDE.md`, `.claude/settings*.json` with its `env`, key helper and hooks, `.mcp.json`), is shared by the accounts and applies to each, and a project's settings can override an account's login as they can the default one's. What `~/.claude` holds (settings, `CLAUDE.md`, plugins, MCP servers, agents) is not copied to a new account: its folder starts empty. The switches for auto-save and skill proposals are for every account together, so turning one on turns it on for a work account too. Removing an account leaves its chats' logs in the data folder (they are in no index); when the logout or the removal of a folder fails, the panel says so and the rest is yours to do. The status relies on the `configDirectory` field of `claude auth status` (a program that stops printing it makes every chat of an account refuse to start, which fails closed), and a settings folder whose mode the program changes from `0700` is refused for the same reason. Going back to a build made before accounts leaves the chats of an extra account in the default history index of that build: do not. Measured with the real `claude` 2.1.322: `claude auth status` with an empty `CLAUDE_CONFIG_DIR` answers `loggedIn: false` and makes only its own files there; a chat in such a folder with no credential in the environment ends in an API error with no usage or cost, and does not answer with the default login. Not measured: a real login of a second account, that the default account's `~/.claude/CLAUDE.md` stays out of an account's chat, and a macOS keychain (where the login may not live in the folder).
-
-## What a chat shows (thinking, code, edits, tools, sub-agents, plug-ins)
-
-Everything below is drawn from the event stream alone; the host reads no extra files for it. Text from the model, a tool or a hook is only ever put on the page as text.
-
-- **Thinking**: a line while the model thinks (with the token estimate), then "thinking · N s" and the text when the CLI sends it. The CLI 2.1.322 was measured to send the thinking **text empty** (`thinking:""`, only `signature` and `estimated_tokens`), so a chat there shows the seconds and "(hidden)", not the thoughts. A `redacted_thinking` block is shown the same way and its data is never read. Seconds are not stored, so a reopened chat has none.
-- **Code blocks**: the language, a copy button, and a fold after 30 lines. No syntax colouring (it would need a library or a tokeniser on untrusted text).
-- **Edit, MultiEdit, Write**: the changed lines with `+N −N` (a pure line diff, limited to 400 lines; larger changes show only the counts), the raw input kept behind "raw input".
-- **Other tools**: a one-line head for Bash, Read (with its line range), Grep, Glob, WebFetch, WebSearch; TodoWrite as a checklist; a long result is folded to 12 lines with a "show all" button, and a result cut at 20,000 characters says so. The Bash exit code is not shown: no result carries it in anything this repository has seen.
-- **Sub-agents**: the events of an Agent/Task call are drawn inside its card, with a count of its tool calls and a small tag for its role (`advisor`, `explorer`) or for an MCP server (`vhdb`, `swb`). Without the parent card (an old history) they fall back to an indented list.
-- **System lines**, from what the CLI 2.1.322 was measured to send: a hook that failed (name and exit code only), usage at 80% or more of a window, or a window that is not "allowed". A turn brings about eight successful hook events and they get no line. Hook output is never shown. "VHDB history was added to the prompt" is drawn when a hook's output holds `<vhdb_history`, which has **not** been seen yet (the VHDB switch for it is off by default).
-- **Held by a plug-in**: a tool result that starts with the team-mode guard's text (`SmartWorkbench team mode:`) is marked "held by team mode" instead of "error"; the VHDB guard's wording is a guess (`VHDB guard`) and not yet confirmed.
-- **Chips** in the header ("team plug-in", "vhdb") say a chat is wired to those plug-ins (from `system/init`: `smartworkbench:*` agents, a connected `vhdb` MCP server). They do not say the mode is switched on: that state is not in the stream, and where the team plug-in keeps it is not known.
-
-Not built, because it needs the host to read files and nothing has been measured yet: a team-mode status strip (on/off, roles, done conditions) and a VHDB panel (switches, file history, search, decisions). See the design notes before starting: the files hold prompts and decisions, so the host would read only fixed names under the chat's own git directory, never follow links, and never read VHDB's remote token file.
-
-## File tree and editor
-
-The **Files** tab lists the open chat's project folder (a folder at a time, only when you open it) and opens a text file in an editor in place of the chat (`대화로` goes back). Ctrl/Cmd+S saves; Tab types a tab (Esc, then Tab, leaves the field).
-- **The desktop window opens a file in a viewer** (the `보기` / `편집` button in the file's header switches). A markdown file (`.md`, `.markdown`, `.mdx`) is drawn as an answer is in a chat (headings, lists, quotes, tables, code blocks shown whole, a leading front matter block as a code block; links are http(s) only and a click copies the address; images and HTML are not drawn). Source files (Rust, Java, Kotlin, Python, JavaScript/TypeScript, C/C++/C#, Go, JSON, TOML, YAML, shell, HTML/XML, CSS, SQL, Slint) are drawn in colours by a small hand-written scanner (comments, strings, numbers, keywords; a wrong guess changes a colour, never the text), with line numbers and sideways scrolling; a text of more than 20 000 lines gets no colours and opens in the editor. A file with a viewer opens in it (also when it is opened again after a rename). The viewer is made from the text in the editor, so unsaved changes show too; it cannot select text, so the editor stays one click away. Any other file opens in the editor as before.
-
-- **Only the project folder.** The folder always comes from the chat on the host, never from the page. A path is relative, with no `.`, `..` or empty part; links are resolved and a path that leaves the project is refused. The folder tree itself (names and sizes, never content) is listed by path, so a folder swapped for a link while it is being listed could show the names of a folder outside. The project folder itself is resolved and checked once and the same real path is used for the listing, the read and the save, so swapping the name of the project itself for a link after the check does not move them; what is not stopped is a program of yours that renames the real folder and puts another in its place (it could already read those files); closing that fully needs every operation to go through one open folder handle. The editor is not offered for the data folder, a folder that holds it, the home folder or a folder that holds it, or `~/.claude`, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config`, `~/.kube`, `~/.docker`, `~/.local` (the same rule a container chat has); with no known home folder a folder may be read, not saved.
-- **Plain UTF-8 text up to 1 MiB**, regular files only (no FIFO, device or socket; a binary file, a non-UTF-8 file or a bigger one is refused). A file with CRLF line ends is saved with CRLF again; a file with mixed line ends is shown read-only. No new file, delete or rename: Claude and your shell do that.
-- **A save is atomic and checked through an open folder.** The path is resolved (links followed) and must stay inside the project; the file's folder is then opened (a link as the last part is not followed) and where that open handle really is gets checked again (`/proc/self/fd`, so Linux only; where that cannot be done the save is refused), and what the guard below judges is that real place, so a link with an innocent name to `.claude/settings.json` is judged as that file. The text goes to a temporary file with the old permission bits and group where possible (no setuid, setgid or sticky; ACLs and extended attributes are not carried over), is synced, and replaces the file by rename, after which the folder is synced. A file of another user or without a write bit is refused. A hard link to a file outside the project is replaced by a new file, so the outside one is not changed (but it can be *read* through the project's name: only a local program of yours can make such a link).
-- **A changed file is a conflict, not a lost edit.** Each read carries a version (a hash of the content); a save sends the version it started from, and if the file on disk is no longer that (Claude or another program wrote it), nothing is written and the page shows the difference with a choice: load the disk version, or overwrite. The version is checked before the temporary file is made and once more just before the rename; a write by another program between that last look and the rename (microseconds, no lock) is still lost.
-- **A change on disk is noticed.** When a turn ends, when the page or the Files tab comes back, and when the connection returns, the open file's version is asked for (`fs_check`: the version only, no text, read-only). Unchanged: nothing happens. Changed and nothing typed: the file is read again in place (the scroll position and cursor stay; a toast says so). Changed and text typed: the text stays, a note says the file changed, and the save then shows the conflict as before. There is no polling, and an answer is judged against the file as it is when it arrives (a save may have finished meanwhile). The desktop window checks at the end of a turn and when the Files tab is shown again, not on window focus. The desktop window's re-read puts the cursor back at the start (the page keeps its place).
-- **Make, rename, delete.** `fs_create` (an empty file or folder), `fs_delete` (a file, a link or a folder of any size: it goes to the trash, see below) and `fs_rename` (a new name, or a new path in another folder that already exists) work through the folder's open handle, and the last name is never followed: a link is deleted or renamed as a link and nothing is made behind a dangling link (`O_EXCL`). A name is refused if it is empty or over 255 bytes, `.`/`..`, holds `/`, a control or direction character, starts or ends with a space, or looks like the app's temporary files. A name that exists is never replaced (`renameat2` with `RENAME_NOREPLACE`; a file system without it refuses the rename). A move goes between two open folder handles; a move to another mount is refused (nothing is copied), a folder is never moved into itself or into what is inside it (compared on the real paths of the open folders, so a link in the way is seen), and a link moves as a link (a relative link may then point somewhere else, and a later chat can follow it). Another user's file, a FIFO/socket/device and the project folder are refused (a read-only file cannot be deleted for good from the trash); the file that is open is deleted only at the version the page holds. `.git` is refused, and a place a later chat reads (below) asks first, for the old and the new name of a rename. Not yet: emptying the trash or deleting a non-empty folder from it for good (do that in a shell), copying, drag and drop, moving several entries. The guard looks at the entry's real old and new place only; what is inside a moved folder keeps its own name and folder, so it is not scanned. A chat whose own project folder is moved or renamed stops working until it is started again. The page lists the folder again after a change and the open file follows its rename; the desktop window opens a new file at once.
-- **The trash.** A delete moves the entry (any size, never copied) to `.tenrec-trash/<unix ms>-<8 hex>-<name>` at the project root (made on demand, mode 0700, with a `.gitignore` that holds `*` so git status stays clean and `.git` is not touched; an existing `.gitignore` there is left alone). Where it came from is written first to `.tenrec-trash/.from/<id>`; a crash in between leaves only a harmless record. `fs_restore` moves an entry that is directly in the trash back: it is refused when the name is taken, the folder is gone or no record is left, and a place a later chat reads asks first. A delete inside the trash is for good, and only for a file, a link or an empty folder; to delete an entry with what is in it, or everything, use *Delete for good* (`fs_purge`) and *Empty trash* (`fs_empty_trash`). The guard looks at the place the entry came from (so deleting under `.claude/` asks, `.git` is refused); the name in the trash starts with digits, so it means nothing at the top. The page shows an Undo in the toast and a restore in the entry's menu; the window the same. **What was deleted stays on disk, and a chat of this project (also an account's or a container's) can read it**; a program that reads the project, like `grep`, may skip it because of the `.gitignore`. An entry on another mount cannot go to the trash (nothing is copied or deleted). **Delete for good and Empty trash** first answer what they would reach (entries, items and bytes; nothing is changed), and only the same request with the confirmation deletes: by directory handle, a link is removed as a link and never followed, `..` is never followed, nothing is changed with `chmod` (a folder that is not the person's, or not rwx for them, stays and is counted), a read-only file is deleted (unlike a single delete) and the walk holds the editor's write lock, so saves wait a moment. Nothing at all is deleted when more than 100000 entries, folders deeper than 64 or a mount point are inside (such an entry, a big `node_modules` for one, has to be deleted in a file manager or a shell); the confirmation says how many entries cannot be deleted and stay. As with any recursive delete, a folder moved out of the trash by another program while it is being walked is walked there. The trash folder and its `.gitignore` stay; records without an entry are removed. The restore question names the place the entry would go to (what the record says; a program of yours could have changed a record, so the guard decides again at the real destination). A name that reaches the trash only through a link is not deleted for good (nothing is deleted).
-- **Places a later chat reads or runs.** Anything under `.git` is read-only (a hook, `core.hooksPath` or `core.fsmonitor` makes git run a program). Saving under `.claude/`, `.vscode/`, `.husky/`, `.githooks/`, or `.mcp.json`, `CLAUDE.md`, `CLAUDE.local.md`, `.envrc`, `.env`, `.env.*`, `.pre-commit-config.yaml` shows what changes and asks once more; the tree marks them. **This is attention, not a wall**: the list is a pattern list (a `package.json` script or a `Makefile` is not on it), and whoever holds the token can send the confirmation.
-- **Unsaved edits are not lost quietly.** Opening another file, another chat (also from a search hit or a note), a new chat or the chat view asks first, and is refused while a save is running; a save sent while the connection is down fails at once instead of waiting; typing is paused while a file is being fetched.
-- **Contents are not kept.** The text goes only to the page that asked: not to other pages, the event log, the index, the memory, the data folder or the debug drawer (the tests look for it in the other pages and the data folder, and the browser test in the debug drawer). Files that may hold secrets (`.env*`, `*.pem`, `*.key`, `id_rsa*`, …) are shown, marked, and opened only by a click.
-
-## Live view (a web page of what the chats do)
-
-The **Team** page of the desktop app has a *Live view* card (`tenrec --live` or `--live-port N` starts the same server from the web binary).
-Start opens a small web server of its own on `127.0.0.1` (port 4317, or the next free one) and the page shows, as it happens, every open
-chat as a tab: the turns with their prompts, each tool call with its risk, what the guard says about it, how long it took and how it ended
-(`ok`, `error`, `blocked`, `declined`, `started`), sub-agent calls under the call that started them (an exact link), the questions that wait
-for you, the context gauge, tokens and cost, six tiles (calls a minute, latency p50 and p95, blocks and errors, open asks), a detail panel
-with the masked input and result of a call, pause (`p`), Korean/English and a light/dark switch. It is the native counterpart of the
-plug-in's `/swb live` (which does not run in a chat whose own workbench is on: the plug-in is off there).
-
-- **Read only, and its own server.** It is not the app's server: it has no route to a file, to the data folder or to anything that sends a
-  message or answers a question (answer in the app). Every method but GET is 405; any path but the page's four files and three `/api` calls is 404.
-- **Who may ask.** The Host must be its own address (a page on another name pointed at it is refused), a request from another site is refused,
-  and `/api` wants the run's token in an `Authorization` header (a token in the address is ignored). The address carries the token in the
-  fragment, which is never sent over HTTP; the page moves it out of the address bar at once. No CORS header is ever set; a content
-  security policy allows only the page's own files.
-- **What leaves the app.** Texts are masked on the server before they are sent (key and token formats, URL credentials, private keys,
-  named secrets; the same function the guard uses for its own records), cut to 2000 characters (a summary to 120), and the input and result of a
-  call on a secret file are not sent at all. "Cut prompts short" (a switch on the card, for pages opened after it is set) keeps 120 characters
-  of a prompt and sends nothing of a sub-agent's brief or answer. The masking is a pattern list: a bare secret with no name or known form can
-  get through, and the page shows prompts and commands to **anyone who has the address on this computer**: do not share it. The address is
-  handed to the system's opener as an argument when you press *Open in browser* (other users of the same computer could see it in a process
-  list for that moment); *Copy address* avoids that.
-- **Where the token can be seen.** In the address it is in the fragment, which is not sent over HTTP, but a browser may keep the address in its
-  history or address-bar suggestions before the page moves it out; the server lives only as long as the app and the token is new at every start.
-  The page keeps the token in the tab's session storage (gone when the tab closes). *Open in browser* hands the address to the system's opener as an
-  argument, so on a computer shared with other users (Linux: `/proc/<pid>/cmdline`) it can be read for as long as that process runs: use
-  *Copy address* there. 127.0.0.1 is open to every user of the computer, so the token is the only barrier between them.
-- **Kept nowhere.** The feed is made from the chat's events in memory and dropped when the page goes. Nothing is written to the disk.
-- **Guard marks are recomputed**, and only by the profile, the pause switch and the project's rule file (not by the check that stops a call from naming the app's data folder).
-  Details: The app's guard hook leaves no record, so a call's guard mark (`ask*`, with the profile) is what the guard
-  would say by the chat's settings as they are when the page connects (marked with `*`); that a call was blocked or asked is taken from what the
-  chat did (the guard's own refusal text, the permission request), not from the recomputation.
-- **Not in this version** (the plug-in's live view has them): the flow picture, agent statistics and trees, background-task list, Intent and
-  Evidence tabs, search words (`tool:Bash`, `is:fail`), the import-graph Files tab, a view of sessions that run outside this app, and
-  Codex, loop and team-mode marks (there is nothing native to show for them).
-
-## Chats in their own git worktree
-
-The new-chat form has **"격리된 worktree에서 시작"** (start in an isolated worktree). The chat's `claude` then works in a worktree of the project on a new branch `tenrec/<chat id>`, made from the project's current commit, so two chats (or you and a chat) do not edit the same files. The idea comes from reading how other tools isolate agent work; the code is this project's own.
-
-- **Where.** `<worktree root>/<project name>-<8 digits of its path>/<chat id>`. The root is `worktree_root` in `<data>/settings.json` (an absolute path), else `~/tenrec-worktrees`. It is made if needed and must not be the data folder, the home folder, a place in the home folder that keeps credentials (`~/.local` too), the project or a folder holding it; otherwise the chat is not made. The chat's `cwd` is the worktree, so `claude --resume`, the editor, the terminal and the search follow it.
-- **What is refused.** A folder that is not a git project (or a bare one), one that is already a linked worktree, a project on a detached HEAD or with no commit, and a chat that also asks for a container (the worktree's `.git` points at the main `.git`, which the container cannot see). A folder inside the project starts at the worktree's top, with a note. A failed creation leaves no folder, branch or chat file.
-- **Not carried over.** Uncommitted changes and ignored files (`.env`, `node_modules`, build output) stay in the project. `.claude/settings.local.json` is usually ignored, so the chat may ask more.
-- **The strip above the chat** shows the branch, what it was made from and the project, with **병합 점검** (check) and **정리** (clean up). A check changes no file in the folders: commits and files that would merge, uncommitted files in the worktree, whether the project is on the base branch and clean, a merge in progress, and conflicts (`git merge-tree`; it does write the objects it computes into the repository's object store, as git does).
-- **Merge.** Only when the check finds nothing in the way. It merges exactly the commit that was shown: if either branch moved since (`stale`), it checks again. The merge is made with `git merge --no-ff --no-commit` in the project's folder (which must be on the branch the chat started from and have no uncommitted change to tracked files), `branch.<name>.mergeOptions` is switched off for it, and its result must be the tree `merge-tree` predicted before it is committed, with exactly the two parents that were checked; otherwise it is undone (`unexpected_result`). A conflict, or any failure, aborts the merge and leaves the project as it was. A merge in progress that you started is never aborted: the app aborts only a merge whose `MERGE_HEAD` is the commit it merges.
-- **Clean up.** Waits for the chat's `claude` to end (a turn in progress refuses it, `busy`), asks, and removes the worktree with `git worktree remove` (never by deleting a path); uncommitted changes need a second yes (`--force`). The branch is deleted only when **every commit of it is in the base branch's history**, or when you say so; content that merely looks merged (a squash, a merge driver that keeps "ours") is asked about, never deleted unasked. The removal is judged by git's list afterwards: gone from it means removed, with a warning when a part of the folder or the branch was left. The branch tip you were shown goes with the request; a branch that moved since is refused. A chat whose folder and git record are both gone is just marked. The chat stays readable and cannot be written to; it is marked in the list and in every open page.
-- **Ownership is checked, not trusted.** Every operation recomputes the branch (`tenrec/<id>`), the folder (`<root>/<key>/<id>`) and the project from the chat's id, requires that the folder is not a link, and that `git worktree list -z` has that folder on that branch. A chat file edited to point elsewhere gets `not_owned` and nothing is touched. The root the chat was made under is stored with it, so changing `worktree_root` later does not strand it.
-- **The project's git settings are watched.** The worktree shares `.git` with the project, so a command you approved in the chat can write there: a content filter, a merge or diff driver, an `include.path`, an attributes file, `core.fsmonitor`, `branch.<name>.mergeOptions` … would make even a check or a merge run a program, outside Claude's permission questions. The settings of that kind (and the project's `info/attributes` and the `core.attributesFile` it names) are fingerprinted when the chat is made; if they differ, the app does **nothing** (`config_changed`), shows them, and goes on only after you accept exactly what was shown. Ordinary changes (a remote, a tracking branch, your name) do not count. Your own drivers in your global git settings (git-lfs and the like) are not watched.
-- **git is run carefully.** No hooks (`core.hooksPath=/dev/null`), no file-system monitor, no signing, no rerere, no automatic gc or maintenance (they would prune other chats' registrations), no submodule recursion, no external diff or textconv for the counts, no editor, no pager, no prompt, every `GIT_*` variable of the app dropped, 30 s limits for looking (120 s for creating) and no limit that would cut a merge or a removal short (a killed git leaves a lock and a half-done checkout), one lock per project for create, merge and remove. Your global git settings stay (a merge commit needs your name). Nothing is fetched. **Because hooks are off, your `post-merge` or `pre-commit` hooks do not run for the app's merge.**
-- **Limits.** The app does not make the original folder read-only: refuse a request to edit it (the strip says so), since the app does not decide on permission requests for you. A shell opened in another browser tab stays in a removed folder until you close it. Searching history by folder treats the worktree as a project of its own. The merge reads the project's branch and then merges: a person who switches branches in those few milliseconds is caught by the parent check only after the fact (the result is reported, not undone). There is no delete for a chat, and no merge of several chats at once.
-
-## Terminal
-
-Off unless the app is started with `--terminal` (or `TENREC_TERMINAL=1`). It is a start option and not a setting because whoever holds the page's token can type into it: a leaked token must not be enough to get a shell. Without the option every `term_*` operation is refused and the page shows no button. With it, the `>_` button in the chat header opens a shell in the open chat's project folder in place of the chat (`채팅으로` hides it, the shell keeps running; `터미널 끝내기` ends it).
-
-- **A real pseudo-terminal, shown as plain lines.** The shell is `bash --noprofile --norc -i` (`sh -i` if there is no bash) on a pty, as the leader of its own session, so Ctrl-C (the button or the key in the input line) reaches the running command and a program sees a terminal. The page has an output box and one input line; Enter sends the line. Up/Down walk the lines you sent; Ctrl-L clears the box. **Not supported:** full-screen programs (`vim`, `less`, `top`, `htop`), colours, cursor movement, the mouse. `TERM=dumb`, `PAGER=cat` and `GIT_PAGER=cat` are set so tools behave. The shell does not read your rc files.
-- **Output is text, and only text.** Every escape sequence (colour, cursor, window title, clipboard `OSC 52`, links, device queries) is dropped, the rest goes into `textContent`, and no query is ever answered. A `\r` overwrites the line (progress bars work) and a backspace steps back. The box keeps the last 2000 lines.
-- **Where the output goes.** Binary WebSocket frames (`[1][id][bytes ≤ 16 KiB]`, `[2][id][exit code]`) to the page that opened the shell and no other; never the event log, the index, the memory, the data folder, the debug drawer, tracing or browser storage (`HISTFILE` is empty). A page that reads slowly makes the shell wait: the channel is bounded, nothing piles up in memory.
-- **A clean environment.** The shell gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_*`, `TZ` from the app's environment, plus its own `TERM`, `PAGER`, `GIT_PAGER`, `HISTFILE`, `PS1`, `SHELL`. Provider keys, `ANTHROPIC_*`, `TENREC_*`, agent sockets and the runtime folder are left out by a keep list, so a name nobody thought of stays out too.
-- **Where it may run.** The folder comes from the chat on the host, never from the page, with the editor's refusals (the data folder, a folder that holds it, the home folder or one that holds it, the places in the home folder that keep credentials; no known home folder means no terminal) plus the rule for where a chat may run. **Not for a container chat:** the shell would run on the host, outside the container the chat chose.
-- **Ended with its page.** A closed page, a chat change (after a question), `term_close`, a shell that exits (looked at every half second, also when a background job still holds the terminal), or 30 minutes with nothing typed or printed all end it: every process of the shell's session gets SIGHUP, then SIGKILL after 2 s at most. Under job control each job has a process group of its own, so the whole session is signalled (read from `/proc`, Linux only), which also reaches a job that ignores SIGHUP. Quitting the app (Ctrl-C, SIGTERM) kills the sessions too. A program that starts a session of its own (`setsid`, `nohup` with `setsid`, a daemon) survives. Reloading the page ends the shell; it is not reattached.
-- **Limits.** 2 terminals per page, 6 in the app, 4 KiB of input per message (several pasted lines ask first; what a shell has not read yet is held up to 64 KiB, then the page's sends fail with "busy"), size 20–500 columns and 5–200 rows, lines wrap at 1000 characters.
-- **This is not a sandbox.** The shell is your account: it can `cd` anywhere, read `providers.json`, `~/.claude` and `/proc/<pid>/environ` of the app (the same user), and reach the app's local sockets. The clean environment is hygiene, not a boundary. A password typed at a prompt is not echoed by the pty, but you see what you typed in the input line until you send it; the line is cleared when sent.
+Sessions and settings are kept in `~/.local/share/tenrec` (`%USERPROFILE%\.local\share\tenrec` on Windows;
+`TENREC_DATA` or `--data` changes it).
 
 ## Security
 
-Local only: binds `127.0.0.1`; every request needs the right `Host` (DNS rebinding gets 421); a WebSocket needs the exact
-`Origin` and the token as its first message within 5 s; the file endpoint needs a `Bearer` token; a strict CSP (no inline script,
-no remote image or script), `nosniff`, `no-referrer`. Markdown goes through DOMPurify (images and forms are removed).
-The app can run commands through Claude Code, so treat its address like a terminal. The data folder (prompts, images and
-tool results) is `0700` and its files `0600` on Linux and macOS (see "Windows" below for what holds there). The MCP socket and its per-chat config files are `0600` too. Streaming text pieces are shown but never stored; a session read back after a
-crash has its open requests cancelled. On Ctrl-C or SIGTERM the host kills every `claude` process group and every terminal session.
+Local only: the web server binds `127.0.0.1`, checks `Host` and `Origin`, and needs a token; the desktop app has no listener.
+The app can run commands through Claude Code, so treat it like a terminal. This is **not a sandbox**. Open only projects you
+trust: a project's own `.claude/settings.json` (hooks, `env`) applies to a normal chat. Details and known limits:
+[docs/NOTES.md](docs/NOTES.md#security).
 
-## Desktop app (Slint)
+## License
 
-`tenrec-desktop` is the native app: a window drawn with [Slint](https://slint.dev) and the core in the same process, with **no network listener and no browser**. `claude` reaches it only through the MCP socket (a named pipe on Windows), as before. Build it with `cargo build --release --features desktop --bin tenrec-desktop` (the library, the web server and their tests do not need Slint; `cargo test` is unchanged). Windows builds are cross-compiled from Linux with `zig cc` (and `zig dlltool`); a release build has no console window, and every program it starts (`claude`, git, the auto-save and schedule runs, `claude auth`, docker) is started without one.
+Source code: [MIT](LICENSE). The desktop app is built with [Slint](https://slint.dev) under its Royalty-free Desktop License
+(the attribution is in Settings → About). Fonts (Pretendard, JetBrains Mono) are under the SIL Open Font License; their texts are in
+`ui/vendor/`.
 
-- **In step 1**: the chat list, a new chat (folder and model), the transcript (answers with basic markdown, code blocks with copy and folding, thinking lines, tool cards with their input and result, sub-agents nested under their card, notes, the last result's cost and tokens), Enter to send and Shift+Enter for a new line, stop, and the permission dialog (modal, Esc denies, an answer goes to the request shown and only while it still waits). The Stitch design, dark; Pretendard is embedded, code uses Consolas on Windows.
-- **Text a model writes is never read as markup**: an answer is split into blocks here and its inline text is escaped before Slint's markdown sees it (so `<font>`, `<u>` and other HTML stay text, headings, quotes, code and tables are drawn by the app, and only http(s) links are kept; a click copies the link, it opens nothing).
-- **In step 2**: the **Memory** panel (sections as on the web page: waiting, this project, about me, recently auto-saved, other projects, deleted; add, approve or reject, pin, edit in place, delete with a 10-second undo, the auto-save switch and its first-run card; a note that looks like a secret or an instruction asks first), the **Skills** panel (proposals with their risk report and the full SKILL.md, approval only when nothing blocks it and every warning is acknowledged; turn on or off, delete with undo, propose from the open chat, the automatic-proposal switch), **search** over every chat in the sidebar (a click opens the chat), **Settings** with the About box, and whole-window **zoom** (Ctrl+= / Ctrl+- / Ctrl+0, or the sidebar buttons; 80 to 160 %, remembered).
-- **How the panels talk to the core**: through `tenrec::server::local`, an in-process link that answers exactly the operations of the web page's WebSocket (same checks, limits, messages and events), with no socket, token or terminal. A chat's transcript is still read from the registry directly. Nothing sent over the link is logged.
-- **In step 3**: **accounts** (Settings → Accounts: the default login and each extra one, personal or work, with its login state and email; check the login, open a login window (Windows: a PowerShell console of its own runs `claude auth login` for that account, the folder passed as an environment variable, nothing it prints passes through the app; elsewhere the command is copied), rename, add, delete after a warning that the account's notes, skills and history go with it). The Memory and Skills panels and search follow the open chat's account and have an account picker; a new chat picks its account. The new chat's folder can be chosen with the system's folder picker ("Browse…"; COM on Windows, the desktop portal on Linux) or typed. Long lines in a tool's output, a code block, a message or the permission dialog are measured after wrapping, so rows no longer overlap.
-- **Team mode** (SmartWorkbench plug-in): a "team on / off / not checked" chip in the chat header (shown when the chat's `system/init` lists the plug-in's `smartworkbench:*` agents, or its state was seen), and a card under it with the model and effort of each role, the Opus review count, and when the state was last seen. Its only evidence is the plug-in's own reply in the chat: the plug-in answers `/swb team` (status), `/swb team on` and `/swb team off` itself, with no model call (measured with the real `claude` 2.1.323 over `--input-format stream-json`: `num_turns` 0, cost 0, a reply starting `smartworkbench: Team mode on|off`). A reply counts only for a message that starts with `/swb` (or `/smartworkbench`) and only when the turn made no model call, so a sentence a model wrote, or one a file carried into its answer, never changes the chip; a team-mode guard row ("held by team mode") also shows it was on then. The state is "last seen in this chat" (a change made in a terminal shows after the next check) and is restored when the chat is reopened. The card's buttons (Turn on, Turn off, Check) send the command to the open chat as an ordinary message, so it and the reply stay in the transcript; they are off while a turn runs or a permission waits, and the draft in the composer is left alone. A message that starts with `/` no longer becomes the chat's title (the next one does). **Nothing is read from the plug-in's own folders** (its desktop-app snapshot, key and command inbox are not touched), so the plug-in's done conditions, which the stream does not carry, are not shown. A provider chat has no plug-in and so no chip. Limits: a change of a role's model (`/swb team lead opus`) answers with another kind of line and is not read, so the card keeps the roles last shown by an on/off/status reply; and a change made in a terminal, in the plug-in's own app or in another chat of the same project leaves no evidence in this chat until the next check (the card says how long ago it was seen).
-- **In step 4**: the **Schedule** panel (tasks with their schedule, next run and tools; a form for a files or web task with sites one per line, a daily time and weekdays or an interval, model, turns, budget and time limit; run now, stop, turn on or off, edit, delete; recent runs with unread marks and a result overlay that warns when a web run may hold outside text; a toast "View" when a run ends and a count of unread runs on the sidebar), the **Providers** card in Settings (an Anthropic-compatible address and its key: the key field is a password field, is never shown again, is sent without being kept waiting for its reply, is emptied when the form closes or Settings is left, and an empty field keeps the saved key; the container runtime and image), a new chat's **provider**, **container** and **worktree** options, the **worktree card** in the header of a worktree chat (the merge check with what stands in the way, merge after a question, clean-up with one or two questions, and accepting changed git settings), the **Files** tab (a folder at a time, tags for blocked, held, secret and heavy entries; a text file up to 256 KB in an editor, Ctrl+S to save, a question before saving a file that may hold secrets or that changed elsewhere; on Windows the host has no editor and the tab only lists), **image attachments** (a file picker or Ctrl+V of an image on the clipboard; up to five, 5 MB each, type read from the bytes; thumbnails above the composer; drag and drop is not available), and a skill's **edit before approving** and **version history with rollback**.
-- **Importing a session of the `claude` command line program** (new-chat page → "기존 Claude Code 세션 불러오기…"): lists what the account's folder holds (`<config dir>/projects/<folder>/<id>.jsonl`; the default account's folder is `CLAUDE_CONFIG_DIR` or `~/.claude`, an extra account's is its own), newest first, with the first message as the title, the folder, the branch and how long ago; a filter box and an account picker. A pick makes a chat that already shows the earlier conversation (user and assistant text, tool calls and their results cut to a few KB, no thinking or signatures, no sub-agent lines, only the line the person kept after a rewind; the last 400 events or 4 MB, with a note saying how many earlier ones were left out), remembers the CLI's session id, and **starts nothing until the first message, which resumes the session with `--resume <id>`** (verified against the fake `claude`: the argument is passed from the folder the CLI kept the session in). A session already imported (or made by this app), one whose folder is gone, and one whose folder makes another name once made canonical (a link) are listed but cannot be picked, because `claude --resume` finds a session only from the folder it was made in. A session touched in the last two minutes may still be open in a running `claude`: a question comes first, and two `claude` processes writing one session is not something the app can prevent. A file over 32 MiB is read for no history (a question asks whether to continue without it). What an imported conversation says is shown but never read by the memory auto-save or the skill proposals, and is not written to the app's own log of events beyond the chat's own file. Not verified: a Windows resume (the canonical folder there starts with `\\?\`, which the CLI's folder name may not match), a real `claude --resume` of an imported session, and a session whose format a newer CLI changed (unknown lines are skipped).
-- **Accounts as tabs, and usage limits** (as in the Stitch design): the header starts with one tab per login account (the default one first) and an "Accounts" tab that opens Settings. The selected tab is the account the Memory and Skills panels, the search, the usage chip and a new chat use; it follows the chat you open. The sidebar's chat list is **not** filtered by it (a chat of another account that waits for a permission would be hidden). A chip in the header shows the window of that account to watch most ("5시간 85%", coloured by how close it is) and opens a card with every window the account reported: the 5-hour window, the weekly one, a weekly one per model (Opus, Sonnet, and any other `seven_day_<model>` name `claude` sends, shown as "주간 · <Model>"), the overage window, each with a bar, its percentage, when it resets and when it was last seen; each account's row in Settings has a one-line summary. **Where the numbers come from:** only the `rate_limit_event` a running `claude` prints in its stream (`unifiedWindows`, or the single window named by `rateLimitType`; the shape was read from claude 2.1.323's own schema), kept by the core per account in `<data>/usage.json` (private file, numbers only) and sent to the pages as `usage_changed` / `account_usage`. So a value is as fresh as the last turn a chat of that account ran in this app: use of the same login outside this app (a terminal) shows after the next turn here, a window whose reset time has passed is shown as "reset" instead of its old percentage, and an account that never ran a turn says "no data yet". A provider chat has no Anthropic limits and is never counted; the app asks Anthropic nothing and uses no token for this. Two app accounts logged in as the same Anthropic user are kept apart and may disagree in freshness. **Unverified:** `seven_day_overage_included`, which `claude` describes as a per-model weekly bucket, is labelled "주간 모델별" and the card says its name is a guess; that the Fable model's limit is that window (or arrives as its own `seven_day_<name>`) is not confirmed, because the real events of a Fable-limited account were not seen. Scheduled runs and the workers that make notes and skill proposals do not go through a chat and their events are not counted.
-- **Permission mode of a chat** (new chat → "권한 모드" / Permission mode, web and desktop): chosen when the chat is made and fixed for the app (the badge always shows the mode the chat was made with), passed to every start of its `claude` as `--permission-mode <name>` (also after a restart and with `--resume`). Claude Code may change the mode itself while the chat runs (for example when a plan is approved); the app does not follow that (UNVERIFIED how it shows). The default adds no argument, so a chat that never chose runs as it always did. The names are the ones Claude Code 2.1.325 takes (checked against its `--help` and its documentation):
+---
 
-  | Mode | What the documentation says it does |
-  |---|---|
-  | default | only reads run without asking |
-  | `acceptEdits` | reads, file edits and `mkdir`/`touch`/`mv`/`cp` run without asking |
-  | `plan` | read-only planning |
-  | `auto` | a classifier reviews each action; needs a model and plan Claude Code supports, otherwise it acts as the default |
-  | `dontAsk` | only pre-approved tools run, everything else is denied without asking |
-  | `bypassPermissions` | everything runs without asking (the same as `--dangerously-skip-permissions`; deny and ask rules, hooks and protected-path deletes still apply); Claude Code refuses it for root/sudo |
+<a id="한국어"></a>
 
-  Skipping every check is an explicit choice: the page asks first (`confirm`) and the request carries `confirm_bypass: true` (the host refuses a bare `permission: "bypassPermissions"`), the chat's header and its entry in the list carry a red badge, and a provider chat may only do it inside a container (a provider chat also has no `auto`). The host refuses it when it runs as root, as Claude Code does. A mode name the list does not know is refused (`manual` is not offered), and a chat file that names one is an error and never another mode. Not done, because the control message for it is not documented: changing the mode of a chat that is already running. Not measured with the real `claude`: how `plan`'s exit question and `dontAsk`'s refusals arrive through `--permission-prompt-tool stdio`. **Why permission questions come often:** in the default mode every edit, shell command, MCP tool call and web fetch asks, and the host sends back an "always allow" rule only for its own read-only memory tool (`session.rs`): the rules Claude suggests are shown "for information, not applied", so the same command asks again each time. `acceptEdits` removes the questions for edits; there is no per-command "always allow" yet.
-- **Remembering a permission** (web and desktop permission dialog): when Claude's own request carries a rule to remember (measured with Claude Code 2.1.325: for a shell command `addRules` for exactly that command, destination `localSettings`; for a file write only a mode change, so nothing is offered), the dialog offers "allow for this run" (destination `session`) and "always allow in this project" (destination `localSettings`: Claude Code writes `.claude/settings.local.json`, which this app cannot remove yet). The host builds the rule from the request's own suggestion only (same tool, 1 to 8 plain rules, nothing else of the suggestions is passed on, never from what a page sends); a refused rule leaves the request waiting. Not offered for provider or container chats ("always"), nor for a request that carries the undocumented `server_policy_ask_only`. Not verified with the real `claude`: that the same command is then not asked again, and whether a `session` rule survives a restart.
-- **Model of a chat** (header picker, web and desktop; op `set_model`): between turns only. The chat's `claude` is ended and the next message starts it with `--resume <id> --model <name>` (measured: same session, other model, the conversation is kept). With team mode on, the desktop sends `/swb team lead <model>` instead (the plug-in's documented command); with its state unknown it asks for a check first. Provider chats are not switched.
-- **Team roles** (desktop Team page, once the roles are known): each role card has a model and effort picker that sends the plug-in's `/swb team <lead|explorer|advisor> <model> [effort]`; the plug-in decides what a model that refuses an effort does.
-- **Naming and deleting a chat** (web and desktop): a name can be given when the chat is made (a first message then does not replace it) and changed from the header (60 characters, control characters dropped, blank refused); ops `rename` and `delete`. Delete asks first and erases the chat's log, its settings file and what it left in the run folder (the history index of its account forgets it); it is refused while a turn runs or a question waits, and while the chat still has a worktree (remove that first). A worktree folder is never deleted by it.
-- **Codex accounts** (web and desktop, step 1 of 2): "add account" asks for a kind, Claude or Codex. A Codex account is a login of the `codex` program kept in a folder of its own (`<data>/accounts/<id>` is its `CODEX_HOME`); the login is made by you in a terminal (the card shows `CODEX_HOME=... codex login`, or a PowerShell line; on Windows "Open login window" runs it), and the app only asks the program (`codex login status`, `codex logout`) and never reads, keeps or logs a token. The status line is read from the program's stderr (measured with codex-cli 0.156.1: "Logged in using ChatGPT" and exit 0, or "Not logged in" and exit 1, a warning line may come first); only a kind of answer is kept (ChatGPT, API key, other, out, unknown) because an API-key line may hold a piece of the key, and a login whose `auth.json` is not in the account's folder (system key store, a variable) is shown with a warning. The credential variables of this process (`OPENAI_*`, `CODEX_*`, `AZURE_OPENAI_*`, Claude's) are taken away from the program's run. The program is `TENREC_CODEX` or the first `codex` on `PATH` (on Windows only an `.exe`: an npm install that has only a `.cmd` shim cannot be asked for its status, but "Open login window" still works). A Codex account has no notes, skills, history or usage of its own and **no chats yet** (step 2 will run chats through `codex exec`): it is not in the new-chat picker or the header tabs, and a chat bound to it is refused with the reason. Names and the limit of 8 are shared by both kinds. Removing it asks the program to log out, then deletes its folder. An older build that reads the file ignores the kind and would treat it as a Claude account without a realm (its chats are refused); it drops the kind again when it rewrites the file. Not run with a real Codex login on Windows.
-- **Plugins of an extra account** (web, account card → Plugins; ops `account_plugins`, `account_plugin_install`): an account has its own settings folder, so the plugins of the default account are not seen by its chats. The card lists the default account's user-scope plugins that the account lacks; a click (after a confirmation) runs Claude Code's own commands as the account: `claude plugin marketplace add <owner/repo>` when the account lacks the marketplace (GitHub marketplaces only: the other kinds' fields are not known), then `claude plugin install <plugin@marketplace> --scope user`, at most two minutes each. Ids and repositories are checked to be plain words before they reach a command line. Not in the desktop app yet. Not run with the real `claude`: the commands were measured by their help and list output only.
-- **SmartWorkbench commands on the Team page** (desktop): buttons that send the plug-in's documented fixed commands (`/swb guard high|medium|low`, `/swb team codex off|check`; the panel's status button sends `/swb status`). The goal, rules, done conditions and pins are edited in the Team page's built-in workbench card; `guard off` and `codex on` are not offered.
-- **Header and settings, as in the Stitch design:** the chat header shows the open chat's account as a small chip when it is not the default one (names over 14 characters are cut), Settings has a **display language** choice (한국어 / English; it is saved in `desktop.json` and applies at the next start, otherwise the system's language is used), and the window's smallest height is 640 px so the whole sidebar (the "new chat" button and the text-size row) stays visible. Every wrapped text in a card, row or dialog is measured at its real width (`WText`) so a card is as tall as what it holds; the permission and question dialogs scroll their body when the window is low.
-- **The window follows the Stitch designs ("dev console" shell):** a sidebar with the brand and a "RUNNING" badge, the **account context** (one segment per login, the same choice as the header tabs), seven pages with Alt+1..7 / Ctrl+1..7 (Chats, Memory, Skills, Schedule, Files, Team mode, VHDB), search, the chat list, the model/connection card, "new chat" and "Settings | CLI sessions"; a header with the account tabs, a breadcrumb (workspace / project), the usage chip and TOKENS / EST. COST of the last turn; and, in a chat, a "SESSION //" line with the folder, account and state. Pages: **New chat · Accounts** (two columns: the new-chat card with the account cards, and every account with its folder, copy path, rename, delete and a login guide), **Memory and Skills** (two tabs with counts, a search, "all / suggested" chips, suggestion cards), **Schedule and settings** (registered tasks and runs on the left; the always-open new-task form and the settings card — language, theme (only dark exists), text size, providers, the two AI switches, about — on the right), **Files** (explorer, file tab with a modified dot, an editor with line numbers and a status bar showing Ln/Col, the worktree panel, a terminal drawer that is still empty), **Team mode** and **VHDB**. The permission dialog follows the design (the command in a box with copy, tool, folder, purpose, a caution card, Esc / Enter hints; Enter allows once unless the reason box has focus). **Drawn but empty on purpose** (nothing the app does not know is invented): the VHDB switches, token budget, query bar, decisions and file timeline (the plug-in is not read yet), the team page's guard pipeline and definition of done, the terminal, the theme choices other than dark, the explorer's tree (one folder at a time) and the other worktrees' list.
-- **Not yet in the desktop app**: the terminal, and the web build's other panels have no desktop twin except as listed above (the web build still has them).
-- Slint is used under its Royalty-free Desktop License; the attribution it asks for is the `AboutSlint` box in Settings → About.
+# Tenrec (한국어)
 
-## Windows (experimental: cross-compiled, never run on Windows)
+[English](#tenrec) · **한국어**
 
-`tenrec.exe` is built from Linux for `x86_64-pc-windows-gnu` (`cargo build --release --target x86_64-pc-windows-gnu`, with `zig cc` as the linker and `zig dlltool`). **It has been checked only to compile and link; it has not been started on a Windows machine.** Linux and macOS behaviour is unchanged (the whole Linux test suite passes); the Windows differences are all behind `cfg`.
+[Claude Code](https://claude.com/claude-code)를 위한 데스크톱형 호스트입니다. Rust 코어가 `claude` CLI를 헤드리스
+(`--input-format stream-json --output-format stream-json`)로 실행하고, 전용 채팅 화면을 제공합니다. 화면은 네이티브
+데스크톱 앱(Slint, 브라우저와 네트워크 수신 포트 없음)이거나 로컬 웹 페이지입니다.
 
-**Signing the program (self-signed).** `packaging/sign-windows.ps1` signs `tenrec-desktop.exe` with a self-signed code-signing certificate. Run it **on the Windows PC that will run the program**, next to the .exe: `powershell -ExecutionPolicy Bypass -File .\sign-windows.ps1` (if a group policy forbids that, the script's few commands can be pasted into a PowerShell window). It makes the certificate in that user's store (RSA 3072, SHA-256, valid 3 years, the private key **cannot be exported**: it is never in a file, the repository, a zip or the NAS) or reuses the one it made before, signs with SHA-256 and a timestamp (without one when offline: that signature stops verifying when the certificate expires), writes only the public `Tenrec-codesign.cer` and prints the signed file's SHA-256. Order: check the zip against its `.sha256`, unpack, sign, run. The signature is over the .exe as it is: a rebuild, `strip` or a resource editor afterwards breaks it, and a signed .exe that is shipped again needs a new zip and `.sha256`. After three years make a new certificate and trust it again; another PC makes its own.
-What it does: the program carries a publisher and cannot be changed unnoticed, and a PC or company that puts the `.cer` into *Trusted Root Certification Authorities* and *Trusted Publishers* sees a valid signature. What it does **not** do: a self-signed certificate does not make a security product trust the program (the reputation of the unknown certificate is about that of no signature), does not help SmartScreen, and trusting the certificate on a company PC is the administrator's decision (a program running as that user can use the key to sign too, so a company should trust the `.cer` only knowingly). A product such as Trend Micro Apex One may still block the program until its administrator allows the certificate, the folder or the file hash.
+> 상태: 초기 단계(v0.1.0). 만든 사람이 매일 쓰고 있으며 주로 Windows에서 리눅스로 교차 컴파일한 빌드를 씁니다.
+> 리눅스용 테스트는 많지만 Windows는 자동 테스트 없이 손으로만 확인했습니다. 거친 부분이 있을 수 있습니다.
 
-- **Not checked on Windows:** deleting an account that still has chats may leave its `stores` folder behind (the chats keep the database files open; the app reports it as a folder it could not remove). The terminal's pseudo-terminal name on macOS uses `ptsname` (no `ptsname_r` there) and has not been compiled for macOS.
-- **Off for now, with a reason given**: the **terminal** (`--terminal` refuses to start; a ConPTY version is the next step), and **containers** (Docker Desktop and Podman run them inside a Linux virtual machine whose folder sharing this app cannot check).
-- **On**: the **file editor** (open, save, create, rename and move, delete into `.tenrec-trash`, restore, delete for good): on Windows each folder is held open while it is worked in, an entry is opened without following a link and changed through that handle (rename, delete), and a save is a temporary file swapped in with `ReplaceFileW`; names with `\ : * ? " < > |`, a trailing dot or space, or a device name are refused, a network folder (`\\?\UNC\`) cannot be changed, and one gap is left (a file symlink put in a save's target in the instant after its last check, which needs the right to make symlinks); written without a Windows machine and never run, so the tests in `src/server/project_fs/win.rs` are for the first run there; the **tray icon** (closing the window hides it and the app goes on; a click on the icon or a second start brings the window back, its menu has Open and Quit; if the icon cannot be added the close button ends the app as before); chats, the scheduler, the file tree, **accounts** (the login command the panel shows is a PowerShell line; the Unix owner and `0700` checks of an account's folder are left out, the link, parent and default-folder checks stay), the **history and memory tools for Claude** (over a named pipe `\\.\pipe\tenrec-<random>` made each run, open only to your user and the system, refusing remote clients, with the same per-chat secret), and **worktrees** (git's hooks are switched off with an empty folder of the app's own, `<data>\run\no-hooks`, looked at on every call, since `/dev/null` is an ordinary path under `C:\` for Git for Windows; paths are compared in the `C:\...` form).
-- **Different**: no `0700`/`0600` is set. The data folder must be inside your user profile (`%USERPROFILE%`), which the default access list limits to you, the system and the administrators; the app refuses to start with a data folder elsewhere. A program is ended through a job object (ending it ends everything it started, except a program started in the short moment before the job existed), not a process group and SIGTERM. Only `claude.exe` is run (a `--claude` or `TENREC_CLAUDE` value with another extension, such as `.cmd` or `.bat`, stops the start, because its arguments go through the command interpreter's quoting). Stopping a chat has no polite step: the job is ended after three seconds, with no chance for the program to save. The profile folder is taken from `USERPROFILE`, which is as trustworthy as the account the app runs as. Times use the C runtime's local time. Ctrl-C and closing the console end the app.
-- **Not run, so not known**: that the program starts, that `claude.exe` is found and run, that ending a job works, the time zone arithmetic, the refusal messages in the page.
+## 내려받기
 
-Known limits: a skill's text is read by you, and the risk report is a pattern list, not a judge (a roundabout instruction passes it, so your reading is the last line of defence); a chat with Bash permission can write to the data folder, snapshots included, and so could plant a scheduled task in `schedule.sqlite` (each run shows the definition it used; a task is limited to read-only tools or the web, whoever wrote it); auto-save and a note you approved are trusted as your words: a message you paste from elsewhere can still say something you did not mean, so read the Memory tab now and then; the order-like check and the secret filter are pattern lists, not judges (a key split by spaces or lines is not caught); the project scope is a guarantee of this tool only (a tool that can read files, such as Read or Bash through Claude Code's own permission flow, can read the data folder, and a secret read that way ends with its process); a local program that forges the `Origin` header can open a socket and make the host buffer up to 40 MB before the
-token is checked; a scheduled folder run reads whatever the project folder holds (a `.env` there can end up in a result, as in a chat), and a web result is outside text that only your reading screens; a normal chat is not protected from its project's own `.claude/settings.json` either: its `env` can send the account's token to another address and its hooks run, so open only projects you trust (a provider chat skips project settings for this reason); a link swapped into the project folder between the path check and the read is not defended against
-(an attacker who can write there can already do more); the event log and its base64 images are held in memory per session.
+Windows 빌드: **[Releases](https://github.com/nathak/tenrec/releases/latest)** → `tenrec-desktop-0.1.0-windows-x86_64.zip`
+(옆의 `.sha256` 파일로 확인하세요). 압축을 풀고 `tenrec-desktop.exe`를 실행합니다.
 
-## Tests
+- `claude`(Claude Code)가 `PATH`에 있어야 합니다.
+- `.exe`는 **서명되어 있지 않습니다**. Windows SmartScreen이나 회사 보안 제품이 모르는 프로그램이라고 경고할 수 있습니다.
+  압축 안의 `sign-windows.ps1`은 본인 PC에서 자체 서명 인증서로 서명합니다. 변조 여부를 알 수 있게 될 뿐, 보안 제품이
+  신뢰하게 만들지는 못합니다. 회사 보안 제품을 우회하려 하지 말고, 관리자에게 이 파일을 허용해 달라고 요청하세요.
+
+## 기능
+
+- **채팅.** 채팅마다 `claude` 프로세스 하나로 여러 턴을 이어 가며, 글자 스트리밍, 이미지(붙여넣기·선택), 입력과 결과가 보이는
+  도구 카드, 카드 아래에 중첩된 서브 에이전트, 생각 줄, 복사·접기가 되는 코드 블록, 표, 비용과 토큰, 대화 전체를 선택해
+  복사하는 "텍스트로 보기", 중단, 재시작 뒤 다시 열기와 이어 하기를 지원합니다.
+- **권한은 사용자 몫.** `--permission-prompt-tool stdio`로 `claude`를 띄웁니다. 권한 요청은 클릭을 기다리며 시간 초과도
+  자동 허용도 없고, 답은 화면에 보이는 그 요청에만 묶입니다. Claude Code 자체 설정(허용 규칙, 모드, 훅)이 먼저 결정하는
+  것은 터미널과 같으므로, `claude`를 실행해도 되는 프로젝트만 여세요.
+- **계정.** 개인용·업무용 같은 여러 로그인을 따로 두며 계정마다 메모, 스킬, 기록, 사용 한도가 분리됩니다. Codex 로그인도
+  관리할 수 있습니다(채팅은 Claude Code로만 실행).
+- **메모리·스킬·검색.** Claude가 제안하고 사용자가 승인하는 메모, 위험 보고서와 버전 기록이 있는 스킬, 모든 채팅 전문 검색.
+- **예약 작업**(읽기 전용 파일 작업, 웹 작업), **모델 제공자**(Anthropic 호환 주소, 선택적으로 컨테이너), 채팅별 **git worktree**.
+- **파일.** 프로젝트 파일 트리와 편집기. Markdown은 렌더링하고 소스 파일은 구문 색을 입힙니다. 프로젝트 밖 경로와 위험한 경로는
+  거부합니다.
+- **라이브 보기.** 채팅이 하는 일(프롬프트, 위험·가드 표시가 붙은 도구 호출, 토큰)을 보여 주는 읽기 전용 로컬 웹 화면입니다.
+  팀 화면이나 `tenrec --live`로 엽니다. `127.0.0.1`에만 열리고 토큰은 주소의 `#` 뒤에 있으며 비밀값은 가립니다.
+- **팀 화면**: SmartWorkbench Claude Code 플러그인(팀 모드, 가드 단계, 완료 조건)용입니다.
+- 화면은 한국어와 영어를 지원합니다.
+
+자세한 설계 메모, 동작 세부, 알려진 한계는 [docs/NOTES.md](docs/NOTES.md)(영어)에 있습니다.
+
+## 빌드와 실행
+
+Rust(stable)가 필요합니다. 내장 SQLite가 C라서 C 컴파일러(또는 사용자 영역 Zig, 메모 참고)도 필요합니다.
 
 ```sh
-cargo test                       # protocol, process, session, server, the terminal, worktrees on real git, accounts and what does not cross between them (a fake claude replays scenarios; no model calls)
-cargo clippy --all-targets -- -D warnings
-node --test tests/ui.test.mjs    # the UI's pure helpers
-PLAYWRIGHT=/path/to/playwright/index.mjs tests/smoke/run.sh   # headless-Chromium run of the UI against the fake
-TENREC_LIVE=1 cargo test --test live -- --ignored                # the real claude, eight tests (costs a few cents)
+cargo run                                   # 웹 화면: http://127.0.0.1:PORT/#t=TOKEN 이 출력되면 그 주소를 엽니다
+cargo run -- --port 4311 --data ./data --claude /path/to/claude
+cargo run --features desktop --bin tenrec-desktop     # 네이티브 데스크톱 앱(Slint)
+cargo test                                  # 모델 호출 없음: 가짜 `claude`가 시나리오를 재생
 ```
 
-`fake-claude` also answers `auth status` (`FAKE_AUTH`) and `auth logout`. It replays a scenario file: lines are printed as they are, or are directives (`{"$wait":"user"|"control_response"|"interrupt"}`,
-`{"$sleep":ms}`, `{"$exit":n}`).
+리눅스에서 Windows용 빌드(링커로 `zig` 필요):
+`cargo build --release --target x86_64-pc-windows-gnu --features desktop --bin tenrec-desktop`
+(`CC_x86_64_pc_windows_gnu`와 `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER`를 `zig cc` 래퍼로 지정, 메모 참고).
 
-## Layout
+세션과 설정은 `~/.local/share/tenrec`(Windows는 `%USERPROFILE%\.local\share\tenrec`)에 저장됩니다.
+`TENREC_DATA` 또는 `--data`로 바꿀 수 있습니다.
 
-`src/claude/` everything specific to the CLI (protocol, process) · `src/session.rs` one chat's task (state, pending permissions, log) ·
-`src/accounts.rs` extra accounts (the file, their folders, the status question) · `src/realm.rs` one account's notes, skills, history and workers · `src/server/account_ops.rs` the Accounts box's operations · `src/worktree.rs` git worktrees of chats (create, check, merge, remove, ownership) · `src/server/wt_ops.rs` their WebSocket operations · `src/server/project_fs.rs` the file tree and editor's disk access · `src/server/fs_ops.rs` its WebSocket operations · `src/server/term_ops.rs` the terminal (pty, shell, frames) (`term_ops_stub.rs` on Windows) · `src/platform.rs` and `src/proc_group.rs` what differs on Windows (home folder, `claude.exe`, job objects) · `src/index.rs` the FTS5 index · `src/memory.rs` the notes, their checks and the recall block · `src/extract.rs` auto-save · `src/settings.rs` · `src/providers.rs` providers and their checks · `src/claude/env.rs` the environment of a provider chat · `src/claude/container.rs` the container arguments · `src/schedule.rs` times · `src/sched_store.rs` tasks and runs · `src/scheduler.rs` the clock loop and one run · `src/skills.rs` skills, their risk report and the one-off folder · `src/propose.rs` proposals · `src/mcp.rs` the stdio MCP server and the per-chat secrets · `src/registry.rs` sessions on disk · `src/server/` HTTP + WebSocket + auth + files + the MCP socket · `ui/` plain ES modules (`files.js` is the tree and editor, `term.js` the terminal, `wt.js` the worktree strip), `ui/vendor/` marked and DOMPurify (pinned, licenses included).
+## 보안
 
-## Verified against Claude Code 2.1.316
+로컬 전용입니다. 웹 서버는 `127.0.0.1`에만 열리고 `Host`와 `Origin`을 검사하며 토큰이 필요합니다. 데스크톱 앱은 수신 포트가
+없습니다. 이 앱은 Claude Code를 통해 명령을 실행할 수 있으므로 터미널처럼 다루세요. **샌드박스가 아닙니다.** 신뢰하는
+프로젝트만 여세요. 일반 채팅에는 프로젝트의 `.claude/settings.json`(훅, `env`)이 그대로 적용됩니다. 자세한 내용과 한계:
+[docs/NOTES.md](docs/NOTES.md#security).
 
-Multi-turn over one process, `--resume <session id>` (remembers), image input, `can_use_tool` allow and deny, `interrupt`
-(`control_response` then `result/error_during_execution` within 0.1 s), and the whole permission round trip through this host
-with the real `claude` (the live test). Also checked: a stdio MCP server (tool name `mcp__tenrec__search_history`, env passed to it, connected before the first turn, a session allow rule through `updatedPermissions`, the CLI's `server/discover` probe answered with -32601) and the real tool call in the live test. Not yet checked: how SmartWorkbench's guard questions (`$.ui.ask`) behave in a headless
-host, the IDE connection protocol, and macOS. A Windows build exists only as described under "Windows".
+## 라이선스
 
-## Next
-
-a Telegram gateway · Tauri wrap (needs `pkg-config` and `webkit2gtk-4.1` dev packages).
+소스 코드는 [MIT](LICENSE)입니다. 데스크톱 앱은 [Slint](https://slint.dev)의 Royalty-free Desktop License로 빌드하며
+(고지는 설정 → 정보에 있음), 글꼴(Pretendard, JetBrains Mono)은 SIL Open Font License이고 전문은 `ui/vendor/`에 있습니다.
