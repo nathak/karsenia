@@ -68,6 +68,14 @@ pub enum Category {
     CodexTransfer,
     ProjectRule,
     TenrecData,
+    /// An edit of what the checks and the build run on: CI workflows, git hooks, lint and format settings, the editor tool's own settings.
+    ToolingConfig,
+    /// An edit inside a directory named for the part of an app where a slip costs most: auth, payment, billing, migrations.
+    SensitiveCode,
+    /// A git command that skips or redirects the repository's hooks.
+    HookBypass,
+    /// A call that cannot be read as it stands: too long to be scanned, or holding characters that cannot be seen.
+    Unreadable,
 }
 
 impl Category {
@@ -95,6 +103,10 @@ impl Category {
             Self::CodexTransfer => "codex-transfer",
             Self::ProjectRule => "project-rule",
             Self::TenrecData => "tenrec-data",
+            Self::ToolingConfig => "tooling-config",
+            Self::SensitiveCode => "sensitive-code",
+            Self::HookBypass => "hook-bypass",
+            Self::Unreadable => "unreadable",
         }
     }
 
@@ -110,7 +122,10 @@ impl Category {
             | Self::RemoteExec
             | Self::CodexSend
             | Self::CodexWrite
-            | Self::CodexTransfer => true,
+            | Self::CodexTransfer
+            | Self::ToolingConfig
+            | Self::HookBypass
+            | Self::Unreadable => true,
             Self::Shell
             | Self::Read
             | Self::WorkspaceEdit
@@ -121,7 +136,8 @@ impl Category {
             | Self::ExternalSend
             | Self::DestructiveGit
             | Self::BroadDelete
-            | Self::DeviceWrite => false,
+            | Self::DeviceWrite
+            | Self::SensitiveCode => false,
         }
     }
 }
@@ -376,6 +392,26 @@ static BASH_RULES: LazyLock<Vec<BashRule>> = LazyLock::new(|| {
             Policy::Block,
             fancy(TENREC_DATA_PATTERN),
             "touches the data folder of this app: its workbench files, accounts, run files or provider settings",
+        ),
+        rule(
+            Category::HookBypass,
+            Risk::Medium,
+            Policy::Ask,
+            fancy(
+                r"(?i){GIT}[^;&|\n]*?\s--no-verify{BE}|{GIT}commit{BE}[^;&|\n]*\s-[a-z]*n[a-z]*{BE}|{BS}git{BE}[^;&|\n]*(?:core\.hookspath|include\.path|includeif\.\S*\.path)|{BS}(?:husky|lefthook)=0{BE}",
+            ),
+            "skips or redirects the git hooks",
+        ),
+        rule(
+            Category::ToolingConfig,
+            Risk::Medium,
+            Policy::Ask,
+            fancy(
+                &r#"(?i)(?:{BS}tee{BE}|{BS}sed\s+(?:-[a-z]*i|--in-place){BE}|{BS}(?:cp|mv|install|ln){BE}|>)[^;&|\n]*?(?:^|[\s"'/=])(?:{TOOL_DIRS}|(?:{TOOL_FILES})(?=$|[\s"';&|)]))"#
+                    .replace("{TOOL_DIRS}", TOOL_DIRS)
+                    .replace("{TOOL_FILES}", TOOL_FILES),
+            ),
+            "changes CI, git hook or lint and format settings from the shell",
         ),
         raw_rule(
             Category::SecretOutput,
@@ -660,6 +696,13 @@ static SECRET_PATH: LazyLock<Regex> = LazyLock::new(|| {
     )
 });
 static GUARD_FILE: LazyLock<regex::Regex> = LazyLock::new(|| compile_plain(r"(?i)(^|/)\.claude/smartworkbench\.json$"));
+// What the checks and the build run on. A change here can switch a check off (a lint rule, a CI step, a git hook) without touching the
+// code that the check would have looked at, so an edit is asked even when the profile is permissive. Directories hold anything below
+// them; files are named whole (`tsconfig.json.bak` is not one). pyproject.toml and package.json are left out: they change with every dependency.
+const TOOL_DIRS: &str = r"\.github/workflows/|\.git/hooks/|\.husky/|\.claude/hooks/";
+const TOOL_FILES: &str = r"\.claude/settings(?:\.local)?\.json|\.eslintrc(?:\.[a-z]+)?|eslint\.config\.[cm]?[jt]s|\.prettierrc(?:\.[a-z]+)?|prettier\.config\.[cm]?[jt]s|\.?rustfmt\.toml|\.?clippy\.toml|tsconfig(?:\.[A-Za-z0-9_-]+)?\.json|biome\.jsonc?|\.?ruff\.toml|\.golangci\.ya?ml|\.pre-commit-config\.ya?ml|lefthook\.ya?ml";
+static TOOLING_PATH: LazyLock<Regex> = LazyLock::new(|| fancy(&r"(?i)(?:^|/)(?:{TOOL_DIRS}|(?:{TOOL_FILES})$)".replace("{TOOL_DIRS}", TOOL_DIRS).replace("{TOOL_FILES}", TOOL_FILES)));
+static SENSITIVE_DIR: LazyLock<regex::Regex> = LazyLock::new(|| compile_plain(r"(?i)(?:^|/)(?:auth|payments?|billing|migrations)/"));
 // A glob that reaches for secrets files (**/.env*, **/id_*, *.pem).
 static SECRET_GLOB: LazyLock<Regex> = LazyLock::new(|| {
     fancy(
@@ -763,6 +806,9 @@ fn classify_bash(input: &Value) -> Verdict {
     };
     match BASH_RULES.iter().find(|one| hits(one)) {
         Some(one) => verdict(one.category, one.risk, one.policy, one.reason),
+        // Nothing matched, but a command too long to have been masked, or with characters no one can see in it, may say more than the
+        // rules could read: it is asked, never waved through as "nothing found".
+        None if typed.len() > MASK_LIMIT || typed.chars().any(is_invisible) => verdict(Category::Unreadable, Risk::Medium, Policy::Ask, "too long to be checked, or holds characters that cannot be seen"),
         None => low(Category::Shell),
     }
 }
@@ -796,11 +842,19 @@ pub fn classify(tool: &str, input: &Value) -> Verdict {
         if GUARD_FILE.is_match(&path) {
             return verdict(Category::GuardPolicy, Risk::Medium, Policy::Ask, "changes the project guard policy");
         }
-        return if strict_hit(&SECRET_PATH, &path) {
-            verdict(Category::SecretFile, Risk::Medium, Policy::Ask, "edits a secrets file")
-        } else {
-            verdict(Category::WorkspaceEdit, Risk::Medium, Policy::Allow, "")
-        };
+        if path.chars().any(is_invisible) {
+            return verdict(Category::Unreadable, Risk::Medium, Policy::Ask, "the path holds characters that cannot be seen");
+        }
+        if strict_hit(&SECRET_PATH, &path) {
+            return verdict(Category::SecretFile, Risk::Medium, Policy::Ask, "edits a secrets file");
+        }
+        if strict_hit(&TOOLING_PATH, &path) {
+            return verdict(Category::ToolingConfig, Risk::Medium, Policy::Ask, "changes CI, git hook or lint and format settings");
+        }
+        if SENSITIVE_DIR.is_match(&path) {
+            return verdict(Category::SensitiveCode, Risk::Medium, Policy::Ask, "edits code in an auth, payment, billing or migrations directory");
+        }
+        return verdict(Category::WorkspaceEdit, Risk::Medium, Policy::Allow, "");
     }
 
     if is_read_tool(tool) {
@@ -922,17 +976,17 @@ mod tests {
     #[test]
     fn every_pattern_compiles() {
         // Forces every pattern of the module: a bad one is a failure here, not a panic in a hook.
-        assert!(BASH_RULES.len() >= 12);
+        assert!(BASH_RULES.len() >= 14);
         for pattern in [
             &*TENREC_DATA, &*URL_CREDENTIALS, &*AUTH_HEADER, &*TOKEN_FORMS, &*NAMED_SECRET, &*SECRET_FLAG, &*MESSAGE_COMMAND, &*RUNNER, &*HEREDOC_HEAD,
-            &*FUNCTION_DEFINITION, &*SECRET_PATH, &*SECRET_GLOB,
+            &*FUNCTION_DEFINITION, &*SECRET_PATH, &*SECRET_GLOB, &*TOOLING_PATH,
         ] {
             assert!(pattern.is_match("x").is_ok());
         }
         for pattern in [
             &*PRIVATE_KEY, &*QUOTED, &*DOUBLE_QUOTED, &*DATA_FLAG, &*SEARCH_COMMAND, &*SAFE_SHORT, &*SAFE_LONG, &*ODD_OPTION, &*COMMENT_OR_QUOTE, &*SUBSTITUTION,
             &*SUBSTITUTION_OPEN, &*CONTINUATION, &*INNERMOST_SUBSTITUTION, &*GUARD_FILE, &*SEND_TOOL, &*MCP_DEPLOY, &*MCP_ISSUE, &*MCP_OBSERVE, &*MCP_CHANGE,
-            &*WINDOWS_PATH,
+            &*WINDOWS_PATH, &*SENSITIVE_DIR,
         ] {
             let _ = pattern.is_match("x");
         }
@@ -1166,6 +1220,12 @@ mod tests {
             format!("{}x", " ".repeat(5000)),
             format!("# {}", "'".repeat(4990)),
             format!("grep {}", "\"a\" ".repeat(1200)),
+            format!("sed -i {}", "x ".repeat(2500)),
+            format!("echo {}", "> ".repeat(2500)),
+            format!("tee {}", "-a ".repeat(1700)),
+            format!("git commit {}", "-n ".repeat(1700)),
+            format!("git {}", "core.hookspath ".repeat(330)),
+            format!("cp {}", ".github/workflows/ ".repeat(260)),
         ]
         .into_iter()
         .map(cut)
@@ -1361,10 +1421,10 @@ mod tests {
         assert_eq!(Category::DestructiveGit.name(), "destructive-git");
         assert_eq!(Category::WorkspaceEdit.name(), "workspace-edit");
         assert_eq!(Category::TenrecData.name(), "tenrec-data");
-        for category in [Category::ProjectRule, Category::SecretOutput, Category::SecretFile, Category::GuardPolicy, Category::McpDeploy, Category::RemoteExec, Category::CodexSend, Category::CodexWrite, Category::CodexTransfer, Category::TenrecData] {
+        for category in [Category::ProjectRule, Category::SecretOutput, Category::SecretFile, Category::GuardPolicy, Category::McpDeploy, Category::RemoteExec, Category::CodexSend, Category::CodexWrite, Category::CodexTransfer, Category::TenrecData, Category::ToolingConfig, Category::HookBypass, Category::Unreadable] {
             assert!(category.always_ask(), "{}", category.name());
         }
-        for category in [Category::Shell, Category::ExternalSend, Category::DestructiveGit, Category::BroadDelete, Category::DeviceWrite, Category::Mcp] {
+        for category in [Category::Shell, Category::ExternalSend, Category::DestructiveGit, Category::BroadDelete, Category::DeviceWrite, Category::Mcp, Category::SensitiveCode] {
             assert!(!category.always_ask(), "{}", category.name());
         }
     }
@@ -1439,6 +1499,90 @@ mod tests {
         assert_eq!(pol("git rm -r dir"), Policy::Allow);
         assert_eq!(pol("git  rm -r dir"), Policy::Allow);
         assert_eq!(pol("xgit rm -r dir"), Policy::Block);
+    }
+
+    fn edit(path: &str) -> Verdict {
+        classify("Edit", &json!({ "file_path": path }))
+    }
+
+    #[test]
+    fn skipping_or_redirecting_git_hooks_is_asked_even_when_permissive() {
+        for command in [
+            "git commit --no-verify -m x",
+            "git commit -n -m x",
+            "git commit -an -m x",
+            "git -c core.hooksPath=/dev/null commit -m x",
+            "git config core.hooksPath /tmp/none",
+            "git config include.path ../x",
+            "HUSKY=0 git commit -m x",
+            "git push --no-verify",
+            "git merge --no-verify topic",
+        ] {
+            let v = bash(command);
+            assert_eq!((v.category, v.policy), (Category::HookBypass, Policy::Ask), "{command}");
+            assert_eq!(decide(&v, Profile::Permissive, false), Policy::Ask, "{command}: a permissive profile does not let it through");
+        }
+        assert_eq!(bash("git push -n origin").category, Category::ExternalSend, "-n is a dry run for push, not a bypass");
+        for command in ["git commit -m \"doc --no-verify\"", "git commit --amend --no-edit", "git commit -am \"x\"", "git status", "git log -n 5"] {
+            assert_ne!(bash(command).category, Category::HookBypass, "{command}");
+        }
+    }
+
+    #[test]
+    fn shell_writes_to_what_the_checks_run_on_are_asked_and_reads_are_not() {
+        for command in [
+            "sed -i s/a/b/ .github/workflows/ci.yml",
+            "sed -n 1p x && sed -i.bak s/a/b/ rustfmt.toml",
+            "echo x > .eslintrc.json",
+            "echo x >> web/tsconfig.json",
+            "tee .husky/pre-commit",
+            "cp x .git/hooks/pre-commit",
+            "mv a clippy.toml",
+            "echo x > '.claude/settings.local.json'",
+        ] {
+            let v = bash(command);
+            assert_eq!((v.category, v.policy), (Category::ToolingConfig, Policy::Ask), "{command}");
+            assert_eq!(decide(&v, Profile::Permissive, false), Policy::Ask, "{command}");
+        }
+        for command in ["cat tsconfig.json", "echo hi > out.txt", "echo x > tsconfig.json.bak", "sed -n 1,5p .eslintrc.json", "grep a .github/workflows/ci.yml", "ls .husky/", "cargo clippy"] {
+            assert_eq!(bash(command).category, Category::Shell, "{command}");
+        }
+    }
+
+    #[test]
+    fn edits_of_ci_hooks_and_lint_settings_are_asked_and_code_in_sensitive_directories_is_asked_less_firmly() {
+        for path in [".github/workflows/ci.yml", "/repo/.husky/pre-commit", "C:\\repo\\.git\\hooks\\pre-push", "web/tsconfig.base.json", ".eslintrc", "rustfmt.toml", ".claude/settings.local.json", "src/../.github/workflows/x.yml"] {
+            let v = edit(path);
+            assert_eq!((v.category, v.policy), (Category::ToolingConfig, Policy::Ask), "{path}");
+            assert_eq!(decide(&v, Profile::Permissive, false), Policy::Ask, "{path}");
+        }
+        for path in ["src/auth/login.rs", "app/payments/stripe.ts", "db/migrations/001.sql", "services/Billing/plan.go"] {
+            let v = edit(path);
+            assert_eq!((v.category, v.policy), (Category::SensitiveCode, Policy::Ask), "{path}");
+            assert_eq!(decide(&v, Profile::Balanced, false), Policy::Ask, "{path}");
+            assert_eq!(decide(&v, Profile::Permissive, false), Policy::Allow, "{path}: a permissive profile may allow it");
+        }
+        for path in ["src/author.rs", "pyproject.toml", "package.json", "tsconfig.json.bak", "docs/billing-notes.md", "src/oauth.rs", "src/main.rs"] {
+            assert_eq!(edit(path).category, Category::WorkspaceEdit, "{path}");
+        }
+        assert_eq!(edit(".env").category, Category::SecretFile, "a secrets file keeps its own category");
+    }
+
+    #[test]
+    fn a_call_that_cannot_be_read_is_asked_and_the_data_folder_stays_blocked() {
+        let hidden = bash("ls\u{202E}gnp.sh");
+        assert_eq!((hidden.category, hidden.policy), (Category::Unreadable, Policy::Ask));
+        assert_eq!(edit("src/a\u{200B}b.rs").category, Category::Unreadable);
+        assert_eq!(edit("src/a\u{200B}b.rs").policy, Policy::Ask);
+        let long = format!("echo {}", "a".repeat(MASK_LIMIT + 1));
+        let v = bash(&long);
+        assert_eq!((v.category, v.policy), (Category::Unreadable, Policy::Ask), "{v:?}");
+        assert_eq!(decide(&v, Profile::Permissive, false), Policy::Ask, "always asked");
+        // Words that make a pattern run out of its budget are asked too (as whatever the pattern that gave up stands for).
+        assert_eq!(bash(&format!("echo {}", "a ".repeat(10_001))).policy, Policy::Ask);
+        let data = format!("echo {} ~/.local/share/tenrec/workbench/x", "a ".repeat(10_001));
+        assert_eq!(bash(&data).policy, Policy::Block, "a rule that matches still decides first");
+        assert_eq!(bash("echo hello\n  done").category, Category::Shell, "a newline and a tab are ordinary");
     }
 
     #[test]
