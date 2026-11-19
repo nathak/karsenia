@@ -363,8 +363,12 @@ impl MemoryStore {
         let mut out = Vec::new();
         let mut bytes = 0;
         for mem in all {
-            if out.len() >= RECALL_COUNT || bytes + mem.text.len() + 3 > RECALL_BYTES {
+            if out.len() >= RECALL_COUNT {
                 break;
+            }
+            // A note that does not fit is skipped, not the end: a shorter one after it may still use the room (the order stays).
+            if bytes + mem.text.len() + 3 > RECALL_BYTES {
+                continue;
             }
             bytes += mem.text.len() + 3;
             out.push(mem);
@@ -764,6 +768,28 @@ mod tests {
         angle.cwd = Some("/angle".into());
         saved(store.add(angle));
         assert!(!recall_block(&store.recall("/angle")).unwrap().contains('<'));
+    }
+
+    #[test]
+    fn a_note_too_big_for_the_room_left_does_not_stop_shorter_ones_after_it() {
+        let (_dir, store) = store();
+        let mut first = new("small first note");
+        first.cwd = Some("/room".into());
+        saved(store.add(first));
+        // 300 characters is the most a note may have: seven of them are more than the byte limit holds.
+        for i in 0..7 {
+            let mut big = new(&format!("{i} {}", "plain words about the project ".repeat(9) + "and some more text here ok"));
+            big.cwd = Some("/room".into());
+            saved(store.add(big));
+        }
+        let mut last = new("small last note");
+        last.cwd = Some("/room".into());
+        saved(store.add(last));
+        let notes = store.recall("/room");
+        let texts: Vec<&str> = notes.iter().map(|m| m.text.as_str()).collect();
+        assert!(texts.contains(&"small first note") && texts.contains(&"small last note"), "both small notes are in: {texts:?}");
+        assert!(notes.iter().map(|m| m.text.len() + 3).sum::<usize>() <= RECALL_BYTES);
+        assert_eq!(notes.len(), 8, "the newest small note, six big ones, then the oldest small note: {texts:?}");
     }
 
     #[test]
