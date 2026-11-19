@@ -10,7 +10,7 @@ const T = {
     turn: '턴', calls: '호출', noChats: '열려 있는 채팅이 없습니다. 앱에서 채팅을 만들면 여기에 나타납니다.', noItems: '아직 이 채팅에 기록이 없습니다.', newer: '새 항목 ↓',
     auth: '이 주소의 토큰이 맞지 않습니다. 앱에서 라이브 보기를 다시 여세요.', noToken: '앱에서 라이브 보기를 열어 주세요 (토큰이 필요합니다).', gone: '채팅이 닫혔습니다', stopped: '서버가 종료되었습니다. 앱에서 다시 시작하세요.',
     detail: '상세', tool: '도구', category: '분류', risk: '위험도', guard: '가드', result: '결과', time: '시간', input: '입력', output: '출력', hidden: '(표시하지 않음)', none: '—',
-    derivedNote: '지금 설정으로 다시 계산한 값', theme: '테마', dark: '어둡게', light: '밝게', parent: '상위 호출', background: '백그라운드',
+    derivedNote: '지금 설정으로 다시 계산한 값', stalled: '결과 없음 30분+', alerts: { loop: '같은 호출이 {n}번 연속 반복됨: {tool}. 막혔을 수 있습니다.', scope: '이 채팅에서 파일 {n}개를 수정했습니다. 범위를 확인하세요.' }, theme: '테마', dark: '어둡게', light: '밝게', parent: '상위 호출', background: '백그라운드',
   },
   en: {
     title: 'Timeline', pause: 'Pause', resume: 'Resume', paused: 'paused', waiting: 'waiting', live: '● live', reconnecting: '◌ reconnecting', down: '✕ disconnected',
@@ -19,7 +19,7 @@ const T = {
     turn: 'Turn', calls: 'calls', noChats: 'No chat is open. A chat made in the app shows up here.', noItems: 'Nothing recorded for this chat yet.', newer: 'New items ↓',
     auth: 'The token of this address is wrong. Open the live view again from the app.', noToken: 'Open the live view from the app (a token is needed).', gone: 'the chat was closed', stopped: 'The server has stopped. Start it again in the app.',
     detail: 'Details', tool: 'Tool', category: 'Category', risk: 'Risk', guard: 'Guard', result: 'Result', time: 'Time', input: 'Input', output: 'Output', hidden: '(not shown)', none: '—',
-    derivedNote: 'recomputed with the settings as they are now', theme: 'Theme', dark: 'Dark', light: 'Light', parent: 'Parent call', background: 'background',
+    derivedNote: 'recomputed with the settings as they are now', stalled: 'no result for 30+ min', alerts: { loop: 'The same call ran {n} times in a row: {tool}. It may be stuck.', scope: 'This chat has edited {n} files. Check it is still within scope.' }, theme: 'Theme', dark: 'Dark', light: 'Light', parent: 'Parent call', background: 'background',
   },
 }
 
@@ -55,6 +55,7 @@ function start() {
   labels()
   if (!S.token) return fatal(tr().noToken)
   setInterval(renderStatus, 1000)
+  setInterval(markStalled, 30000)
   boot()
 }
 
@@ -130,7 +131,7 @@ function ingest(item) {
   if (S.ready) { schedulePaint(); if (!nearBottom()) { S.newCount += 1; renderNewer() } }
 }
 
-const turnOf = n => { let t = S.turns.get(n); if (!t) { t = { n, prompt: null, ts: 0, calls: [], notes: [], end: null, open: undefined }; S.turns.set(n, t) } return t }
+const turnOf = n => { let t = S.turns.get(n); if (!t) { t = { n, prompt: null, ts: 0, calls: [], notes: [], alerts: [], end: null, open: undefined }; S.turns.set(n, t) } return t }
 
 function apply(item) {
   const t = turnOf(item.turn); S.dirty.add(item.turn); S.lastTs = Math.max(S.lastTs, item.ts || 0)
@@ -142,6 +143,7 @@ function apply(item) {
     case 'ask_end': { const a = S.asks.get(item.request_id); S.asks.delete(item.request_id); const c = a && a.call && S.calls.get(a.call); if (c) { c.asking = false; if (item.outcome === 'denied') c.denied = true } break }
     case 'turn_end': { t.end = item; S.tokens.input += item.usage.input + item.usage.cache_read + item.usage.cache_create; S.tokens.output += item.usage.output; if (item.cost_usd) S.cost = item.cost_usd; if (item.context) S.ctx = item.context; break }
     case 'notice': t.notes.push(item); break
+    case 'alert': t.alerts.push(item); break
     default: break
   }
 }
@@ -180,6 +182,13 @@ function renderStatus() {
 }
 function ago(ms) { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? s + (S.lang === 'ko' ? '초 ' : 's ') + tr().ago : Math.round(s / 60) + (S.lang === 'ko' ? '분 ' : 'm ') + tr().ago }
 
+// A call turns stalled with no event to say so: its turn is painted again when it crosses the line.
+function markStalled() {
+  let any = false
+  for (const c of S.calls.values()) if (isStalled(c) && !c.stallShown) { c.stallShown = true; S.dirty.add(c.turn); any = true }
+  if (any) schedulePaint()
+}
+
 function setChats(list) { S.chats = Array.isArray(list) ? list : [] }
 async function refreshChats() { try { setChats(await api('/api/chats')) } catch { /* retried by the stream */ } renderTabs() }
 
@@ -217,6 +226,11 @@ function renderTiles() {
 
 function statusOf(c) { return c.status === 'running' && c.asking ? 'asking' : c.status }
 
+// A call that has had no result for this long and is not a background job: the tool may be stuck, or the chat was left. Judged here with
+// the clock (a replay of the log cannot say it), from the time of the call.
+const STALL_MS = 30 * 60 * 1000
+const isStalled = c => c.status === 'running' && !c.background && !c.asking && c.ts > 0 && Date.now() - c.ts > STALL_MS
+
 function callRow(c, maxMs) {
   const t = tr(); const st = statusOf(c)
   const row = h('div', 'call' + (S.sel === c.id ? ' sel' : '')); row.tabIndex = 0; row.setAttribute('role', 'button')
@@ -225,6 +239,7 @@ function callRow(c, maxMs) {
   if (c.risk !== 'low') tags.append(h('span', 'tag ' + c.risk, c.risk))
   if (c.guard && c.guard.policy !== 'allow') tags.append(h('span', 'tag ' + c.guard.policy, c.guard.policy + (c.guard.derived ? '*' : '')))
   if (c.background) tags.append(h('span', 'tag', t.background))
+  if (isStalled(c)) tags.append(h('span', 'tag stalled', t.stalled))
   row.append(tags)
   if (c.ms && maxMs) { const w = h('div', 'bar-w'); const i = h('i'); i.style.width = Math.max(1, Math.round(100 * c.ms / maxMs)) + '%'; w.append(i); row.append(w) }
   const pick = () => { S.sel = c.id; for (const n of document.querySelectorAll('.call.sel')) n.classList.remove('sel'); row.classList.add('sel'); renderDetail() }
@@ -248,6 +263,7 @@ function renderTurn(t, last) {
   for (const c of t.calls) if (c.parent) { if (!children.has(c.parent)) children.set(c.parent, []); children.get(c.parent).push(c) }
   const place = (c, into) => { into.append(callRow(c, maxMs)); const kids = children.get(c.id); if (kids) { const box = h('div', 'child'); for (const k of kids) place(k, box); into.append(box) } }
   for (const c of t.calls) if (!c.parent || !S.calls.has(c.parent)) place(c, wrap)
+  for (const a of t.alerts) wrap.append(h('div', 'note warn', (tt.alerts[a.kind] || a.kind).replace('{n}', a.n).replace('{tool}', a.tool || '')))
   for (const n of t.notes) wrap.append(h('div', 'note err', n.text))
   d.append(wrap)
   return d

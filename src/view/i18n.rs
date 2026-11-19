@@ -86,6 +86,8 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("ctx_high", "컨텍스트가 80%를 넘었습니다. 작업 단계 사이라면 지금이 /compact 하기 좋은 때입니다.", "The context is over 80% full. If you are between two phases of the work, now is a good moment for /compact."),
     ("ctx_crit", "컨텍스트가 90%를 넘었습니다. 곧 자동으로 압축되니 지금 /compact 를 권합니다.", "The context is over 90% full. It will be compacted automatically soon: /compact now is better."),
     ("cache_hit", "캐시", "cache"),
+    ("watch_loop", "같은 호출이 {n}번 연속 반복되었습니다: {tool}. 막혔을 수 있으니 확인해 보세요.", "The same call has run {n} times in a row: {tool}. It may be stuck."),
+    ("watch_scope", "이 채팅에서 파일 {n}개를 수정했습니다. 범위를 벗어나지 않았는지 확인해 보세요.", "This chat has edited {n} files. Check that it is still within what you asked."),
     ("sk_given", "이 대화에 준 스킬", "skills given to this chat"),
     ("images", "[이미지 {n}개]", "[{n} images]"),
     ("input", "입력", "input"),

@@ -13,6 +13,7 @@ use super::i18n::{fill, tr, Lang};
 use super::markdown::{blocks, Block};
 use super::team::{self, Seen, TeamLine, TeamSeen};
 use crate::schedule::{Clock, SystemClock};
+use crate::watch::{Alert, Watch};
 
 /// The image types the desktop can draw as a thumbnail (the rest is told in the message text).
 pub const THUMB_TYPES: [&str; 2] = ["image/png", "image/jpeg"];
@@ -223,6 +224,8 @@ pub struct Transcript {
     expanded: std::collections::HashSet<String>,
     /// The highest context level already said in the transcript since the chat was last below it (so each is said once).
     ctx_warned: Pressure,
+    /// Signs that the chat has lost its way (the same call again and again, a wide spread of edits), from its own tool calls.
+    watch: Watch,
 }
 
 const MAX_RESULT: usize = 20_000;
@@ -504,7 +507,7 @@ fn local(ms: u64) -> Option<(String, String)> {
 
 impl Transcript {
     pub fn new(lang: Lang) -> Self {
-        Self { lang, nodes: Vec::new(), tools: HashMap::new(), live_text: None, live_think: None, think_ms: None, asst_meta: false, day: String::new(), ts: 0, team_cmd: false, cmd_status: false, team_cand: None, head: Head::default(), pending: Vec::new(), replaying: true, first_text: None, expanded: Default::default(), ctx_warned: Pressure::Ok }
+        Self { lang, nodes: Vec::new(), tools: HashMap::new(), live_text: None, live_think: None, think_ms: None, asst_meta: false, day: String::new(), ts: 0, team_cmd: false, cmd_status: false, team_cand: None, head: Head::default(), pending: Vec::new(), replaying: true, first_text: None, expanded: Default::default(), ctx_warned: Pressure::Ok, watch: Watch::new() }
     }
 
     fn t(&self, key: &str) -> String {
@@ -864,6 +867,7 @@ impl Transcript {
         let id = s(block, "id").to_owned();
         let name = s(block, "name").to_owned();
         let input = block.get("input").cloned().unwrap_or(Value::Null);
+        let alerts = self.watch.call(&id, &name, &input, parent.is_some());
         let (head, extra) = tool_head(&name, &input);
         let (diff, add, del) = edit_diff(&name, &input);
         let checklist = checklist(&name, &input);
@@ -897,6 +901,13 @@ impl Transcript {
         }
         let i = self.push(Item::Tool(tool), parent);
         self.tools.insert(id, i);
+        for alert in alerts {
+            let text = match alert {
+                Alert::Loop { tool, times } => fill(&self.t("watch_loop"), &[("n", times.to_string()), ("tool", tool)]),
+                Alert::Scope { files } => fill(&self.t("watch_scope"), &[("n", files.to_string())]),
+            };
+            self.note(text, "note-warn");
+        }
     }
 
     fn tool_result(&mut self, block: &Value) {
@@ -1507,6 +1518,26 @@ mod tests {
     }
 
     #[test]
+    fn the_same_call_again_and_again_is_said_once_in_the_transcript_and_a_card_sent_twice_counts_once() {
+        let call = |t: &mut Transcript, id: &str| {
+            t.apply("claude", &json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {"command": "cargo test"}}]}}), 0);
+        };
+        let mut t = chat();
+        for n in 0..4 {
+            call(&mut t, &format!("c{n}"));
+            call(&mut t, &format!("c{n}"));
+        }
+        assert_eq!(warnings(&t), 0, "four different calls, each sent twice");
+        call(&mut t, "c4");
+        assert_eq!(warnings(&t), 1);
+        let text = t.rows().iter().find(|r| r.kind == "note-warn").map(|r| r.text.clone()).unwrap_or_default();
+        assert!(text.contains("5") && text.contains("Bash"), "{text}");
+        call(&mut t, "c5");
+        call(&mut t, "c6");
+        assert_eq!(warnings(&t), 1, "not said again while it goes on");
+    }
+
+    #[test]
     fn counts_are_written_short() {
         assert_eq!(short_count(999), "999");
         assert_eq!(short_count(1000), "1k");
@@ -1562,7 +1593,8 @@ mod steps_tests {
     fn five_bash_and_a_read() -> Transcript {
         let mut t = chat();
         for i in 0..5 {
-            step(&mut t, &format!("b{i}"), "Bash", "ls");
+            // Different commands: five identical ones in a row would be said as a loop.
+            step(&mut t, &format!("b{i}"), "Bash", &format!("ls {i}"));
             result(&mut t, &format!("b{i}"), "ok", false);
         }
         step(&mut t, "r1", "Read", "x");
@@ -1587,7 +1619,7 @@ mod steps_tests {
     fn opening_the_steps_row_lists_its_tools_without_empty_thinking_and_closes_again() {
         let mut t = chat();
         for i in 0..5 {
-            step(&mut t, &format!("b{i}"), "Bash", "ls");
+            step(&mut t, &format!("b{i}"), "Bash", &format!("ls {i}"));
             result(&mut t, &format!("b{i}"), "ok", false);
         }
         // One thought with text stays in the list when it is opened.

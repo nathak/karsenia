@@ -65,6 +65,7 @@ main { padding: 12px 14px 40px; display: grid; gap: 12px; max-width: 1280px; mar
 .call .dur { text-align: right; font-family: var(--mono); color: var(--muted); font-size: 12px; }
 .call .tags { display: flex; gap: 4px; justify-content: flex-end; }
 .tag { border-radius: 4px; padding: 0 5px; font-size: 10px; border: 1px solid var(--line); color: var(--text2); }
+.tag.stalled { color: var(--warn); border-color: var(--warn); }
 .tag.high { color: var(--err); border-color: var(--err); } .tag.medium { color: var(--warn); border-color: var(--warn); }
 .tag.ask { color: var(--warn); border-color: var(--warn); } .tag.block { color: var(--err); border-color: var(--err); }
 .child { margin-left: 22px; border-left: 2px solid var(--line); }
@@ -72,6 +73,7 @@ main { padding: 12px 14px 40px; display: grid; gap: 12px; max-width: 1280px; mar
 .bar-w > i { display: block; height: 100%; background: var(--line); border-radius: 2px; }
 .note { color: var(--muted); font-size: 12px; padding: 2px 10px; font-family: var(--mono); }
 .note.err { color: var(--err); }
+.note.warn { color: var(--warn); }
 .detail { border: 1px solid var(--line); border-radius: 10px; background: var(--low); padding: 10px 12px; }
 .detail h3 { margin: 0 0 6px; font-size: 13px; }
 .detail dl { display: grid; grid-template-columns: 110px 1fr; gap: 2px 10px; margin: 0 0 8px; }

@@ -46,6 +46,8 @@ pub enum Body {
     TurnEnd(TurnEnd),
     State { state: String },
     Notice { text: String },
+    /// The chat looks lost: `loop` (the same call `n` times in a row, `tool` is its tool) or `scope` (`n` different files edited).
+    Alert { kind: &'static str, tool: Option<String>, n: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

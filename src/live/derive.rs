@@ -7,6 +7,7 @@ use serde_json::Value;
 use super::feed::{Body, Call, Context, GuardMark, Item, ModelUse, Prompts, Status, TurnEnd, Usage, IO, NOTICE, PROMPT_FULL, PROMPT_SHORT, SUMMARY};
 use super::mask::{mask, mask_text};
 use crate::session::Envelope;
+use crate::watch::{Alert, Watch};
 use crate::workbench::risk::{classify, summarize, Category, Risk};
 
 /// What the guard would say about a call (the server gives the chat's own settings; a test gives a fixed answer).
@@ -31,11 +32,12 @@ pub struct Deriver {
     asks: HashMap<String, Option<String>>,
     declined: HashSet<String>,
     ctx_used: Option<u64>,
+    watch: Watch,
 }
 
 impl Deriver {
     pub fn new(prompts: Prompts, guard: Option<GuardFn>) -> Self {
-        Self { prompts, guard, turn: 0, calls: HashMap::new(), asks: HashMap::new(), declined: HashSet::new(), ctx_used: None }
+        Self { prompts, guard, turn: 0, calls: HashMap::new(), asks: HashMap::new(), declined: HashSet::new(), ctx_used: None, watch: Watch::new() }
     }
 
     /// The questions that are still open (asked and not yet answered).
@@ -112,6 +114,13 @@ impl Deriver {
                 guard: self.guard.as_ref().and_then(|g| g(name, &input)),
                 background,
             }));
+            // Said right after the call that made it worth saying: the same on a replay as when following.
+            for alert in self.watch.call(id, name, &input, parent.is_some()) {
+                out.push(match alert {
+                    Alert::Loop { tool, times } => Body::Alert { kind: "loop", tool: Some(tool), n: times },
+                    Alert::Scope { files } => Body::Alert { kind: "scope", tool: None, n: files as u32 },
+                });
+            }
         }
         out
     }
@@ -324,6 +333,28 @@ mod tests {
         assert_eq!(t.usage, Usage { input: 12, cache_read: 800, cache_create: 30, output: 55 });
         assert_eq!(t.context, Some(Context { used: 105, window: 200000 }));
         assert_eq!(t.models, [ModelUse { model: "claude-sonnet-4-5".into(), input: 12, output: 55 }]);
+    }
+
+    #[test]
+    fn a_call_repeated_five_times_is_alerted_once_after_the_fifth_and_a_replay_says_the_same() {
+        let events = || {
+            (0..7)
+                .map(|i| env(i + 1, 100 + i, "claude", assistant(tool_use(&format!("t{i}"), "Bash", json!({"command": "cargo test"})), None)))
+                .collect::<Vec<_>>()
+        };
+        let mut live = Deriver::new(Prompts::Full, None);
+        let mut items = Vec::new();
+        for e in events() {
+            items.extend(live.push(&e));
+        }
+        let alerts: Vec<usize> = items.iter().enumerate().filter(|(_, i)| matches!(i.body, Body::Alert { .. })).map(|(at, _)| at).collect();
+        // Seven calls and one alert, which stands right after the fifth call (the sixth item, as every call is one item before it).
+        assert_eq!(alerts, [5], "{items:?}");
+        assert!(matches!(&items[5].body, Body::Alert { kind: "loop", tool: Some(t), n: 5 } if t == "Bash"));
+        assert!(matches!(&items[4].body, Body::Call(c) if c.id == "t4"));
+        let mut replay = Deriver::new(Prompts::Full, None);
+        let again: Vec<Item> = events().iter().flat_map(|e| replay.push(e)).collect();
+        assert_eq!(items, again);
     }
 
     #[test]
