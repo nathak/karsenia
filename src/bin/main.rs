@@ -42,6 +42,12 @@ async fn main() {
         let rest: Vec<String> = std::env::args_os().skip(2).map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(tenrec::workbench::hook::run(&rest));
     }
+    // `tenrec stop-gate --data <folder> --sid <chat>`: the Stop hook of a chat's claude (holds the first stop while a done condition is unmet,
+    // only when the person turned that on), not the app itself.
+    if std::env::args_os().nth(1).is_some_and(|a| a == "stop-gate") {
+        let rest: Vec<String> = std::env::args_os().skip(2).map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(tenrec::workbench::hook::run_stop(&rest));
+    }
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
     let args = match parse() {
         Ok(args) => args,

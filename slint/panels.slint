@@ -181,6 +181,10 @@ export global Team {
     callback wb-paused-set(bool);
     in property <string> wb-goal;
     in property <bool> wb-locked;
+    // What could be better in how the done conditions are written (one line each, empty when nothing), and whether a stop is held while one is unmet.
+    in property <string> wb-lint;
+    in property <bool> wb-stop-gate;
+    callback wb-stop-gate-set(bool);
     in property <[WbItem]> wb-c;
     in property <[WbItem]> wb-n;
     in property <[WbItem]> wb-d;

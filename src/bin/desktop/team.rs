@@ -303,7 +303,7 @@ pub fn wb_open(ui: &AppWindow, app: &Arc<App>) {
     t.set_wb_native(app.registry.settings().get().workbench_native);
     let sid = app.current.lock().expect("current").sid.clone();
     match sid.as_deref().map(|sid| app.registry.workbench_get(sid)) {
-        Some(Ok(wb)) => wb_show(ui, &wb),
+        Some(Ok(wb)) => wb_show(ui, app.lang, &wb),
         Some(Err(key)) => {
             WB.with(|w| *w.borrow_mut() = None);
             t.set_wb_ready(false);
@@ -316,7 +316,7 @@ pub fn wb_open(ui: &AppWindow, app: &Arc<App>) {
     }
 }
 
-fn wb_show(ui: &AppWindow, wb: &Workbench) {
+fn wb_show(ui: &AppWindow, lang: Lang, wb: &Workbench) {
     WB.with(|w| *w.borrow_mut() = Some(wb.clone()));
     let t = ui.global::<Team>();
     t.set_wb_ready(true);
@@ -330,6 +330,8 @@ fn wb_show(ui: &AppWindow, wb: &Workbench) {
     }
     .into());
     t.set_wb_paused(wb.paused);
+    t.set_wb_stop_gate(wb.stop_gate);
+    t.set_wb_lint(lint_text(wb, lang).into());
     let model = |items: Vec<WbItem>| ModelRc::from(std::rc::Rc::new(VecModel::from(items)));
     t.set_wb_c(model(wb.task.constraints.iter().map(|c| WbItem { id: c.id as i32, text: c.text.clone().into(), tag: if c.hard { "H" } else { "S" }.into(), on: c.active }).collect()));
     t.set_wb_n(model(wb.task.non_goals.iter().enumerate().map(|(i, n)| WbItem { id: i as i32, text: n.clone().into(), tag: SharedString::new(), on: true }).collect()));
@@ -352,12 +354,27 @@ fn wb_show(ui: &AppWindow, wb: &Workbench) {
     ));
 }
 
+/// One line for each way the done conditions could be written better (see `workbench::lint_done`); empty when there is nothing to say.
+fn lint_text(wb: &Workbench, lang: Lang) -> String {
+    tenrec::workbench::lint_done(&wb.task)
+        .iter()
+        .map(|lint| {
+            let message = tr(lang, lint.key());
+            match lint.about().and_then(|id| wb.task.done.iter().find(|d| d.id == id)) {
+                Some(done) => format!("• {}: {message}", done.text.chars().take(28).collect::<String>()),
+                None => format!("• {message}"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Applies one change to the open chat's workbench; what is refused is said.
 fn wb_do(app: &Arc<App>, op: Op) {
     let Some(sid) = app.current.lock().expect("current").sid.clone() else { return };
     let Some(ui) = app.weak.upgrade() else { return };
     match app.registry.workbench_apply(&sid, op) {
-        Ok(wb) => wb_show(&ui, &wb),
+        Ok(wb) => wb_show(&ui, app.lang, &wb),
         Err(key) => crate::toast(&ui, tr(app.lang, key)),
     }
 }
@@ -620,6 +637,8 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
     team.on_wb_paused_set(move |paused| wb_do(&a, Op::SetPaused { paused }));
     let a = app.clone();
     team.on_wb_lock(move |on| wb_do(&a, if on { Op::Lock } else { Op::Unlock }));
+    let a = app.clone();
+    team.on_wb_stop_gate_set(move |on| wb_do(&a, Op::SetStopGate { on }));
     let (a, weak) = (app.clone(), ui.as_weak());
     team.on_wb_new(move || {
         let Some(ui) = weak.upgrade() else { return };

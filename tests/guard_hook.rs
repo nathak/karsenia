@@ -159,3 +159,38 @@ fn input_over_the_limit_is_refused() {
     let big = json!({"cwd": s.dir.path().join("project"), "tool_name": "Bash", "tool_input": {"command": "a".repeat(2 * 1024 * 1024)}}).to_string();
     assert_eq!(s.run(&big).0, 2);
 }
+
+/// `tenrec stop-gate`: the Stop hook. Run as Claude Code runs it; it must never fail a chat, and holds a stop only when asked to.
+fn stop_gate(data: &std::path::Path, sid: &str, input: &str) -> (i32, Option<Value>) {
+    let mut child = Command::new(TENREC).args(["stop-gate", "--data", data.to_str().unwrap(), "--sid", sid]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
+    let out = child.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (out.status.code().unwrap(), (!text.is_empty()).then(|| serde_json::from_str(&text).unwrap()))
+}
+
+#[test]
+fn the_stop_hook_holds_one_stop_while_a_condition_is_unmet_and_otherwise_says_nothing_and_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let mut wb = Workbench::default();
+    wb.apply(Op::SetGoal { text: "ship the change".into() }).unwrap();
+    wb.apply(Op::AddDone { text: "cargo test passes with no failures".into(), link: Some("test".into()) }).unwrap();
+    wb.apply(Op::Lock).unwrap();
+    store::save(&data, "chat1", &wb).unwrap();
+    let stop = json!({"hook_event_name": "Stop", "stop_hook_active": false}).to_string();
+    assert_eq!(stop_gate(&data, "chat1", &stop), (0, None), "the gate is off until the person turns it on");
+    wb.apply(Op::SetStopGate { on: true }).unwrap();
+    store::save(&data, "chat1", &wb).unwrap();
+    let (code, held) = stop_gate(&data, "chat1", &stop);
+    assert_eq!(code, 0);
+    let held = held.expect("held once");
+    assert_eq!(held["decision"], "block");
+    assert!(held["reason"].as_str().unwrap().contains("cargo test passes"));
+    let again = json!({"hook_event_name": "Stop", "stop_hook_active": true}).to_string();
+    assert_eq!(stop_gate(&data, "chat1", &again), (0, None), "the stop after a hold goes through");
+    // Whatever is wrong, the chat is let go and nothing fails.
+    assert_eq!(stop_gate(&data, "no-such-chat", &stop), (0, None));
+    assert_eq!(stop_gate(&data, "chat1", "not json"), (0, None));
+    assert_eq!(stop_gate(&dir.path().join("missing"), "chat1", &stop), (0, None));
+}

@@ -822,7 +822,9 @@ impl Actor {
                     return Err(message);
                 }
             };
-            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.cli_name(), plugins_off: self.workbench_native(), guard_hook };
+            // The Stop hook goes where the guard hook goes (it does nothing unless the person turned the gate on in the workbench).
+            let stop_hook = if guard_hook.is_some() { self.mcp.as_ref().and_then(|gate| crate::workbench::stop_command(&gate.exe, &self.dir, &self.meta.sid).ok()) } else { None };
+            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.cli_name(), plugins_off: self.workbench_native(), guard_hook, stop_hook };
             match ClaudeProcess::spawn(&opts) {
                 Ok((process, rx)) => {
                     self.process = Some(process);

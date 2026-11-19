@@ -197,3 +197,21 @@ pub fn run(args: &[String]) -> i32 {
         }
     }
 }
+
+/// The Stop hook of a chat's claude: `tenrec stop-gate --data <folder> --sid <chat>`. It holds the stop once when the person asked for
+/// that and a done condition is unmet (see `stop_decision`). It can only ever let the chat go on: whatever fails (no data folder, an
+/// unreadable file, bad input) it prints nothing and exits 0, because a Stop hook that errors must not keep a chat from ending its turn.
+pub fn run_stop(args: &[String]) -> i32 {
+    let value_of = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
+    let (Some(data), Some(sid)) = (value_of("--data"), value_of("--sid")) else { return 0 };
+    let mut input = String::new();
+    if std::io::stdin().take(MAX_INPUT + 1).read_to_string(&mut input).is_err() || input.len() as u64 > MAX_INPUT {
+        return 0;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(&input) else { return 0 };
+    let Ok(wb) = store::load(Path::new(&data), &sid) else { return 0 };
+    if let Some(reason) = super::stop_decision(&value, &wb) {
+        println!("{}", serde_json::json!({"decision": "block", "reason": reason}));
+    }
+    0
+}

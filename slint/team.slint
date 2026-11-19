@@ -274,6 +274,12 @@ export component TeamPage inherits Rectangle {
                             Text { horizontal-stretch: 1; text: it.text + (it.tag != "" ? "  [" + it.tag + "]" : ""); color: it.on ? Theme.ok : Theme.on-surface; font-size: 12px; wrap: word-wrap; vertical-alignment: center; }
                             Btn { text: "×"; height: 24px; danger: true; enabled: !Team.wb-locked; clicked => { Team.wb-remove("d", it.id); } }
                         }
+                        if Team.wb-lint != "": Text { text: Team.wb-lint; color: Theme.primary-soft; font-size: 11px; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Btn { text: (Team.wb-stop-gate ? "☑ " : "☐ ") + T.tr("wb_stop_gate"); height: 28px; clicked => { Team.wb-stop-gate-set(!Team.wb-stop-gate); } }
+                            Text { horizontal-stretch: 1; text: T.tr("wb_stop_gate_hint"); color: Theme.outline; font-size: 11px; wrap: word-wrap; vertical-alignment: center; }
+                        }
                         HorizontalLayout {
                             spacing: 8px;
                             LineEdit { horizontal-stretch: 1; text <=> Team.wb-in-d; placeholder-text: T.tr("wb_d_ph"); enabled: !Team.wb-locked; accepted(t) => { Team.wb-add("d", t, Team.wb-in-link); } }

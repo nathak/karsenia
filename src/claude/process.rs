@@ -47,6 +47,8 @@ pub struct SpawnOpts {
     pub plugins_off: bool,
     /// The command of the PreToolUse hook that runs this app's guard (`<exe> guard --data <folder> --sid <chat>`), when it is on.
     pub guard_hook: Option<String>,
+    /// The Stop hook of the same workbench (it reads the chat's file when it runs, so turning the gate on needs no restart).
+    pub stop_hook: Option<String>,
 }
 
 #[derive(Debug)]
@@ -113,7 +115,11 @@ pub fn args(opts: &SpawnOpts) -> Vec<String> {
     if let Some(command) = &opts.guard_hook {
         // A project's own `disableAllHooks` must not switch the guard off.
         settings.insert("disableAllHooks".into(), serde_json::Value::Bool(false));
-        settings.insert("hooks".into(), serde_json::json!({"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": command, "timeout": 10}]}]}));
+        let mut hooks = serde_json::json!({"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": command, "timeout": 10}]}]});
+        if let Some(stop) = &opts.stop_hook {
+            hooks["Stop"] = serde_json::json!([{"hooks": [{"type": "command", "command": stop, "timeout": 10}]}]);
+        }
+        settings.insert("hooks".into(), hooks);
     }
     if !settings.is_empty() {
         args.extend(["--settings".to_owned(), serde_json::Value::Object(settings).to_string()]);
@@ -321,7 +327,7 @@ mod tests {
 
     #[test]
     fn one_settings_value_carries_the_provider_address_and_the_plugins_that_are_off() {
-        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None };
+        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None };
         assert!(args(&base).iter().all(|a| a != "--settings"));
         let off = args(&SpawnOpts { plugins_off: true, ..base.clone() });
         let value: serde_json::Value = serde_json::from_str(&off[off.iter().position(|a| a == "--settings").unwrap() + 1]).unwrap();
@@ -336,7 +342,7 @@ mod tests {
 
     #[test]
     fn the_arguments_include_the_permission_prompt_tool_and_resume() {
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()), env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()), env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
         assert!(a.windows(2).any(|w| w == ["--model", "haiku"]));
@@ -351,7 +357,7 @@ mod tests {
     #[test]
     fn a_provider_chat_pins_its_address_and_skips_project_settings_and_no_secret_is_in_the_arguments() {
         let env = EnvPlan { set: vec![("ANTHROPIC_AUTH_TOKEN".into(), "tok-secret-xyz".into())], remove: vec![] };
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env, pinned_url: Some("https://gw.example.com/x".into()), container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env, pinned_url: Some("https://gw.example.com/x".into()), container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--setting-sources", "user"]));
         let settings = a.windows(2).find(|w| w[0] == "--settings").map(|w| w[1].clone()).unwrap();
@@ -372,7 +378,7 @@ mod tests {
 
     #[test]
     fn a_name_a_person_gave_is_passed_as_the_clis_own_session_name() {
-        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None, plugins_off: false, guard_hook: None };
+        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None, plugins_off: false, guard_hook: None, stop_hook: None };
         assert!(!args(&base).iter().any(|a| a == "--name"));
         assert!(args(&SpawnOpts { name: Some(String::new()), ..base.clone() }).iter().all(|a| a != "--name"), "a blank name is none");
         assert!(args(&SpawnOpts { name: Some("내 작업".into()), ..base }).windows(2).any(|w| w == ["--name", "내 작업"]));
@@ -380,12 +386,31 @@ mod tests {
 
     #[test]
     fn a_chosen_permission_mode_is_passed_and_the_default_adds_nothing() {
-        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None, plugins_off: false, guard_hook: None };
+        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None, plugins_off: false, guard_hook: None, stop_hook: None };
         assert!(!args(&base).iter().any(|x| x == "--permission-mode" || x == "--dangerously-skip-permissions"), "a chat that never chose has the arguments it always had");
         let accept = args(&SpawnOpts { permission_mode: PermMode::AcceptEdits, ..base.clone() });
         assert!(accept.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
         let bypass = args(&SpawnOpts { permission_mode: PermMode::Bypass, ..base });
         assert!(bypass.windows(2).any(|w| w == ["--permission-mode", "bypassPermissions"]));
         assert!(!bypass.iter().any(|x| x == "--dangerously-skip-permissions" || x == "--allow-dangerously-skip-permissions"), "one way of saying it, and no mid-session switch is enabled");
+    }
+
+    #[test]
+    fn the_stop_hook_is_set_beside_the_guard_hook_only_when_there_is_one() {
+        let mut opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: Some("guard-cmd".into()), stop_hook: Some("stop-cmd || exit 0".into()) };
+        let settings = |opts: &SpawnOpts| -> serde_json::Value {
+            let args = args(opts);
+            let at = args.iter().position(|a| a == "--settings").expect("settings given");
+            serde_json::from_str(&args[at + 1]).unwrap()
+        };
+        let both = settings(&opts);
+        assert_eq!(both["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "guard-cmd");
+        assert_eq!(both["hooks"]["Stop"][0]["hooks"][0]["command"], "stop-cmd || exit 0");
+        assert_eq!(both["disableAllHooks"], false);
+        opts.stop_hook = None;
+        assert!(settings(&opts)["hooks"].get("Stop").is_none());
+        opts.guard_hook = None;
+        opts.stop_hook = Some("stop-cmd".into());
+        assert!(!args(&opts).iter().any(|a| a == "--settings"), "a Stop hook alone is not set");
     }
 }
