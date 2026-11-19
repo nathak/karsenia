@@ -301,6 +301,43 @@ The **Files** tab lists the open chat's project folder (a folder at a time, only
 - **Unsaved edits are not lost quietly.** Opening another file, another chat (also from a search hit or a note), a new chat or the chat view asks first, and is refused while a save is running; a save sent while the connection is down fails at once instead of waiting; typing is paused while a file is being fetched.
 - **Contents are not kept.** The text goes only to the page that asked: not to other pages, the event log, the index, the memory, the data folder or the debug drawer (the tests look for it in the other pages and the data folder, and the browser test in the debug drawer). Files that may hold secrets (`.env*`, `*.pem`, `*.key`, `id_rsa*`, …) are shown, marked, and opened only by a click.
 
+## Live view (a web page of what the chats do)
+
+The **Team** page of the desktop app has a *Live view* card (`tenrec --live` or `--live-port N` starts the same server from the web binary).
+Start opens a small web server of its own on `127.0.0.1` (port 4317, or the next free one) and the page shows, as it happens, every open
+chat as a tab: the turns with their prompts, each tool call with its risk, what the guard says about it, how long it took and how it ended
+(`ok`, `error`, `blocked`, `declined`, `started`), sub-agent calls under the call that started them (an exact link), the questions that wait
+for you, the context gauge, tokens and cost, six tiles (calls a minute, latency p50 and p95, blocks and errors, open asks), a detail panel
+with the masked input and result of a call, pause (`p`), Korean/English and a light/dark switch. It is the native counterpart of the
+plug-in's `/swb live` (which does not run in a chat whose own workbench is on: the plug-in is off there).
+
+- **Read only, and its own server.** It is not the app's server: it has no route to a file, to the data folder or to anything that sends a
+  message or answers a question (answer in the app). Every method but GET is 405; any path but the page's four files and three `/api` calls is 404.
+- **Who may ask.** The Host must be its own address (a page on another name pointed at it is refused), a request from another site is refused,
+  and `/api` wants the run's token in an `Authorization` header (a token in the address is ignored). The address carries the token in the
+  fragment, which is never sent over HTTP; the page moves it out of the address bar at once. No CORS header is ever set; a content
+  security policy allows only the page's own files.
+- **What leaves the app.** Texts are masked on the server before they are sent (key and token formats, URL credentials, private keys,
+  named secrets; the same function the guard uses for its own records), cut to 2000 characters (a summary to 120), and the input and result of a
+  call on a secret file are not sent at all. "Cut prompts short" (a switch on the card, for pages opened after it is set) keeps 120 characters
+  of a prompt and sends nothing of a sub-agent's brief or answer. The masking is a pattern list: a bare secret with no name or known form can
+  get through, and the page shows prompts and commands to **anyone who has the address on this computer**: do not share it. The address is
+  handed to the system's opener as an argument when you press *Open in browser* (other users of the same computer could see it in a process
+  list for that moment); *Copy address* avoids that.
+- **Where the token can be seen.** In the address it is in the fragment, which is not sent over HTTP, but a browser may keep the address in its
+  history or address-bar suggestions before the page moves it out; the server lives only as long as the app and the token is new at every start.
+  The page keeps the token in the tab's session storage (gone when the tab closes). *Open in browser* hands the address to the system's opener as an
+  argument, so on a computer shared with other users (Linux: `/proc/<pid>/cmdline`) it can be read for as long as that process runs: use
+  *Copy address* there. 127.0.0.1 is open to every user of the computer, so the token is the only barrier between them.
+- **Kept nowhere.** The feed is made from the chat's events in memory and dropped when the page goes. Nothing is written to the disk.
+- **Guard marks are recomputed**, and only by the profile, the pause switch and the project's rule file (not by the check that stops a call from naming the app's data folder).
+  Details: The app's guard hook leaves no record, so a call's guard mark (`ask*`, with the profile) is what the guard
+  would say by the chat's settings as they are when the page connects (marked with `*`); that a call was blocked or asked is taken from what the
+  chat did (the guard's own refusal text, the permission request), not from the recomputation.
+- **Not in this version** (the plug-in's live view has them): the flow picture, agent statistics and trees, background-task list, Intent and
+  Evidence tabs, search words (`tool:Bash`, `is:fail`), the import-graph Files tab, a view of sessions that run outside this app, and
+  Codex, loop and team-mode marks (there is nothing native to show for them).
+
 ## Chats in their own git worktree
 
 The new-chat form has **"격리된 worktree에서 시작"** (start in an isolated worktree). The chat's `claude` then works in a worktree of the project on a new branch `tenrec/<chat id>`, made from the project's current commit, so two chats (or you and a chat) do not edit the same files. The idea comes from reading how other tools isolate agent work; the code is this project's own.

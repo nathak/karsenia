@@ -83,6 +83,17 @@ fn flat_row(block: &Block, key: String, depth: i32) -> Row {
     }
 }
 
+/// The last `max` characters of a text, starting at a line (the first whole line after the cut), and how many characters were left out.
+pub fn tail_chars(text: &str, max: usize) -> (&str, usize) {
+    let total = text.chars().count();
+    if total <= max {
+        return (text, 0);
+    }
+    let cut = text.char_indices().nth(total - max).map_or(text.len(), |(at, _)| at);
+    let start = text[cut..].find('\n').map_or(cut, |n| cut + n + 1);
+    (&text[start..], text[..start].chars().count())
+}
+
 /// A leading front matter block (`---` … `---`, as markdown files of notes and sites have) and the text after it.
 fn split_front_matter(src: &str) -> (Option<&str>, &str) {
     let mut lines = src.split_inclusive('\n');
@@ -916,6 +927,60 @@ impl Transcript {
         out
     }
 
+    /// The conversation as text to copy: the words as they were written (a message's markdown as it is, a code block whole), one line for
+    /// each tool call, no thinking, no sub-agent's own calls (its card has a line), and the same whatever is open or folded on screen.
+    pub fn plain_text(&self) -> String {
+        self.plain_range(0..self.nodes.len(), true)
+    }
+
+    /// One message as text: the user's or the answer's that `key` (the key of its header row, `n<index>`) belongs to, up to the next one.
+    pub fn message_text(&self, key: &str) -> Option<String> {
+        let at: usize = key.strip_prefix('n')?.parse().ok()?;
+        if !matches!(self.nodes.get(at)?.item, Item::UserMeta(_) | Item::AsstMeta { .. }) {
+            return None;
+        }
+        let end = (at + 1..self.nodes.len()).find(|&i| self.nodes[i].parent.is_none() && matches!(self.nodes[i].item, Item::UserMeta(_) | Item::AsstMeta { .. } | Item::Day(_))).unwrap_or(self.nodes.len());
+        let text = self.plain_range(at + 1..end, false);
+        (!text.is_empty()).then_some(text)
+    }
+
+    fn plain_range(&self, range: std::ops::Range<usize>, headers: bool) -> String {
+        let mut out = String::new();
+        let mut prev_tool = false;
+        for i in range {
+            let node = &self.nodes[i];
+            if node.parent.as_deref().is_some_and(|p| self.tools.contains_key(p)) {
+                continue;
+            }
+            let (block, tool) = match &node.item {
+                Item::Day(text) if headers => (format!("── {text} ──"), false),
+                Item::UserMeta(time) if headers => (format!("── {} · {time} ──", self.t("you")), false),
+                Item::AsstMeta { who, time } if headers => (format!("── {who} · {time} ──"), false),
+                Item::User { text, images } => {
+                    let n = images.as_ref().map_or(0, |s| s.list.len());
+                    let note = if n > 0 { fill(&self.t("plain_images"), &[("n", n.to_string())]) } else { String::new() };
+                    (format!("{}\n{}", text.trim_end(), note).trim().to_owned(), false)
+                }
+                Item::Text { src, .. } => (src.trim().to_owned(), false),
+                Item::Tool(tool) => {
+                    let short = tool.name.rsplit("__").next().unwrap_or(&tool.name);
+                    (format!("[{short}] {}", tool.head.split_whitespace().collect::<Vec<_>>().join(" ")).trim_end().to_owned(), true)
+                }
+                Item::Note { text, .. } => (format!("[{}]", text.trim()), false),
+                _ => continue,
+            };
+            if block.is_empty() {
+                continue;
+            }
+            if !out.is_empty() {
+                out.push_str(if prev_tool && tool { "\n" } else { "\n\n" });
+            }
+            out.push_str(&block);
+            prev_tool = tool;
+        }
+        out
+    }
+
     /// A node that may be folded into a run of steps: a tool, or a thought that is finished (a thought being streamed stays on its own so
     /// its text can be read as it comes), at the top level (a sub-agent's work stays under its card).
     fn groupable(&self, i: usize) -> bool {
@@ -1540,5 +1605,91 @@ mod md_rows_tests {
         assert!(!md_rows(&far, Lang::En).iter().any(|r| r.label == "yaml"), "a front matter that does not end in 100 lines is not one");
         assert!(md_rows("", Lang::En).is_empty());
         assert!(md_rows("  \n\n", Lang::En).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod plain_text_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn chat() -> Transcript {
+        Transcript::new(Lang::En)
+    }
+
+    fn say(t: &mut Transcript, text: &str, ts: u64) {
+        t.apply("user", &json!({"text": text}), ts);
+    }
+
+    fn reply(t: &mut Transcript, blocks: Value, ts: u64) {
+        t.apply("claude", &json!({"type": "assistant", "message": {"content": blocks}}), ts);
+    }
+
+    fn tool(id: &str, name: &str, input: Value) -> Value {
+        json!({"type": "tool_use", "id": id, "name": name, "input": input})
+    }
+
+    #[test]
+    fn a_conversation_becomes_text_with_the_words_as_written_and_a_line_for_each_tool() {
+        let mut t = chat();
+        say(&mut t, "list the files", 1_700_000_000_000);
+        let long: String = (0..40).map(|n| format!("line {n}\n")).collect();
+        reply(&mut t, json!([{"type": "thinking", "thinking": "hmm"}, {"type": "text", "text": format!("Here **is** the list:\n\n```sh\n{long}```")}, tool("a", "Bash", json!({"command": "ls   -la"})), tool("b", "Read", json!({"file_path": "a.rs"}))]), 1_700_000_001_000);
+        let text = t.plain_text();
+        assert!(text.contains("list the files") && text.contains("Here **is** the list:"), "{text}");
+        assert!(text.contains("line 0\n") && text.contains("line 39\n```"), "a code block is shown whole and fenced: {text}");
+        assert!(!text.contains("hmm"), "thinking is left out");
+        assert!(text.contains("[Bash] ls -la\n[Read] a.rs"), "one line for each tool, no blank line between: {text}");
+        assert!(text.starts_with("──"), "{text}");
+    }
+
+    #[test]
+    fn folded_steps_a_sub_agents_calls_and_images_give_the_same_text_whatever_is_open() {
+        let mut t = chat();
+        say(&mut t, "go", 1);
+        reply(&mut t, json!([tool("p", "Agent", json!({"description": "look"})), tool("a", "Bash", json!({"command": "one"})), tool("b", "Bash", json!({"command": "two"})), tool("c", "Bash", json!({"command": "three"}))]), 2);
+        t.apply("claude", &json!({"type": "assistant", "parent_tool_use_id": "p", "message": {"content": [tool("k", "Read", json!({"file_path": "inner.rs"}))]}}), 3);
+        let closed = t.plain_text();
+        assert!(!closed.contains("inner.rs"), "a sub-agent's own calls are not listed: {closed}");
+        assert!(closed.contains("[Agent]") && closed.contains("[Bash] one") && closed.contains("[Bash] three"), "{closed}");
+        let rows = t.rows();
+        let key = rows.iter().find(|r| r.kind == "steps").map(|r| r.key.clone()).expect("three tools in a row are folded into a steps row");
+        t.toggle(&key);
+        assert_eq!(t.plain_text(), closed, "open or folded on screen, the text is the same");
+
+        let mut with_image = chat();
+        with_image.apply("user", &json!({"text": "see", "images": [{"media_type": "image/png", "data": "AAAA"}, {"media_type": "image/png", "data": "BBBB"}]}), 1);
+        assert!(with_image.plain_text().contains("[2 images]"), "{}", with_image.plain_text());
+    }
+
+    #[test]
+    fn one_message_is_copied_up_to_the_next_one_and_a_wrong_key_gives_nothing() {
+        let mut t = chat();
+        say(&mut t, "first question", 1);
+        reply(&mut t, json!([{"type": "text", "text": "first answer"}, tool("a", "Bash", json!({"command": "ls"}))]), 2);
+        say(&mut t, "second question", 3);
+        reply(&mut t, json!([{"type": "text", "text": "second answer"}]), 4);
+        let rows = t.rows();
+        let heads: Vec<&Row> = rows.iter().filter(|r| r.kind == "meta-user" || r.kind == "meta-asst").collect();
+        assert_eq!(heads.len(), 4, "{:?}", rows.iter().map(|r| r.kind).collect::<Vec<_>>());
+        assert_eq!(t.message_text(&heads[0].key).as_deref(), Some("first question"));
+        assert_eq!(t.message_text(&heads[1].key).as_deref(), Some("first answer\n\n[Bash] ls"));
+        assert_eq!(t.message_text(&heads[3].key).as_deref(), Some("second answer"));
+        assert!(t.message_text("n9999").is_none() && t.message_text("x").is_none() && t.message_text("n").is_none());
+        let some_text_row = rows.iter().find(|r| r.kind == "para").unwrap();
+        assert!(t.message_text(&some_text_row.key).is_none(), "only a message's header row names a message");
+    }
+
+    #[test]
+    fn the_tail_of_a_text_starts_at_a_line_keeps_whole_characters_and_counts_what_it_left_out() {
+        assert_eq!(tail_chars("short", 100), ("short", 0));
+        let text = "aaa\nbbb\nccc\nddd";
+        let (tail, left) = tail_chars(text, 9);
+        assert_eq!((tail, left), ("ccc\nddd", 8), "the cut falls inside 'bbb', so the tail starts at the next line");
+        let korean = "가나다\n라마바\n사아자";
+        let (tail, left) = tail_chars(korean, 7);
+        assert_eq!((tail, left), ("사아자", 8), "cut on character boundaries: {tail}");
+        let (tail, left) = tail_chars("one long line with no break", 10);
+        assert_eq!((tail.chars().count(), left), (10, 17), "no line break after the cut: the cut stays");
     }
 }

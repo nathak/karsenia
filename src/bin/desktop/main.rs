@@ -9,6 +9,7 @@ slint::include_modules!();
 mod accounts;
 mod attach;
 mod files;
+mod live;
 mod import;
 mod bus;
 mod panels;
@@ -60,7 +61,12 @@ struct App {
     chat_acct: Mutex<Option<String>>,
 }
 
+/// The most of a chat the text view puts on screen (the copy of all of it is not cut): a text that long is laid out twice.
+const PLAIN_MAX_CHARS: usize = 200_000;
+
 thread_local! {
+    // The chat as text the last time the text view was opened or refreshed: what the "something new" note compares with.
+    static PLAIN: RefCell<String> = const { RefCell::new(String::new()) };
     // The UI thread's copy of the rows on screen, to change only what changed.
     static SHOWN: RefCell<Vec<Row>> = const { RefCell::new(Vec::new()) };
     // Set when a card or a run of steps is opened or closed: the next update of the rows does not carry the list to its end (the row
@@ -151,6 +157,7 @@ fn main() {
     wire(&ui, &app);
     panels::wire(&ui, &app);
     team::wire(&ui, &app);
+    live::wire(&ui, &app);
     sched::wire(&ui, &app);
     prov::wire(&ui, &app);
     attach::wire(&ui, &app);
@@ -246,6 +253,7 @@ fn main() {
     drop(tray);
     let _ = ui.hide();
     tracing::info!("window closed");
+    live::stop();
     // Leave no claude, and nothing it started, behind (nor a shell of the terminal drawer).
     registry.kill_all();
     tenrec::server::term_ops::kill_all();
@@ -689,6 +697,33 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
 
     let a = app.clone();
     ui.on_copy(move |text| copy_text(&a, text.to_string()));
+    // The chat as one selectable text, and the copy of a message or of everything.
+    let (a, weak) = (app.clone(), ui.as_weak());
+    ui.on_text_view_set(move |on| {
+        if let Some(ui) = weak.upgrade() {
+            show_plain(&ui, &a, on);
+        }
+    });
+    let (a, weak) = (app.clone(), ui.as_weak());
+    ui.on_refresh_plain(move || {
+        if let Some(ui) = weak.upgrade() {
+            show_plain(&ui, &a, true);
+        }
+    });
+    let a = app.clone();
+    ui.on_copy_all(move || {
+        let text = a.current.lock().expect("current").transcript.plain_text();
+        if !text.is_empty() {
+            copy_text(&a, text);
+        }
+    });
+    let a = app.clone();
+    ui.on_copy_msg(move |key| {
+        let text = a.current.lock().expect("current").transcript.message_text(key.as_str());
+        if let Some(text) = text {
+            copy_text(&a, text);
+        }
+    });
     let a = app.clone();
     ui.on_link(move |url| copy_text(&a, url.to_string()));
 
@@ -865,6 +900,8 @@ fn close_chat(ui: &AppWindow, app: &Arc<App>, sid: &str) {
         }
     });
     ui.set_has_chat(false);
+    ui.set_text_view(false);
+    show_plain(ui, app, false);
     ui.set_chat_title(SharedString::new());
     ui.set_chat_account(SharedString::new());
     ui.set_chat_perm(SharedString::new());
@@ -915,6 +952,8 @@ fn open_chat(app: &Arc<App>, sid: String) {
     });
     if let Some(ui) = app.weak.upgrade() {
         ui.set_has_chat(true);
+        ui.set_text_view(false);
+        show_plain(&ui, app, false);
         ui.set_chat_title(SharedString::new());
         ui.set_chat_account(SharedString::new());
         ui.set_chat_perm(SharedString::new());
@@ -1033,6 +1072,24 @@ async fn follow(app: Arc<App>, sid: String, epoch: u64) {
     }
 }
 
+/// Puts the chat as text on the text view (or takes it off): a snapshot, taken now, of the chat's text as it is copied.
+fn show_plain(ui: &AppWindow, app: &Arc<App>, on: bool) {
+    if !on {
+        PLAIN.with(|p| p.borrow_mut().clear());
+        ui.set_chat_plain(SharedString::new());
+        ui.set_chat_plain_note(SharedString::new());
+        ui.set_chat_plain_stale(false);
+        return;
+    }
+    let text = app.current.lock().expect("current").transcript.plain_text();
+    let (tail, left) = tenrec::view::transcript::tail_chars(&text, PLAIN_MAX_CHARS);
+    ui.set_chat_plain(tail.into());
+    ui.set_chat_plain_note(if left > 0 { fill(&tr(app.lang, "plain_cut"), &[("n", left.to_string())]).into() } else { SharedString::new() });
+    ui.set_chat_plain_stale(false);
+    ui.set_plain_gen(ui.get_plain_gen().wrapping_add(1));
+    PLAIN.with(|p| *p.borrow_mut() = text);
+}
+
 /// Sends what the chat on screen looks like now to the window.
 fn push(app: &Arc<App>) {
     let (rows, head, perm, title, epoch) = {
@@ -1051,6 +1108,13 @@ fn push(app: &Arc<App>) {
         let hold = NO_FOLLOW.with(|f| f.replace(false));
         let follow = !hold && (ui.get_at_bottom() || STICK.with(|s| s.get()) || SHOWN.with(|s| s.borrow().is_empty()));
         apply_rows(rows, &a);
+        if ui.get_text_view() && !ui.get_chat_plain_stale() {
+            // The text on screen is a snapshot (a drag and a scroll must not be undone): a note says when the chat has moved on.
+            let now = a.current.lock().expect("current").transcript.plain_text();
+            if PLAIN.with(|p| *p.borrow() != now) {
+                ui.set_chat_plain_stale(true);
+            }
+        }
         let state = if head.state.is_empty() { "idle".to_owned() } else { head.state.clone() };
         ui.set_state(state.clone().into());
         ui.set_state_label(tr(lang, &state).into());
@@ -1205,7 +1269,16 @@ fn plain_of(md: &str) -> String {
     out
 }
 
+/// How the width of a table is shared by its columns: the widest cell of each (a wide character counts two), kept between 6 and 48 so
+/// that a short column is not squeezed to nothing and a long one does not take everything. The same for every row of the table.
+fn column_weights(grid: &[Vec<String>]) -> Vec<f32> {
+    let columns = grid.iter().map(Vec::len).max().unwrap_or(0);
+    (0..columns).map(|c| grid.iter().filter_map(|r| r.get(c)).map(|cell| cell.chars().map(tenrec::view::highlight::char_cols).sum::<usize>()).max().unwrap_or(1).clamp(6, 48) as f32).collect()
+}
+
 fn to_slint(row: &Row) -> ChatRow {
+    // A row with fewer cells than the widest is given empty ones, so every row has a cell for each column.
+    let columns = row.grid.iter().map(Vec::len).max().unwrap_or(0);
     let rich = if row.md.is_empty() { StyledText::default() } else { StyledText::from_markdown(&row.md).unwrap_or_else(|_| StyledText::from_plain_text(&unescape(&row.md))) };
     let (img_id, imgs) = shots::tiles(row);
     ChatRow {
@@ -1227,7 +1300,8 @@ fn to_slint(row: &Row) -> ChatRow {
         indent: row.indent,
         img_id,
         imgs,
-        trows: ModelRc::from(Rc::new(VecModel::from(row.grid.iter().enumerate().map(|(i, cells)| TRow { cells: ModelRc::from(Rc::new(VecModel::from(cells.iter().map(|c| SharedString::from(c.as_str())).collect::<Vec<_>>()))), head: i == 0 }).collect::<Vec<_>>()))),
+        col_w: ModelRc::from(Rc::new(VecModel::from(column_weights(&row.grid)))),
+        trows: ModelRc::from(Rc::new(VecModel::from(row.grid.iter().enumerate().map(|(i, cells)| TRow { cells: ModelRc::from(Rc::new(VecModel::from(cells.iter().map(|c| SharedString::from(c.as_str())).chain(std::iter::repeat_n(SharedString::new(), columns - cells.len())).collect::<Vec<_>>()))), head: i == 0 }).collect::<Vec<_>>()))),
     }
 }
 
@@ -1482,6 +1556,15 @@ mod tests {
 
     fn chat(sid: &str, group: &str, wt: bool) -> SessionItem {
         SessionItem { sid: sid.into(), folder: "proj".into(), title: sid.into(), when: SharedString::new(), state: "idle".into(), active: false, tags: SharedString::new(), pending: 1, head: false, group: group.into(), open: false, count: 0, wt, sub: SharedString::new() }
+    }
+
+    #[test]
+    fn a_tables_columns_are_weighted_by_their_widest_cell_wide_characters_count_two_and_a_ragged_table_is_covered() {
+        let grid = vec![vec!["a".to_owned(), "한글한글한글".to_owned(), "x".repeat(100)], vec!["long cell in the first column".to_owned()]];
+        let weights = column_weights(&grid);
+        assert_eq!(weights, [29.0, 12.0, 48.0], "the widest cell of each column, a wide character twice, kept between 6 and 48");
+        assert_eq!(column_weights(&[]), Vec::<f32>::new());
+        assert_eq!(column_weights(&[vec!["".to_owned()]]), [6.0]);
     }
 
     #[test]

@@ -98,13 +98,10 @@ export component Rich inherits Rectangle {
     in property <string> plain;
     in property <length> size;
     in property <color> fg;
-    // Selectable mode: the same words as plain text in a read-only field (the styling and links are not drawn), so they can be dragged over and copied.
-    in property <bool> select: false;
     callback link(string);
     height: measure.preferred-height;
-    measure := Text { width: parent.width; text: root.plain; wrap: word-wrap; font-size: root.size; font-weight: 600; line-height-factor: root.select ? 1.5 : 1; opacity: 0; }
-    if root.select: TextInput { width: parent.width; height: parent.height; text: root.plain; read-only: true; single-line: false; wrap: TextWrap.word-wrap; font-size: root.size; line-height-factor: 1.5; color: root.fg; selection-background-color: Theme.primary.with-alpha(0.4); }
-    if !root.select: StyledText { width: parent.width; height: parent.height; text: root.rich; default-color: root.fg; default-font-size: root.size; link-color: Theme.primary-soft; link-clicked(url) => { root.link(url); } }
+    measure := Text { width: parent.width; text: root.plain; wrap: word-wrap; font-size: root.size; font-weight: 600; opacity: 0; }
+    StyledText { width: parent.width; height: parent.height; text: root.rich; default-color: root.fg; default-font-size: root.size; link-color: Theme.primary-soft; link-clicked(url) => { root.link(url); } }
 }
 
 // Selectable text whose height follows its wrapping: the layout around a read-only TextInput gave it the height of its
@@ -116,10 +113,12 @@ export component SelText inherits Rectangle {
     in property <bool> mono: false;
     // Break anywhere (code, paths) rather than between words.
     in property <bool> chars: false;
+    // Takes the keyboard focus (so Ctrl+A / Ctrl+C go to the text).
+    public function grab() { ti.focus(); }
     preferred-width: measure.preferred-width;
     height: measure.preferred-height;
     measure := Text { width: parent.width; text: root.text; wrap: root.chars ? TextWrap.char-wrap : TextWrap.word-wrap; font-size: root.size; font-family: root.mono ? Theme.mono : ""; line-height-factor: 1.4; opacity: 0; }
-    TextInput { width: parent.width; height: parent.height; text: root.text; read-only: true; single-line: false; wrap: root.chars ? TextWrap.char-wrap : TextWrap.word-wrap; font-size: root.size; font-family: root.mono ? Theme.mono : ""; line-height-factor: 1.4; color: root.fg; selection-background-color: Theme.primary.with-alpha(0.4); }
+    ti := TextInput { width: parent.width; height: parent.height; text: root.text; read-only: true; single-line: false; wrap: root.chars ? TextWrap.char-wrap : TextWrap.word-wrap; font-size: root.size; font-family: root.mono ? Theme.mono : ""; line-height-factor: 1.4; color: root.fg; selection-background-color: Theme.primary.with-alpha(0.4); }
 }
 
 // Wrapped text whose height follows its wrapping at the width it is given: a plain wrapping Text in a layout is measured before the

@@ -137,6 +137,17 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("chat_delete_confirm", "이 대화를 삭제합니다. 기록이 모두 지워지고 되돌릴 수 없습니다. 계속할까요?", "Delete this chat? Its whole history is erased and this cannot be undone. Continue?"),
     ("chat_delete_ok", "대화 삭제", "Delete chat"),
     ("tm_cmds", "SmartWorkbench 명령", "SmartWorkbench commands"),
+    ("live_title", "라이브 보기", "Live view"),
+    ("live_note", "채팅이 하는 일을 브라우저에서 실시간으로 보는 읽기 전용 화면입니다(프롬프트, 도구 호출, 가드 결정, 토큰). 이 컴퓨터(127.0.0.1)에서만 열리고 주소의 토큰이 있어야 볼 수 있습니다. 비밀값은 가리지만 프롬프트와 명령이 보이니 주소를 다른 사람에게 주지 마세요. 앱을 끝내면 꺼집니다.", "A read-only page for watching what the chats do in a browser, as it happens (prompts, calls, guard decisions, tokens). It opens on this computer only (127.0.0.1) and needs the token in the address. Secrets are masked, but prompts and commands show: do not give the address to anyone. It ends with the app."),
+    ("live_start", "시작", "Start"),
+    ("live_stop", "중지", "Stop"),
+    ("live_open", "브라우저로 열기", "Open in browser"),
+    ("live_copy", "주소 복사", "Copy address"),
+    ("live_short", "프롬프트 축약(새로 여는 화면부터)", "Cut prompts short (for pages opened from now on)"),
+    ("live_on", "켜짐 · 포트 {port}", "On · port {port}"),
+    ("live_stopped", "라이브 보기를 껐습니다.", "The live view is off."),
+    ("live_failed", "라이브 보기를 시작하지 못했습니다: {e}", "The live view could not start: {e}"),
+    ("live_open_failed", "브라우저를 열지 못했습니다. 주소를 복사해서 여세요.", "The browser could not be opened. Copy the address and open it."),
     ("tm_cmd_sent", "이 대화에 보냈습니다: {c}", "Sent to this chat: {c}"),
     ("tm_cmd_waiting", "앞서 보낸 명령의 답을 기다리는 중입니다.", "Still waiting for the answer to the last command."),
     ("tm_cmd_blocked", "지금은 보낼 수 없습니다. 열린 대화가 없거나, 응답 중이거나, 권한 요청이 대기 중입니다.", "Cannot send now: no chat is open, a turn is running, or a permission is waiting."),
@@ -154,7 +165,13 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("swbp_pins_n", "고정 {n}개", "{n} pinned"),
     ("swbp_na", "플러그인이 알려 주지 않음", "not reported by the plug-in"),
     ("swbp_changed", "변경 {f}개 파일 · +{a} −{r}", "{f} files changed · +{a} −{r}"),
-    ("select_mode", "글 선택", "Select text"),
+    ("text_view", "텍스트로 보기", "View as text"),
+    ("copy_all", "전체 복사", "Copy all"),
+    ("plain_images", "[이미지 {n}장]", "[{n} images]"),
+    ("plain_cut", "앞부분 {n}자는 생략했습니다. 전체 복사는 전부 복사합니다.", "The first {n} characters are left out. Copy all copies everything."),
+    ("plain_stale", "새 내용이 있습니다.", "There is something new."),
+    ("plain_refresh", "최신으로", "Refresh"),
+    ("plain_hint", "드래그해서 선택하고 Ctrl+C로 복사합니다. Ctrl+A는 전체 선택, Esc는 돌아가기입니다.", "Drag to select and copy with Ctrl+C. Ctrl+A selects all, Esc goes back."),
     ("cont_btn", "계정 전환", "Switch account"),
     ("cont_title", "다른 계정으로 이어가기", "Continue in another account"),
     ("cont_note", "이 대화는 그대로 두고, 같은 내용과 같은 Claude 세션을 고른 계정에서 이어가는 새 대화를 만듭니다.", "This chat stays as it is; a new chat is made that continues the same conversation and Claude session in the account you pick."),
@@ -886,7 +903,7 @@ mod tests {
 
     #[test]
     fn every_word_the_window_asks_for_is_in_the_table() {
-        for source in [include_str!("../../slint/app.slint"), include_str!("../../slint/panels.slint"), include_str!("../../slint/base.slint"), include_str!("../../slint/sched.slint"), include_str!("../../slint/files.slint"), include_str!("../../slint/import.slint"), include_str!("../../slint/team.slint"), include_str!("../../slint/newchat.slint"), include_str!("../../slint/vhdb.slint")] {
+        for source in [include_str!("../../slint/app.slint"), include_str!("../../slint/rows.slint"), include_str!("../../slint/panels.slint"), include_str!("../../slint/base.slint"), include_str!("../../slint/sched.slint"), include_str!("../../slint/files.slint"), include_str!("../../slint/import.slint"), include_str!("../../slint/team.slint"), include_str!("../../slint/newchat.slint"), include_str!("../../slint/vhdb.slint")] {
             for part in source.split("T.tr(\"").skip(1) {
                 let key = part.split('"').next().unwrap_or_default();
                 assert!(TABLE.iter().any(|(k, _, _)| *k == key), "the window asks for {key}, which is not in TABLE");

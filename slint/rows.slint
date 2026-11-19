@@ -1,5 +1,5 @@
 // One row of the transcript, and the structs it is made from. The chat list draws them, and so does the Files panel for a markdown file.
-import { Theme, T, Pill, Rich, SelText, WText } from "base.slint";
+import { Theme, T, Pill, Rich, SelText, WText, IconBtn } from "base.slint";
 
 export struct TRow { cells: [string], head: bool }
 export struct ChatImg { thumb: image, label: string, has-thumb: bool }
@@ -7,6 +7,8 @@ export struct ChatRow {
     kind: string, depth: int, key: string, text: string, rich: styled-text, plain: string, label: string, extra: string, status: string,
     state: string, detail: string, open: bool, badge: string, add: int, del: int, indent: int,
     img-id: int, imgs: [ChatImg], trows: [TRow],
+    // A table's column weights (the widest cell of each column, in characters): every row of the table splits its width by them, so the columns line up.
+    col-w: [float],
 }
 
 export component RowView inherits Rectangle {
@@ -15,7 +17,8 @@ export component RowView inherits Rectangle {
     callback copy(string);
     callback link(string);
     callback open-image(int, int);
-    in property <bool> select-mode: false;
+    // The copy button of a message's header row: the key of the row.
+    callback copy-msg(string);
     property <length> indent: r.depth * 24px;
     VerticalLayout {
         padding-left: root.indent;
@@ -29,6 +32,7 @@ export component RowView inherits Rectangle {
             alignment: end; spacing: 8px; padding-right: 4px; padding-bottom: 5px;
             Text { text: r.text; color: Theme.info; font-size: 11px; font-family: Theme.mono; }
             Text { text: r.extra; color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+            IconBtn { width: 22px; height: 18px; y: -3px; icon: @image-url("icons/copy.svg"); clicked => { root.copy-msg(r.key); } }
         }
         if r.kind == "user": VerticalLayout {
             padding-bottom: 18px; spacing: 6px;
@@ -62,20 +66,21 @@ export component RowView inherits Rectangle {
             }
             Text { text: r.text; color: Theme.primary-soft; font-size: 12px; font-weight: 600; font-family: Theme.mono; vertical-alignment: center; }
             Text { text: r.extra; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+            IconBtn { width: 22px; height: 24px; icon: @image-url("icons/copy.svg"); clicked => { root.copy-msg(r.key); } }
         }
         if r.kind == "para": VerticalLayout {
             padding-left: 4px; padding-right: 24px; padding-top: 2px; padding-bottom: 14px;
-            Rich { select: root.select-mode; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
+            Rich { rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
         }
         if r.kind == "heading": VerticalLayout {
             padding-left: 4px; padding-top: 14px; padding-bottom: 10px; spacing: 6px;
-            Rich { select: root.select-mode; rich: r.rich; plain: r.plain; size: r.extra == "1" ? 21px : r.extra == "2" ? 18px : 16px; fg: Theme.on-surface; }
+            Rich { rich: r.rich; plain: r.plain; size: r.extra == "1" ? 21px : r.extra == "2" ? 18px : 16px; fg: Theme.on-surface; }
             if r.extra == "1" || r.extra == "2": Rectangle { height: 1px; background: Theme.hairline; }
         }
         if r.kind == "item": HorizontalLayout {
             padding-left: 8px + r.indent * 18px; padding-top: 1px; padding-bottom: 8px; spacing: 8px;
             Text { text: r.label; color: Theme.primary-soft; font-size: 15px; min-width: 14px; vertical-alignment: top; }
-            Rich { select: root.select-mode; horizontal-stretch: 1; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
+            Rich { horizontal-stretch: 1; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
         }
         if r.kind == "quote": VerticalLayout {
             padding-left: 4px; padding-right: 24px; padding-bottom: 12px;
@@ -84,7 +89,7 @@ export component RowView inherits Rectangle {
                 ql := HorizontalLayout {
                     spacing: 12px;
                     Rectangle { width: 3px; background: Theme.primary.with-alpha(0.7); }
-                    VerticalLayout { padding-top: 10px; padding-bottom: 10px; padding-right: 12px; horizontal-stretch: 1; Rich { select: root.select-mode; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-var; } }
+                    VerticalLayout { padding-top: 10px; padding-bottom: 10px; padding-right: 12px; horizontal-stretch: 1; Rich { rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-var; } }
                 }
             }
         }
@@ -124,7 +129,7 @@ export component RowView inherits Rectangle {
                             Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
                             trl := HorizontalLayout {
                                 padding-left: 12px; padding-right: 12px; padding-top: 8px; padding-bottom: 8px; spacing: 16px;
-                                for c in tr.cells: Text { horizontal-stretch: 1; min-width: 0px; text: c; wrap: word-wrap; color: tr.head ? Theme.on-surface : Theme.on-var; font-size: 13px; font-weight: tr.head ? 700 : 400; line-height-factor: 1.35; }
+                                for c[ci] in tr.cells: Text { horizontal-stretch: r.col-w[ci]; preferred-width: 0px; min-width: 0px; text: c; wrap: word-wrap; color: tr.head ? Theme.on-surface : Theme.on-var; font-size: 13px; font-weight: tr.head ? 700 : 400; line-height-factor: 1.35; }
                             }
                         }
                     }

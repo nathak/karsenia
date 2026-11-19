@@ -181,8 +181,18 @@ export component AppWindow inherits Window {
     // Carry the chat on under another account (the index in Acct.names and its name).
     in-out property <bool> cont-open;
     callback continue-chat(int, string);
-    // Selectable text mode for the chat's own text (the header's toggle).
-    in-out property <bool> select-mode: false;
+    // The chat as one selectable text (the header's "View as text"): a snapshot made when it is opened or refreshed, a note when the
+    // beginning was left out, and whether the chat has changed since.
+    in-out property <bool> text-view: false;
+    in property <string> chat-plain;
+    in property <string> chat-plain-note;
+    in property <bool> chat-plain-stale;
+    // Bumped when the snapshot is made again: the view goes to its end.
+    in property <int> plain-gen: 0;
+    callback text-view-set(bool);
+    callback copy-all();
+    callback refresh-plain();
+    callback copy-msg(string);
     // A project folder of the chat list opened or closed.
     callback toggle-group(string);
     callback stop();
@@ -205,7 +215,9 @@ export component AppWindow inherits Window {
     // The composer only while it is on screen: a panel or the new-chat page covers it, and typing there must not send.
     public function focus-composer() { Pal.open = false; if (root.side == 0 && !root.new-open) { composer.focus(); } else { keys.focus(); } }
     // Gives the zoom keys a focused element again after something that held focus went away.
-    public function refocus() { Pal.open = false; if (root.has-chat && root.side == 0 && !root.new-open) { composer.focus(); } else { keys.focus(); } }
+    public function refocus() { Pal.open = false; if (root.has-chat && root.side == 0 && !root.new-open && !root.text-view) { composer.focus(); } else { keys.focus(); } }
+    // The text view's field held the keyboard focus and is gone when it closes: the composer (or the key scope) takes it back.
+    changed text-view => { if (!root.text-view && !root.perm.visible && !Dialog.visible) { root.refocus(); } }
     changed new-open => { if (root.new-open) { root.panel-open(100); } else { root.new-perm = 0; root.new-name = ""; root.refocus(); } }
     // A panel that goes away takes focus with it.
     changed side => { Team.open = false; Usage.open = false; Know.adding = false; root.panel-open(root.side); root.refocus(); }
@@ -217,6 +229,7 @@ export component AppWindow inherits Window {
         focus-on-tab-navigation: false;
         init => { self.focus(); }
         capture-key-pressed(event) => {
+            if (event.text == Key.Escape && root.text-view && root.side == 0 && !root.new-open && !root.zoom-open && !root.perm.visible && !Dialog.visible && !Pal.open && !(Team.open || Usage.open || root.cont-open)) { root.text-view = false; root.text-view-set(false); return accept; }
             if (event.text == Key.Escape && root.zoom-open && !root.perm.visible && !Dialog.visible) { root.zoom-close(); return accept; }
             if (event.text == Key.Escape && root.swb-shown && !root.swb-docked && !(Team.open || Usage.open) && !root.perm.visible && !Dialog.visible && !Pal.open) { Team.panel = false; return accept; }
             // Esc closes the team card; a dialog that waits for an answer keeps its own Esc.
@@ -453,7 +466,8 @@ export component AppWindow inherits Window {
                         if root.renaming: VerticalLayout { horizontal-stretch: 1; alignment: center; LineEdit { text <=> root.rename-text; font-size: 14px; accepted(t) => { root.renaming = false; root.rename-chat(t); } } }
                         if root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename_ok"); height: 28px; primary: true; clicked => { root.renaming = false; root.rename-chat(root.rename-text); } } }
                         if !root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename"); height: 28px; clicked => { root.rename-text = root.chat-title; root.renaming = true; } } }
-                        VerticalLayout { alignment: center; Btn { text: T.tr("select_mode"); height: 28px; primary: root.select-mode; clicked => { root.select-mode = !root.select-mode; } } }
+                        VerticalLayout { alignment: center; Btn { text: T.tr("text_view"); height: 28px; primary: root.text-view; clicked => { root.text-view = !root.text-view; root.text-view-set(root.text-view); } } }
+                        if root.hw >= 900px: VerticalLayout { alignment: center; Btn { text: T.tr("copy_all"); height: 28px; clicked => { root.copy-all(); } } }
                         if root.hw >= 1000px && Acct.names.length > 1: VerticalLayout { alignment: center; Btn { text: T.tr("cont_btn"); height: 28px; enabled: root.state != "running"; clicked => { root.cont-open = !root.cont-open; } } }
                         VerticalLayout { alignment: center; Btn { text: T.tr("chat_delete"); height: 28px; danger: true; enabled: root.state != "running"; clicked => { root.renaming = false; root.delete-chat(); } } }
                         if root.hw >= 1250px: Rectangle {
@@ -505,13 +519,41 @@ export component AppWindow inherits Window {
                 Rectangle {
                     vertical-stretch: 1;
                     if !root.has-chat: Text { text: T.empty; color: Theme.outline; font-size: 13px; }
+                    // The chat as one text, so a drag can cross paragraphs and messages (a snapshot: it does not move while it is read).
+                    if root.has-chat && root.text-view: VerticalLayout {
+                        Rectangle {
+                            height: strip.preferred-height + 8px;
+                            strip := VerticalLayout {
+                                padding-left: root.gutter; padding-right: root.gutter; padding-top: 6px; spacing: 4px;
+                                WText { text: T.tr("plain_hint"); size: 12px; fg: Theme.outline; }
+                                if root.chat-plain-note != "": WText { text: root.chat-plain-note; size: 12px; fg: Theme.outline; }
+                                if root.chat-plain-stale: HorizontalLayout {
+                                    spacing: 8px; alignment: start;
+                                    Text { text: T.tr("plain_stale"); color: Theme.primary-soft; font-size: 12px; vertical-alignment: center; }
+                                    Btn { text: T.tr("plain_refresh"); height: 24px; clicked => { root.refresh-plain(); } }
+                                }
+                            }
+                        }
+                        // To the end once the text has its height: a timer runs after the layout, where a change handler would see the final height at once.
+                        Timer {
+                            interval: 1ms;
+                            running: pf.seen-gen != root.plain-gen;
+                            triggered => { pf.content-y = min(0px, pf.height - pf.content-height); pf.seen-gen = root.plain-gen; }
+                        }
+                        pf := Flickable {
+                            vertical-stretch: 1;
+                            property <int> seen-gen: -1;
+                            content-height: max(self.height, st.height + 24px);
+                            st := SelText { x: root.gutter; y: 12px; width: parent.width - 2 * root.gutter; text: root.chat-plain; size: 14px; init => { self.grab(); } }
+                        }
+                    }
                     list := ListView {
-                        visible: root.has-chat;
+                        visible: root.has-chat && !root.text-view;
                         for row in root.rows: Rectangle {
                             height: rv.preferred-height + (row.kind == "day" ? 18px : 0px);
                             rv := RowView {
                                 x: root.gutter; y: row.kind == "day" ? 18px : 0px; width: parent.width - 2 * root.gutter;
-                                r: row; select-mode: root.select-mode; toggle(k) => { root.toggle(k); } copy(t) => { root.copy(t); } link(u) => { root.link(u); } open-image(id, i) => { root.open-image(id, i); }
+                                r: row; copy-msg(k) => { root.copy-msg(k); } toggle(k) => { root.toggle(k); } copy(t) => { root.copy(t); } link(u) => { root.link(u); } open-image(id, i) => { root.open-image(id, i); }
                             }
                         }
                     }
