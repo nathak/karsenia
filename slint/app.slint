@@ -610,14 +610,18 @@ export component AppWindow inherits Window {
                                     for a[i] in Att.items: Rectangle {
                                         width: 64px; height: 64px; border-radius: 8px; background: Theme.high; clip: true;
                                         if a.has-thumb: Image { source: a.thumb; width: parent.width; height: parent.height; image-fit: cover; }
-                                        if !a.has-thumb: Text { text: a.label; color: Theme.on-var; font-size: 12px; font-family: Theme.mono; }
+                                        if !a.has-thumb: VerticalLayout {
+                                            alignment: center; spacing: 3px; padding-left: 4px; padding-right: 4px;
+                                            Text { text: a.label; color: Theme.on-var; font-size: 12px; font-weight: 600; font-family: Theme.mono; horizontal-alignment: center; }
+                                            Text { text: a.name; color: Theme.outline; font-size: 9px; overflow: elide; horizontal-alignment: center; }
+                                        }
                                         Rectangle {
                                             x: parent.width - 22px; y: 2px; width: 20px; height: 20px; border-radius: 10px; background: #000000b0;
                                             Image { source: @image-url("icons/x.svg"); width: 10px; height: 10px; colorize: Theme.on-surface; }
                                             TouchArea { mouse-cursor: pointer; clicked => { Att.remove(i); } }
                                         }
                                     }
-                                    VerticalLayout { alignment: end; Text { text: Att.items.length + " / 5"; color: Theme.outline; font-size: 11px; font-family: Theme.mono; } }
+                                    VerticalLayout { alignment: end; Text { text: Att.items.length + " / " + Att.max; color: Theme.outline; font-size: 11px; font-family: Theme.mono; } }
                                 }
                             }
                             Rectangle {

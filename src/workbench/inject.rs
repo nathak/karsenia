@@ -9,7 +9,7 @@ const FILE_CAP: usize = 16 * 1024;
 const PINS_CAP: usize = 48 * 1024;
 const READ_CAP: u64 = 256 * 1024;
 
-fn esc(text: &str) -> String {
+pub(crate) fn esc(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 

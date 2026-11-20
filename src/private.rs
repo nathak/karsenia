@@ -28,6 +28,16 @@ fn unlink_if_link(path: &Path) {
     }
 }
 
+/// Bytes written into a file that must not exist yet (0600): a name taken, or a link in its place, is an error and nothing is written
+/// through it.
+pub fn write_bytes_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(path)?.write_all(bytes)
+}
+
 pub fn write(path: &Path, text: &str) -> std::io::Result<()> {
     unlink_if_link(path);
     let mut file = options().write(true).truncate(true).open(path)?;

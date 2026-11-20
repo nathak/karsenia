@@ -190,14 +190,14 @@ async fn a_process_that_dies_cancels_what_waited() {
 async fn images_are_checked_and_the_log_is_replayed_after_a_restart() {
     let fx = fixture("{\"$wait\":\"user\"}\n{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"S5\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}\n{\"$wait\":\"user\"}\n");
     let session = fx.session();
-    let bad = Image { media_type: "image/svg+xml".into(), data: "AAAA".into() };
+    let bad = Image { media_type: "image/png".into(), data: "!!!!".into(), name: None };
     assert!(session.send("x".into(), vec![bad]).await.is_err());
-    let huge = Image { media_type: "image/png".into(), data: "A".repeat(7 * 1024 * 1024) };
+    let huge = Image { media_type: "application/zip".into(), data: "A".repeat(36 * 1024 * 1024), name: Some("big.zip".into()) };
     assert!(session.send("x".into(), vec![huge]).await.is_err());
     assert!(session.send("   ".into(), vec![]).await.is_err());
 
     let (_, mut rx) = session.subscribe(0).await.unwrap();
-    let ok = Image { media_type: "image/png".into(), data: "iVBORw0KGgo=".into() };
+    let ok = Image { media_type: "image/png".into(), data: "iVBORw0KGgo=".into(), name: None };
     session.send("look at this".into(), vec![ok]).await.unwrap();
     until(&mut rx, state("idle")).await;
     let (all, _) = session.subscribe(0).await.unwrap();
@@ -297,11 +297,11 @@ async fn streaming_pieces_reach_the_page_but_are_not_kept() {
 }
 
 #[tokio::test]
-async fn at_most_five_images_and_the_host_can_end_every_process_at_once() {
+async fn at_most_ten_files_and_the_host_can_end_every_process_at_once() {
     let fx = fixture("{\"$wait\":\"user\"}\n{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"S8\"}\n{\"$sleep\":30000}\n");
     let session = fx.session();
-    let six: Vec<Image> = (0..6).map(|_| Image { media_type: "image/png".into(), data: "iVBORw0KGgo=".into() }).collect();
-    assert!(session.send("x".into(), six).await.is_err());
+    let eleven: Vec<Image> = (0..11).map(|_| Image { media_type: "image/png".into(), data: "iVBORw0KGgo=".into(), name: None }).collect();
+    assert!(session.send("x".into(), eleven).await.is_err());
 
     let (_, mut rx) = session.subscribe(0).await.unwrap();
     session.send("go".into(), vec![]).await.unwrap();

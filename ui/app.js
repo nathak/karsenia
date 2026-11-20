@@ -785,6 +785,10 @@ function addUser(d) {
     }
     box.appendChild(row)
   }
+  // Other attached files: a line each (name and size; the log never holds their content).
+  if (d.files && d.files.length) {
+    for (const f of d.files) box.appendChild(el('div', 'filechip', `\u{1F4CE} ${String(f.name || '').slice(0, 100)} (${f.size >= 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : f.size >= 1024 ? (f.size / 1024).toFixed(1) + ' KB' : f.size + ' B'})`))
+  }
   if (d.text) box.appendChild(el('div', '', d.text))
   add(box)
 }

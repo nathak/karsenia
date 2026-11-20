@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::claude::process::{ClaudeProcess, ProcEvent, SpawnOpts};
-use crate::claude::protocol::{self, CanUseTool, Event, Image, IMAGE_TYPES, MAX_IMAGE_BYTES};
+use crate::claude::protocol::{self, CanUseTool, Event, Image};
 use crate::extract::TurnEnd;
 use crate::accounts::AccountRef;
 use crate::memory::{recall_block, secret_hit};
@@ -995,17 +995,11 @@ impl Actor {
         if text.trim().is_empty() && images.is_empty() {
             return (Err("nothing to send".into()), None);
         }
-        if images.len() > 5 {
-            return (Err("at most five images per message".into()), None);
-        }
-        for image in &images {
-            if !IMAGE_TYPES.contains(&image.media_type.as_str()) {
-                return (Err(format!("{} is not an image type the host sends", image.media_type)), None);
-            }
-            if image.data.len() / 4 * 3 > MAX_IMAGE_BYTES {
-                return (Err("an image is larger than 5 MB".into()), None);
-            }
-        }
+        // The files are checked before anything is started or written: what is wrong with them is told as it is.
+        let checked = match crate::attachments::check(&images, self.meta.container) {
+            Ok(checked) => checked,
+            Err(message) => return (Err(message), None),
+        };
 
         // The switch of the built-in workbench changed since this process started: it still has the old plug-in settings and no (or a stale)
         // guard hook, so it is ended and the message starts a new one.
@@ -1029,11 +1023,19 @@ impl Actor {
             self.meta.title = text.chars().take(60).collect();
             self.save_meta();
         }
-        let shown: Vec<Value> = images.iter().map(|i| json!({"media_type": i.media_type, "data": i.data})).collect();
-        self.emit("user", json!({"text": text, "images": shown}));
+        // Saved files are written only now that the process is there; the event holds the images (for thumbnails) and, of the other
+        // files, only name, size and kind.
+        let (parts, shown, files) = match crate::attachments::materialize(&self.dir, &self.meta.sid, checked) {
+            Ok(made) => made,
+            Err(message) => {
+                self.emit("error", json!({"message": message}));
+                return (Err(message), None);
+            }
+        };
+        self.emit("user", json!({"text": text, "images": shown, "files": files}));
         // What the person has set in the chat's workbench is added for the model; the transcript above shows only the person's words.
         let context = if self.workbench_native() { crate::workbench::inject::blocks(&self.dir, &self.meta.sid, &self.meta.cwd, self.team_spawned.is_some()) } else { Vec::new() };
-        let sent = self.process.as_ref().map(|p| p.send_line(protocol::user_message(&text, &images, &context))).unwrap_or(false);
+        let sent = self.process.as_ref().map(|p| p.send_line(protocol::user_message(&text, &parts, &context))).unwrap_or(false);
         if !sent {
             self.emit("error", json!({"message": "the claude process is gone; try again"}));
             self.process = None;

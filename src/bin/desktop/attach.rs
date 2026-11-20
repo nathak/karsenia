@@ -1,15 +1,16 @@
-//! Images attached to the message being written: chosen with a file picker or pasted from the clipboard, held (at most five, each
-//! at most what the host forwards) with a small thumbnail, and handed to `send_text` when the message is sent. The type is read
-//! from the bytes, never from a name. Bytes are dropped as soon as they are encoded: what is kept is the base64 the host needs
-//! and a 128-pixel thumbnail.
+//! Files attached to the message being written: any file, chosen with a file picker, or an image pasted from the clipboard; held (at
+//! most ten, each at most what the host takes) with a small thumbnail for an image or a tile with the extension for another file, and
+//! handed to `send_text` when the message is sent. What a file is, is read from its bytes by the host, never from a name. Bytes are
+//! dropped as soon as they are encoded: what is kept is the base64 the host needs and a 128-pixel thumbnail.
 use std::cell::RefCell;
 use std::io::Cursor;
 use std::sync::Arc;
 
 use base64::Engine;
 use slint::{ComponentHandle, Image as SlintImage, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
+use tenrec::attachments::MAX_FILE_BYTES;
 use tenrec::claude::protocol::{Image, MAX_IMAGE_BYTES};
-use tenrec::view::attach::{check_add, decoded_len, sniff, MAX_IMAGES};
+use tenrec::view::attach::{check_add, decoded_len, ext_label, sniff, MAX_IMAGES};
 use tenrec::view::i18n::tr;
 
 use crate::{App, AppWindow, Att, AttV};
@@ -19,7 +20,8 @@ pub struct Pending {
     media_type: &'static str,
     b64: String,
     thumb: Option<(u32, u32, Vec<u8>)>,
-    label: &'static str,
+    label: String,
+    name: Option<String>,
 }
 
 thread_local! {
@@ -34,12 +36,14 @@ fn render(ui: &AppWindow) {
             .iter()
             .map(|p| AttV {
                 thumb: p.thumb.as_ref().map(|(w, hgt, raw)| SlintImage::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(raw, *w, *hgt))).unwrap_or_default(),
-                label: p.label.into(),
+                label: p.label.as_str().into(),
+                name: p.name.clone().unwrap_or_default().into(),
                 has_thumb: p.thumb.is_some(),
             })
             .collect()
     });
     ui.global::<Att>().set_items(ModelRc::from(std::rc::Rc::new(VecModel::from(items))));
+    ui.global::<Att>().set_max(MAX_IMAGES as i32);
 }
 
 pub fn count() -> usize {
@@ -50,7 +54,7 @@ pub fn count() -> usize {
 pub fn take(ui: &AppWindow) -> (Vec<Image>, Vec<Pending>) {
     let held: Vec<Pending> = HELD.with(|h| std::mem::take(&mut *h.borrow_mut()));
     render(ui);
-    let images = held.iter().map(|p| Image { media_type: p.media_type.to_owned(), data: p.b64.clone() }).collect();
+    let images = held.iter().map(|p| Image { media_type: p.media_type.to_owned(), data: p.b64.clone(), name: p.name.clone() }).collect();
     (images, held)
 }
 
@@ -95,40 +99,43 @@ struct Ready {
     media_type: &'static str,
     b64: String,
     thumb: Option<(u32, u32, Vec<u8>)>,
+    name: Option<String>,
+    is_image: bool,
 }
 
-fn prepare(bytes: Vec<u8>, have: usize) -> Result<Ready, &'static str> {
+fn prepare(bytes: Vec<u8>, have: usize, name: Option<String>) -> Result<Ready, &'static str> {
+    check_add(have, bytes.len())?;
     let kind = sniff(&bytes);
-    check_add(have, bytes.len(), kind)?;
-    let media_type = kind.unwrap_or("image/png");
+    // Not an image (or one with no decoder here): sent as it is, and shown as a tile with its extension.
+    let media_type = kind.unwrap_or("application/octet-stream");
     let format = match media_type {
         "image/png" => Some(image::ImageFormat::Png),
         "image/jpeg" => Some(image::ImageFormat::Jpeg),
-        // No decoder for these: they are sent as they are and shown as a tile.
         _ => None,
     };
     let thumb = format.and_then(|f| image::load_from_memory_with_format(&bytes, f).ok()).map(|img| {
         let t = img.thumbnail(128, 128).to_rgba8();
         (t.width(), t.height(), t.into_raw())
     });
-    Ok(Ready { media_type, b64: base64::engine::general_purpose::STANDARD.encode(&bytes), thumb })
+    Ok(Ready { media_type, b64: base64::engine::general_purpose::STANDARD.encode(&bytes), thumb, name, is_image: kind.is_some() })
 }
 
 fn add(ui: &AppWindow, app: &App, ready: Result<Ready, &'static str>) {
     match ready {
         Ok(r) => {
             // Checked again here: two images prepared at once can both have seen room for one.
-            if count() >= MAX_IMAGES || decoded_len(&r.b64) > MAX_IMAGE_BYTES {
+            if count() >= MAX_IMAGES || decoded_len(&r.b64) > MAX_FILE_BYTES {
                 crate::toast(ui, tr(app.lang, "att_too_many"));
                 return;
             }
             let thumb = r.thumb;
             let label = match r.media_type {
-                "image/gif" => "GIF",
-                "image/webp" => "WEBP",
-                _ => "IMG",
+                "image/gif" => "GIF".to_owned(),
+                "image/webp" => "WEBP".to_owned(),
+                _ if r.is_image => "IMG".to_owned(),
+                _ => ext_label(r.name.as_deref().unwrap_or("")),
             };
-            HELD.with(|h| h.borrow_mut().push(Pending { media_type: r.media_type, b64: r.b64, thumb, label }));
+            HELD.with(|h| h.borrow_mut().push(Pending { media_type: r.media_type, b64: r.b64, thumb, label, name: r.name }));
             render(ui);
         }
         Err(key) => crate::toast(ui, tr(app.lang, key)),
@@ -138,11 +145,11 @@ fn add(ui: &AppWindow, app: &App, ready: Result<Ready, &'static str>) {
 /// Bytes from a file or the clipboard: prepared on a worker thread, then added.
 /// `epoch` is the chat on screen when the picture was chosen or pasted: if another chat is on screen by the time it is ready, it is
 /// dropped (it was meant for the chat that was left, possibly of another account or provider).
-fn add_bytes(app: &Arc<App>, bytes: Vec<u8>, epoch: u64) {
+fn add_bytes(app: &Arc<App>, bytes: Vec<u8>, name: Option<String>, epoch: u64) {
     let have = count();
     let a = app.clone();
     tokio::spawn(async move {
-        let ready = tokio::task::spawn_blocking(move || prepare(bytes, have)).await.unwrap_or(Err("att_read_fail"));
+        let ready = tokio::task::spawn_blocking(move || prepare(bytes, have, name)).await.unwrap_or(Err("att_read_fail"));
         let b = a.clone();
         let _ = a.weak.upgrade_in_event_loop(move |ui| {
             if b.current.lock().expect("current").epoch == epoch {
@@ -183,21 +190,22 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         }
         let epoch = a.current.lock().expect("current").epoch;
         let handle = ui.window().window_handle();
-        let picked = rfd::AsyncFileDialog::new().set_title(tr(a.lang, "att_add")).add_filter("images", &["png", "jpg", "jpeg", "gif", "webp"]).set_parent(&handle).pick_files();
+        let picked = rfd::AsyncFileDialog::new().set_title(tr(a.lang, "att_add")).set_parent(&handle).pick_files();
         let (b, weak) = (a.clone(), ui.as_weak());
         let _ = slint::spawn_local(async move {
             let Some(files) = picked.await else { return };
             for file in files {
                 // Looked at before it is read: a huge file is not loaded to be refused.
                 let path = file.path().to_owned();
-                if std::fs::metadata(&path).map(|m| m.len() as usize > MAX_IMAGE_BYTES).unwrap_or(false) {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                if std::fs::metadata(&path).map(|m| m.len() as usize > MAX_FILE_BYTES).unwrap_or(false) {
                     if let Some(ui) = weak.upgrade() {
                         crate::toast(&ui, tr(b.lang, "att_too_big"));
                     }
                     continue;
                 }
                 match tokio::task::spawn_blocking(move || std::fs::read(path)).await {
-                    Ok(Ok(bytes)) => add_bytes(&b, bytes, epoch),
+                    Ok(Ok(bytes)) => add_bytes(&b, bytes, name, epoch),
                     _ => {
                         if let Some(ui) = weak.upgrade() {
                             crate::toast(&ui, tr(b.lang, "att_read_fail"));
@@ -240,7 +248,7 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         let b = a.clone();
         tokio::spawn(async move {
             match tokio::task::spawn_blocking(move || encode_clipboard(width, height, rgba)).await.unwrap_or(Err("att_read_fail")) {
-                Ok(bytes) => add_bytes(&b, bytes, epoch),
+                Ok(bytes) => add_bytes(&b, bytes, None, epoch),
                 Err(key) => {
                     let c = b.clone();
                     let _ = b.weak.upgrade_in_event_loop(move |ui| crate::toast(&ui, tr(c.lang, key)));

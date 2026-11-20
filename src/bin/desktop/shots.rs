@@ -196,7 +196,7 @@ mod tests {
         base64::engine::general_purpose::STANDARD.encode(out.into_inner())
     }
     fn img(media_type: &str, data: String) -> Image {
-        Image { media_type: media_type.into(), data }
+        Image { media_type: media_type.into(), data, name: None }
     }
 
     #[test]

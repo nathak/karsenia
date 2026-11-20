@@ -1,10 +1,11 @@
-//! What an image attachment must be before it is held for sending: its type is read from its bytes (never from a name), there are
-//! at most five, and none is larger than the host forwards. The host checks again when it sends; this refuses early, with a reason
-//! the person can read.
-use crate::claude::protocol::{IMAGE_TYPES, MAX_IMAGE_BYTES};
+//! What an attachment must be before it is held for sending: any file, at most `MAX_FILES`, none larger than the host takes. An image's
+//! type is read from its bytes (never from a name). The host checks again when it sends (see `attachments`); this refuses early, with a
+//! reason the person can read.
+use crate::attachments::{MAX_FILES, MAX_FILE_BYTES};
+use crate::claude::protocol::IMAGE_TYPES;
 
-/// Most images in one message.
-pub const MAX_IMAGES: usize = 5;
+/// Most files in one message.
+pub const MAX_IMAGES: usize = MAX_FILES;
 
 /// The media type the bytes say they are, for the types the host sends.
 pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
@@ -22,18 +23,34 @@ pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
     IMAGE_TYPES.contains(&kind).then_some(kind)
 }
 
-/// Whether one more image of `len` decoded bytes may be held when `have` are already. The Err is an i18n key.
-pub fn check_add(have: usize, len: usize, kind: Option<&str>) -> Result<(), &'static str> {
-    if kind.is_none() {
-        return Err("att_bad_type");
-    }
-    if have >= MAX_IMAGES {
+/// Whether one more file of `len` decoded bytes may be held when `have` are already. The Err is an i18n key.
+pub fn check_add(have: usize, len: usize) -> Result<(), &'static str> {
+    if have >= MAX_FILES {
         return Err("att_too_many");
     }
-    if len > MAX_IMAGE_BYTES {
+    if len > MAX_FILE_BYTES {
         return Err("att_too_big");
     }
     Ok(())
+}
+
+/// A size for a person: bytes, KB or MB with one decimal.
+pub fn human_size(n: u64) -> String {
+    if n < 1024 {
+        format!("{n} B")
+    } else if n < 1024 * 1024 {
+        format!("{:.1} KB", n as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", n as f64 / 1024.0 / 1024.0)
+    }
+}
+
+/// The short label of a file's tile: its extension in capitals (at most four letters), or FILE.
+pub fn ext_label(name: &str) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric()) => ext.chars().take(4).collect::<String>().to_uppercase(),
+        _ => "FILE".into(),
+    }
 }
 
 /// The size the host computes from base64 text (the same arithmetic as `Session::send`).
@@ -57,15 +74,27 @@ mod tests {
     }
 
     #[test]
+    fn sizes_and_labels_read_well() {
+        assert_eq!(human_size(7), "7 B");
+        assert_eq!(human_size(2048), "2.0 KB");
+        assert_eq!(human_size(5 * 1024 * 1024), "5.0 MB");
+        assert_eq!(ext_label("report.final.pdf"), "PDF");
+        assert_eq!(ext_label("archive.tar.gzip"), "GZIP");
+        assert_eq!(ext_label("archive.longext"), "LONG");
+        assert_eq!(ext_label("Makefile"), "FILE");
+        assert_eq!(ext_label(".bashrc"), "FILE");
+        assert_eq!(ext_label("a."), "FILE");
+    }
+
+    #[test]
     fn count_and_size_are_limited_like_the_host_does() {
-        assert_eq!(check_add(0, 10, Some("image/png")), Ok(()));
-        assert_eq!(check_add(4, MAX_IMAGE_BYTES, Some("image/png")), Ok(()));
-        assert_eq!(check_add(4, MAX_IMAGE_BYTES + 1, Some("image/png")), Err("att_too_big"));
-        assert_eq!(check_add(5, 10, Some("image/png")), Err("att_too_many"));
-        assert_eq!(check_add(0, 10, None), Err("att_bad_type"));
-        // The host's arithmetic on base64 text: exactly 5 MiB passes, a little over does not.
-        let at = "A".repeat(MAX_IMAGE_BYTES / 3 * 4);
-        assert!(decoded_len(&at) <= MAX_IMAGE_BYTES);
-        assert!(decoded_len(&"A".repeat(MAX_IMAGE_BYTES / 3 * 4 + 8)) > MAX_IMAGE_BYTES);
+        assert_eq!(check_add(0, 10), Ok(()));
+        assert_eq!(check_add(MAX_FILES - 1, MAX_FILE_BYTES), Ok(()));
+        assert_eq!(check_add(MAX_FILES - 1, MAX_FILE_BYTES + 1), Err("att_too_big"));
+        assert_eq!(check_add(MAX_FILES, 10), Err("att_too_many"));
+        // The host's arithmetic on base64 text: exactly the limit passes, a little over does not.
+        let at = "A".repeat(MAX_FILE_BYTES / 3 * 4);
+        assert!(decoded_len(&at) <= MAX_FILE_BYTES);
+        assert!(decoded_len(&"A".repeat(MAX_FILE_BYTES / 3 * 4 + 8)) > MAX_FILE_BYTES);
     }
 }

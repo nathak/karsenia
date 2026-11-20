@@ -625,10 +625,10 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("fs_path_ph", "새 이름이나 경로 (같은 프로젝트의 있는 폴더)", "New name or path (an existing folder of the project)"),
     ("fs_entry_more", "이름 바꾸기 · 삭제", "Rename · delete"),
     // ---- attached images ----
-    ("att_add", "이미지", "Image"),
-    ("att_too_many", "이미지는 한 번에 5장까지 보낼 수 있습니다", "At most five images per message"),
-    ("att_too_big", "이미지가 5MB보다 큽니다", "An image is larger than 5 MB"),
-    ("att_bad_type", "png, jpeg, gif, webp 이미지만 보낼 수 있습니다", "Only png, jpeg, gif and webp images can be sent"),
+    ("att_add", "파일 첨부", "Attach files"),
+    ("att_too_many", "한 번에 10개까지 첨부할 수 있습니다", "At most 10 attachments per message"),
+    ("att_too_big", "파일 하나는 25MB까지 보낼 수 있습니다", "A file can be 25 MB at most"),
+    ("file_line", "📎 {name} ({size})", "📎 {name} ({size})"),
     ("att_read_fail", "이미지를 읽을 수 없습니다", "The image could not be read"),
     // ---- skills: edit before approving, history ----
     ("sk_edit_approve", "고쳐서 승인", "Edit and approve"),

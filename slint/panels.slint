@@ -309,11 +309,13 @@ export global Wt {
     callback accept();
 }
 
-export struct AttV { thumb: image, label: string, has-thumb: bool }
+export struct AttV { thumb: image, label: string, name: string, has-thumb: bool }
 
 // The images attached to the message being written.
 export global Att {
     in property <[AttV]> items;
+    // The most files in one message.
+    in property <int> max: 10;
     callback pick();
     callback remove(int);
     // Ctrl+V in the composer: true when an image on the clipboard was attached (else the text field pastes as usual).

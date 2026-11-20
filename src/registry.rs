@@ -866,6 +866,7 @@ impl Registry {
         let meta = handle.info().await.ok_or("the session is gone")?.meta;
         handle.remove().await?;
         crate::workbench::store::remove(&self.dir, sid);
+        crate::attachments::remove_all(&self.dir, sid);
         self.sessions.lock().expect("registry lock").remove(sid);
         if let Some(index) = self.realm_of_meta(&meta).and_then(|r| r.index.clone()) {
             let account = meta.account.as_ref().map(|a| a.id.clone());

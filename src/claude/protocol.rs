@@ -91,16 +91,33 @@ pub fn parse_line(line: &str) -> Event {
     }
 }
 
-/// An image the person attached: the media type and its base64 data.
+/// A file the person attached: its media type as the sender said it (not trusted: the kind is read from the bytes, see
+/// `attachments::classify`), its base64 data and, when it has one, its name. Most are images (a thumbnail in the transcript), but any
+/// file may be attached.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Image {
     pub media_type: String,
     pub data: String,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 pub const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 /// The largest image the host forwards, in decoded bytes.
 pub const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+
+/// What goes into a message for an attached file, once it has been checked (see `attachments`).
+#[derive(Debug, Clone)]
+pub enum Part {
+    /// An image, as an `image` block.
+    Image(Image),
+    /// A PDF, as a `document` block.
+    Pdf { name: String, data: String },
+    /// A text file small enough to be put in the message itself.
+    Text { name: String, body: String },
+    /// Any other file (or a big one): saved in a folder of this app, and the message names where.
+    Stored { name: String, path: std::path::PathBuf, size: usize },
+}
 
 fn one_line(value: &Value) -> String {
     value.to_string()
@@ -108,12 +125,32 @@ fn one_line(value: &Value) -> String {
 
 /// One user turn: the images first, then the text, then `context` (blocks the model is told besides what the person wrote; the
 /// transcript shows only the text).
-pub fn user_message(text: &str, images: &[Image], context: &[String]) -> String {
-    let mut content: Vec<Value> = images
-        .iter()
-        .map(|image| json!({"type": "image", "source": {"type": "base64", "media_type": image.media_type, "data": image.data}}))
-        .collect();
+pub fn user_message(text: &str, parts: &[Part], context: &[String]) -> String {
+    use crate::workbench::inject::esc;
+    let mut content: Vec<Value> = Vec::new();
+    for part in parts {
+        match part {
+            Part::Image(image) => content.push(json!({"type": "image", "source": {"type": "base64", "media_type": image.media_type, "data": image.data}})),
+            Part::Pdf { name, data } => content.push(json!({"type": "document", "title": name, "source": {"type": "base64", "media_type": "application/pdf", "data": data}})),
+            _ => {}
+        }
+    }
     content.push(json!({"type": "text", "text": text}));
+    for part in parts {
+        match part {
+            Part::Text { name, body } => {
+                // Only the closing tag is neutralised: the file's own code stays as it is.
+                let body = body.replace("</attached_file", "&lt;/attached_file");
+                content.push(json!({"type": "text", "text": format!("<attached_file name=\"{}\">\n{body}\n</attached_file>", esc(name))}));
+            }
+            Part::Stored { name, path, size } => content.push(json!({"type": "text", "text": format!(
+                "<attached_file name=\"{}\" size=\"{size}\" path=\"{}\">The file is saved at this path; read it with the Read tool if it is needed.</attached_file>",
+                esc(name),
+                esc(&path.display().to_string())
+            )})),
+            _ => {}
+        }
+    }
     content.extend(context.iter().map(|block| json!({"type": "text", "text": block})));
     one_line(&json!({"type": "user", "message": {"role": "user", "content": content}}))
 }
@@ -232,10 +269,25 @@ mod tests {
 
     #[test]
     fn outgoing_lines_have_the_shape_the_cli_reads() {
-        let image = Image { media_type: "image/png".into(), data: "AAAA".into() };
-        let v: Value = serde_json::from_str(&user_message("hi", &[image], &[])).unwrap();
+        let image = Image { media_type: "image/png".into(), data: "AAAA".into(), name: None };
+        let v: Value = serde_json::from_str(&user_message("hi", &[Part::Image(image)], &[])).unwrap();
         assert_eq!(v["message"]["content"][0]["type"], "image");
         assert_eq!(v["message"]["content"][1]["text"], "hi");
+        // Files: a PDF is a document block before the words; a text file and a saved file are text blocks after them, then the context.
+        let parts = [
+            Part::Pdf { name: "a.pdf".into(), data: "JVBERg==".into() },
+            Part::Text { name: "n<1>.txt".into(), body: "x </attached_file> y".into() },
+            Part::Stored { name: "z.bin".into(), path: "/d/attachments/s/z.bin".into(), size: 7 },
+        ];
+        let v: Value = serde_json::from_str(&user_message("see", &parts, &["<ctx/>".into()])).unwrap();
+        let c = v["message"]["content"].as_array().unwrap();
+        assert_eq!(c[0]["type"], "document");
+        assert_eq!(c[0]["source"]["media_type"], "application/pdf");
+        assert_eq!(c[1]["text"], "see");
+        let text = c[2]["text"].as_str().unwrap();
+        assert!(text.starts_with("<attached_file name=\"n&lt;1&gt;.txt\">") && text.contains("x &lt;/attached_file> y") && text.matches("</attached_file>").count() == 1, "{text}");
+        assert!(c[3]["text"].as_str().unwrap().contains("path=\"/d/attachments/s/z.bin\"") && c[3]["text"].as_str().unwrap().contains("size=\"7\""));
+        assert_eq!(c[4]["text"], "<ctx/>");
         let v: Value = serde_json::from_str(&allow("r1", &json!({"command": "ls"}), None)).unwrap();
         assert!(v["response"]["response"].get("updatedPermissions").is_none());
         let rules = json!([{"type": "addRules"}]);

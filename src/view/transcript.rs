@@ -630,12 +630,26 @@ impl Transcript {
                 let list: Vec<crate::claude::protocol::Image> = data
                     .get("images")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(|i| Some(crate::claude::protocol::Image { media_type: i["media_type"].as_str()?.to_owned(), data: i["data"].as_str().filter(|d| !d.is_empty())?.to_owned() })).collect())
+                    .map(|a| a.iter().filter_map(|i| Some(crate::claude::protocol::Image { media_type: i["media_type"].as_str()?.to_owned(), data: i["data"].as_str().filter(|d| !d.is_empty())?.to_owned(), name: None })).collect())
                     .unwrap_or_default();
                 // What cannot be drawn as a thumbnail is still told in the text.
                 let plain = data.get("images").and_then(Value::as_array).map_or(0, Vec::len) - list.iter().filter(|i| THUMB_TYPES.contains(&i.media_type.as_str())).count();
                 if plain > 0 {
                     text = format!("{}\n{}", fill(&self.t("images"), &[("n", plain.to_string())]), text).trim().to_owned();
+                }
+                // The other files of the message (name, size and kind only: their content is not in the log) are told above the words.
+                let lines: Vec<String> = data
+                    .get("files")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(|f| {
+                        let name: String = f["name"].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).take(100).collect();
+                        fill(&self.t("file_line"), &[("name", name), ("size", crate::view::attach::human_size(f["size"].as_u64().unwrap_or(0)))])
+                    })
+                    .collect();
+                if !lines.is_empty() {
+                    text = format!("{}\n{}", lines.join("\n"), text).trim().to_owned();
                 }
                 let images = (!list.is_empty()).then(|| Shots { id: NEXT_SHOTS.fetch_add(1, Ordering::Relaxed), list: list.into() });
                 self.push(Item::User { text, images }, None);
@@ -1895,6 +1909,15 @@ mod plain_text_tests {
         t.apply("team", &json!({"summary": "on · lead high · explorer haiku · advisor opus"}), 1);
         let text = format!("{:?}", t.rows().iter().map(|r| r.text.clone()).collect::<Vec<_>>());
         assert!(text.contains("explorer haiku") && text.contains("advisor opus"), "{text}");
+    }
+
+    #[test]
+    fn the_files_of_a_message_are_named_above_its_words_without_their_content() {
+        let mut t = Transcript::new(Lang::Ko);
+        t.apply("user", &json!({"text": "봐 주세요", "images": [], "files": [{"name": "a.pdf", "size": 2048, "kind": "pdf"}, {"name": "z.bin", "size": 7, "kind": "file"}]}), 1);
+        let rows = t.rows();
+        let user = rows.iter().find(|r| r.kind == "user").expect("a user row");
+        assert!(user.text.contains("a.pdf") && user.text.contains("2.0 KB") && user.text.contains("z.bin") && user.text.ends_with("봐 주세요"), "{}", user.text);
     }
 
     #[test]
