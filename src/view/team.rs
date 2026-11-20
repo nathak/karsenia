@@ -158,6 +158,51 @@ pub fn parse_team_line(text: &str) -> Option<TeamLine> {
     Some(TeamLine { on, roles, opus_reviews, raw: raw.chars().take(600).collect() })
 }
 
+/// The pickers of the app's own team card (desktop): a helper's model is entry 0 (the lead's) or one of `team::ROLE_ALIASES`, an effort
+/// is entry 0 (the model's own) or one of `team::Effort::ALL`. Indices come from and go to the combo boxes.
+pub mod pick {
+    use crate::workbench::team::{Effort, ROLE_ALIASES};
+
+    pub fn model(index: i32) -> Option<String> {
+        usize::try_from(index).ok().and_then(|i| i.checked_sub(1)).and_then(|i| ROLE_ALIASES.get(i)).map(|m| (*m).to_owned())
+    }
+
+    /// A model not in the list (a full id set elsewhere) shows as the first entry.
+    pub fn model_index(model: Option<&str>) -> i32 {
+        model.and_then(|m| ROLE_ALIASES.iter().position(|a| *a == m)).map_or(0, |i| i as i32 + 1)
+    }
+
+    pub fn effort(index: i32) -> Option<Effort> {
+        usize::try_from(index).ok().and_then(|i| i.checked_sub(1)).and_then(|i| Effort::ALL.get(i)).copied()
+    }
+
+    pub fn effort_index(effort: Option<Effort>) -> i32 {
+        effort.and_then(|e| Effort::ALL.iter().position(|a| *a == e)).map_or(0, |i| i as i32 + 1)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn indices_round_trip_and_out_of_range_means_the_default() {
+            assert_eq!(model(0), None);
+            assert_eq!(model(3).as_deref(), Some("haiku"));
+            assert_eq!(model(99), None);
+            assert_eq!(model(-1), None);
+            assert_eq!(model_index(Some("haiku")), 3);
+            assert_eq!(model_index(Some("claude-x")), 0);
+            assert_eq!(model_index(None), 0);
+            assert_eq!(effort(0), None);
+            assert_eq!(effort(5), Some(Effort::Max));
+            assert_eq!(effort(6), None);
+            for i in 0..=5 {
+                assert_eq!(effort_index(effort(i)), i);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

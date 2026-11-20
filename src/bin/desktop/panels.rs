@@ -448,10 +448,10 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
                 crate::files::panel_open(&ui, &a);
             }
         }
-        // The Team page: the plug-in's snapshot of the chat's session is read.
+        // The Team page: the chat's own workbench (and with it the team settings) is read.
         6 => {
             if let Some(ui) = a.weak.upgrade() {
-                crate::team::swb_open(&ui, &a);
+                crate::team::wb_open(&ui, &a);
             }
         }
         // The VHDB page: what the plug-in left in the chat's project is read.

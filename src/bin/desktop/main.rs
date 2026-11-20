@@ -552,25 +552,11 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
         }
     });
 
-    // The open chat's model. With team mode on it is the lead's model, set through the plug-in's own command; otherwise the chat's
-    // `claude` is started again with the other model (between turns only).
+    // The open chat's model (the lead's, with team mode on): the chat's `claude` is started again with the other model (between turns only).
     let a = app.clone();
     ui.on_set_chat_model(move |index| {
         const ALIASES: [&str; 7] = ["default", "sonnet", "opus", "haiku", "fable", "sonnet[1m]", "opus[1m]"];
-        let (Some(name), Some(ui)) = (ALIASES.get(index.max(0) as usize).copied(), a.weak.upgrade()) else { return };
-        let team = ui.global::<Team>();
-        if team.get_show() && team.get_chip() == "on" {
-            if name == "default" {
-                crate::toast(&ui, tr(a.lang, "model_lead_default"));
-            } else {
-                team::send_role(&a, "lead", name);
-            }
-            return;
-        }
-        if team.get_show() && team.get_chip() == "unknown" {
-            crate::toast(&ui, tr(a.lang, "model_team_check"));
-            return;
-        }
+        let Some(name) = ALIASES.get(index.max(0) as usize).copied() else { return };
         let Some(sid) = a.current.lock().expect("current").sid.clone() else { return };
         let (a, model) = (a.clone(), tenrec::registry::clean_model(name));
         tokio::spawn(async move {
@@ -908,7 +894,6 @@ fn send_text(a: &Arc<App>, text: String, from_composer: bool) {
                     ui.set_draft(text.into());
                     attach::restore(&ui, held);
                 }
-                team::cancel_wait();
             });
             toast_later(&a.weak, message);
         }
@@ -1003,7 +988,7 @@ fn close_chat(ui: &AppWindow, app: &Arc<App>, sid: &str) {
     ui.set_chat_title(SharedString::new());
     ui.set_chat_account(SharedString::new());
     ui.set_chat_perm(SharedString::new());
-    team::reset(ui, app.lang);
+    team::reset(ui);
     files::reset(ui);
 }
 
@@ -1064,11 +1049,9 @@ fn open_chat(app: &Arc<App>, sid: String) {
         term::reset(&ui, app);
         // Shell mode belongs to the chat it was turned on in.
         ui.set_shell_mode(false);
-        team::reset(&ui, app.lang);
+        team::reset(&ui);
         attach::switch(&ui, left_att.as_deref(), &sid);
         files::reset(&ui);
-        // The new chat's snapshot is read whichever page is on screen: the team chip in the header follows it too.
-        team::swb_open(&ui, app);
         // The VHDB page is on screen: it reads the new chat's project.
         if ui.get_side() == 7 {
             vhdb::open(&ui, app);
@@ -1287,7 +1270,7 @@ fn push(app: &Arc<App>) {
             ui.set_deny_text(SharedString::new());
         }
         ui.set_perm(view);
-        team::apply(&ui, &head, state != "running" && !has_perm, lang);
+        team::apply(&ui, state != "running" && !has_perm);
         // The dialog took focus with it: back to the composer, so typing and the zoom keys keep working.
         if closed {
             ui.invoke_focus_composer();
@@ -1527,7 +1510,6 @@ async fn refresh_sessions(app: &Arc<App>) {
     // The gateway picker: whether this chat may switch (it belongs to an account, has no container, and its provider is none or one that uses
     // an account's login), and its current provider.
     let chat_gw: Option<(bool, Option<String>)> = active.map(|i| (!i.meta.container && i.meta.provider.as_ref().is_none_or(|p| p.login) && !i.meta.worktree.as_ref().is_some_and(|w| w.removed), i.meta.provider.as_ref().map(|p| p.id.clone())));
-    let active_csid = active.and_then(|i| i.meta.claude_session_id.clone());
     // The open chat's permission mode when it is not the default: shown in the header, so a chat that never asks is never a surprise.
     let chat_model = active.and_then(|i| i.meta.model.clone());
     let chat_perm = active.map(|i| i.meta.permission_mode).filter(|m| !m.is_default());
@@ -1627,12 +1609,6 @@ async fn refresh_sessions(app: &Arc<App>) {
         ui.set_chat_perm_danger(chat_perm == Some(tenrec::claude::perm::PermMode::Bypass));
         if ui.get_chat_account() != chat_acct_name.as_str() {
             ui.set_chat_account(chat_acct_name.into());
-        }
-        // The chat on screen has a Claude session id now (its first turn gave it one): the plug-in's snapshot is read for it once.
-        if let (Some(sid), Some(csid)) = (followed.as_deref(), active_csid.as_deref()) {
-            if b.current.lock().expect("current").sid.as_deref() == Some(sid) {
-                team::session_known(&ui, &b, sid, csid);
-            }
         }
         // The panels follow a newly opened chat's account, if that chat is still the one on screen.
         if let Some(sid) = followed.filter(|sid| b.current.lock().expect("current").sid.as_deref() == Some(sid.as_str())) {

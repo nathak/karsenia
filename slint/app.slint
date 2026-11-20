@@ -10,11 +10,11 @@ import { Theme, T, Pill, Btn, Rich, SelText, WText, Label, Badge, KeyHint, Toggl
 import { SchedPanel, Sched, SchedHeadV, SchedTask, SchedRun } from "sched.slint";
 import { RowView, ChatRow, ChatImg, TRow } from "rows.slint";
 import { FilesPanel, Files, FsRow, FsCrumb, HlLine, HlTok } from "files.slint";
-import { TeamPage, SwbPanel } from "team.slint";
+import { TeamPage } from "team.slint";
 import { NewChatCard, AccountsManage } from "newchat.slint";
 import { VhdbPage, Vh, VhDecision } from "vhdb.slint";
 import { ImportPanel, Imp, ImpRow } from "import.slint";
-import { MemPanel, SkillsPanel, SettingsPanel, TeamCard, WtCard, UsageCard, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole } from "panels.slint";
+import { MemPanel, SkillsPanel, SettingsPanel, WtCard, UsageCard, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole } from "panels.slint";
 export { Sched, SchedHeadV, SchedTask, SchedRun, Files, FsRow, FsCrumb, HlLine, HlTok, Imp, ImpRow, ChatRow, ChatImg, TRow }
 export { Vh, VhDecision, Theme, T, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole }
 
@@ -109,16 +109,11 @@ export component AppWindow inherits Window {
     // The width of the header: what does not fit goes first (the connection chip, the cost, then the folder).
     // Set when the window is sized (a binding on the width would loop through the header's own size).
     property <length> hw: 1000px;
-    // The plug-in's panel is a column at the right while the window is wide enough, else it lies over the page.
-    out property <bool> swb-shown: root.has-chat && root.side == 0 && !root.new-open && Team.show && Team.chip == "on" && Team.panel;
-    property <bool> swb-docked: false;
     function relayout() {
         root.hw = root.width - 280px;
-        root.swb-docked = root.swb-shown && root.width - 280px >= 880px;
-        root.gutter = max(16px, (root.width - 280px - (root.swb-docked ? 360px : 0px) - 1000px) / 2);
+        root.gutter = max(16px, (root.width - 280px - 1000px) / 2);
     }
     changed width => { root.relayout(); }
-    changed swb-shown => { root.relayout(); Team.panel-visible(root.swb-shown); }
     // The widgets of the toolkit (fields, lists) follow the look chosen above.
     property <bool> dk: Theme.dark;
     changed dk => { Palette.color-scheme = root.dk ? ColorScheme.dark : ColorScheme.light; }
@@ -253,7 +248,6 @@ export component AppWindow inherits Window {
             if (event.text == Key.Escape && root.debug-view && root.side == 0 && !root.new-open && !root.zoom-open && !root.perm.visible && !Dialog.visible && !Pal.open && !(Team.open || Usage.open || root.cont-open)) { root.debug-view = false; root.debug-view-set(false); return accept; }
             if (event.text == Key.Escape && root.text-view && root.side == 0 && !root.new-open && !root.zoom-open && !root.perm.visible && !Dialog.visible && !Pal.open && !(Team.open || Usage.open || root.cont-open)) { root.text-view = false; root.text-view-set(false); return accept; }
             if (event.text == Key.Escape && root.zoom-open && !root.perm.visible && !Dialog.visible) { root.zoom-close(); return accept; }
-            if (event.text == Key.Escape && root.swb-shown && !root.swb-docked && !(Team.open || Usage.open) && !root.perm.visible && !Dialog.visible && !Pal.open) { Team.panel = false; return accept; }
             // Esc closes the team card; a dialog that waits for an answer keeps its own Esc.
             if (event.text == Key.Escape && (Team.open || Usage.open || root.cont-open) && !root.perm.visible && !Dialog.visible) { Team.open = false; Usage.open = false; root.cont-open = false; return accept; }
             if ((event.modifiers.alt || event.modifiers.control) && !event.modifiers.shift && !event.modifiers.meta && !root.perm.visible && !Dialog.visible) {
@@ -515,24 +509,6 @@ export component AppWindow inherits Window {
                             }
                         }
                         if Wt.show: VerticalLayout { alignment: center; Pill { clickable: true; clicked => { Wt.open = !Wt.open; Usage.open = false; if (Wt.open) { Wt.check(); } } text: T.tr("wt_chip"); fg: Theme.info; } }
-                        if Team.show: VerticalLayout {
-                            alignment: center;
-                            Pill {
-                                clickable: true; clicked => { Team.open = !Team.open; Usage.open = false; }
-                                text: T.tr("team_chip") + " " + Team.chip-label;
-                                fg: Team.chip == "on" ? Theme.primary-soft : Theme.outline;
-                                fill: Team.chip == "on" ? Theme.primary.with-alpha(0.15) : transparent;
-                            }
-                        }
-                        if Team.show: VerticalLayout {
-                            alignment: center;
-                            Btn {
-                                text: Team.chip == "on" ? T.tr("swbp_turn_off") : Team.chip == "off" ? T.tr("swbp_turn_on") : T.tr("swbp_turn_check"); height: 28px;
-                                enabled: Team.can-send && !Team.busy;
-                                clicked => { if (Team.chip == "on") { Team.turn(false); } else if (Team.chip == "off") { Team.panel = true; Team.turn(true); } else { Team.check(); } }
-                            }
-                        }
-                        if Team.show && Team.chip == "on": VerticalLayout { alignment: center; Btn { text: T.tr("swbp_panel"); height: 28px; primary: root.swb-shown; clicked => { Team.panel = !Team.panel; } } }
                     }
                 }
                 HorizontalLayout {
@@ -692,7 +668,6 @@ export component AppWindow inherits Window {
                     }
                 }
                     }
-                    if root.swb-docked: SwbPanel { width: 360px; }
                 }
             }
         }
@@ -745,13 +720,6 @@ export component AppWindow inherits Window {
         if !root.new-open && (root.side == 3 || root.side == 5): SchedPanel { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; zoom-pct: root.zoom-pct; zoom(d) => { root.zoom(d); } }
         if !root.new-open && root.side == 4: FilesPanel { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; }
 
-        // ---- the plug-in's panel over the page when the window is too narrow for a column ----
-        if root.swb-shown && !root.swb-docked: Rectangle {
-            x: root.width - 360px; y: 108px; width: 360px; height: root.height - 108px;
-            TouchArea { }
-            SwbPanel { }
-        }
-
         // ---- the worktree card under the header chip; a click outside closes it ----
         if Wt.open && root.has-chat && Wt.show: Rectangle {
             TouchArea { clicked => { Wt.open = false; } }
@@ -777,12 +745,6 @@ export component AppWindow inherits Window {
         if Usage.open: Rectangle {
             TouchArea { clicked => { Usage.open = false; } }
             UsageCard { x: root.width - self.width - 16px; y: 62px; width: 340px; }
-        }
-
-        // ---- the team-mode card under the header chip; a click outside closes it ----
-        if Team.open && root.has-chat && Team.show: Rectangle {
-            TouchArea { clicked => { Team.open = false; } }
-            TeamCard { x: root.width - self.width - 16px; y: 62px; width: 360px; }
         }
 
         // ---- the command palette: type to narrow, Up/Down to pick, Enter to run, Esc to close ----

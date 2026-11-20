@@ -302,17 +302,26 @@ impl Registry {
     /// A change of the chat's team settings (team mode, the lead's effort, a helper's model or effort): saved in its workbench, then the
     /// chat is told so a running idle `claude` starts again with them. A provider chat that does not use an account's login has no team.
     pub async fn team_apply(&self, sid: &str, op: crate::workbench::Op) -> Result<crate::workbench::Workbench, &'static str> {
+        self.team_apply_many(sid, vec![op]).await
+    }
+
+    /// Several team changes at once (a card's save button): each is applied in turn, and the chat is told once, at the end, so a running
+    /// idle `claude` is ended once and the transcript says the team as it now is. The first change that is refused stops the rest.
+    pub async fn team_apply_many(&self, sid: &str, ops: Vec<crate::workbench::Op>) -> Result<crate::workbench::Workbench, &'static str> {
         use crate::workbench::Op;
-        if !matches!(op, Op::SetTeam { .. } | Op::SetLeadEffort { .. } | Op::SetRole { .. }) {
+        if ops.is_empty() || ops.iter().any(|op| !matches!(op, Op::SetTeam { .. } | Op::SetLeadEffort { .. } | Op::SetRole { .. })) {
             return Err("team_err_op");
         }
         let handle = self.get(sid).ok_or("wb_err_gone")?;
         if handle.info().await.is_some_and(|i| i.meta.provider.as_ref().is_some_and(|p| !p.login)) {
             return Err("team_err_provider");
         }
-        let wb = self.workbench_apply(sid, op)?;
+        let mut last = None;
+        for op in ops {
+            last = Some(self.workbench_apply(sid, op)?);
+        }
         let _ = handle.team_changed().await;
-        Ok(wb)
+        last.ok_or("team_err_op")
     }
 
     /// A new session in `cwd`; the folder must exist and must not be `/` or the home folder itself.

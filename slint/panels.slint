@@ -176,6 +176,16 @@ export global Team {
     in property <string> pins;
     in property <string> changed;
     callback panel-visible(bool);
+    // The app's own team mode of the open chat (see src/workbench/team.rs): the switch, and the pickers' entries (0 is the default).
+    in-out property <bool> nt-on;
+    in-out property <int> nt-lead-effort;
+    in-out property <int> nt-exp-model;
+    in-out property <int> nt-exp-effort;
+    in-out property <int> nt-adv-model;
+    in-out property <int> nt-adv-effort;
+    callback nt-on-set(bool);
+    // lead effort, explorer model, explorer effort, advisor model, advisor effort
+    callback nt-save(int, int, int, int, int);
     // The chat's own workbench (the contract, kept by this app): the switch, the goal, the lists, the fields of the forms.
     in property <bool> wb-native;
     in property <bool> wb-ready;
@@ -550,48 +560,6 @@ export component WtCard inherits Card {
             if !Wt.cfg: Btn { text: T.tr("wt_merge"); height: 28px; primary: true; enabled: !Wt.busy && Wt.can-merge; clicked => { Wt.merge(); } }
             Btn { text: T.tr("wt_remove"); height: 28px; danger: true; enabled: !Wt.busy; clicked => { Wt.remove(); } }
         }
-    }
-}
-
-export component TeamCard inherits Card {
-    height: tc.preferred-height;
-    drop-shadow-blur: 20px;
-    drop-shadow-color: #00000080;
-    background: Theme.container;
-    // A click inside the card is not a click outside it.
-    TouchArea { }
-    tc := VerticalLayout {
-        padding: 16px; spacing: 8px;
-        HorizontalLayout {
-            spacing: 8px;
-            Text { text: T.tr("team_title"); color: Theme.on-surface; font-size: 15px; font-weight: 600; vertical-alignment: center; }
-            VerticalLayout {
-                alignment: center;
-                Pill {
-                    text: Team.chip == "on" ? T.tr("team_on") : Team.chip == "off" ? T.tr("team_off") : T.tr("team_unknown");
-                    fg: Team.chip == "on" ? Theme.primary-soft : Theme.outline;
-                    fill: Team.chip == "on" ? Theme.primary.with-alpha(0.15) : transparent;
-                }
-            }
-            Rectangle { horizontal-stretch: 1; }
-        }
-        if Team.seen == "": WText { text: T.tr("team_none"); fg: Theme.on-var; size: 12px;  }
-        for r in Team.roles: HorizontalLayout {
-            spacing: 10px;
-            Text { width: 72px; text: r.role == "lead" ? T.tr("team_role_lead") : r.role == "explorer" ? T.tr("team_role_explorer") : T.tr("team_role_advisor"); color: Theme.outline; font-size: 12px; }
-            Text { text: r.model + (r.effort == "" ? "" : " (" + r.effort + ")"); color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; }
-        }
-        if Team.reviews != "": Text { text: Team.reviews; color: Theme.on-var; font-size: 12px; }
-        if Team.seen != "": Text { text: Team.seen; color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
-        WText { text: T.tr("team_note"); fg: Theme.outline; size: 11px;  }
-        WText { text: T.tr("team_sends"); fg: Theme.outline; size: 11px;  }
-        HorizontalLayout {
-            spacing: 6px; alignment: end; padding-top: 4px;
-            Btn { text: T.tr("team_btn_check"); height: 28px; enabled: Team.can-send && !Team.busy; clicked => { Team.check(); } }
-            Btn { text: T.tr("team_btn_off"); height: 28px; enabled: Team.can-send && !Team.busy; clicked => { Team.turn(false); } }
-            Btn { text: T.tr("team_btn_on"); height: 28px; primary: true; enabled: Team.can-send && !Team.busy; clicked => { Team.turn(true); } }
-        }
-        if !Team.can-send: WText { text: T.tr("team_wait"); fg: Theme.primary-soft; size: 11px;  }
     }
 }
 
