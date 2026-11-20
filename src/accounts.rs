@@ -339,6 +339,11 @@ pub(crate) enum Streams {
 /// Runs a program with fixed arguments in one folder and returns what it printed (at most 64 KB of each stream) and how it ended: with the
 /// credential variables of the plan applied, in a group that can be ended as a whole, and ended after a time limit.
 pub(crate) async fn run_capped(bin: &str, dir: &Path, env: &EnvPlan, args: &[&str], streams: Streams) -> Result<(Vec<u8>, std::process::ExitStatus), String> {
+    run_capped_within(bin, dir, env, args, streams, STATUS_TIMEOUT).await
+}
+
+/// As `run_capped`, with the time it may take (a command that runs the program's start-up hooks needs more than a status read).
+pub(crate) async fn run_capped_within(bin: &str, dir: &Path, env: &EnvPlan, args: &[&str], streams: Streams, limit: Duration) -> Result<(Vec<u8>, std::process::ExitStatus), String> {
     let mut command = Command::new(bin);
     command.args(args).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(if streams == Streams::Both { Stdio::piped() } else { Stdio::null() }).kill_on_drop(true);
         crate::proc_group::configure(&mut command);
@@ -379,7 +384,7 @@ pub(crate) async fn run_capped(bin: &str, dir: &Path, env: &EnvPlan, args: &[&st
         let status = child.wait().await.map_err(|e| e.to_string())?;
         Ok::<_, String>((bytes, status))
     };
-    match tokio::time::timeout(STATUS_TIMEOUT, work).await {
+    match tokio::time::timeout(limit, work).await {
         Ok(bytes) => bytes,
         Err(_) => {
             if let Some(group) = &group {
@@ -388,6 +393,12 @@ pub(crate) async fn run_capped(bin: &str, dir: &Path, env: &EnvPlan, args: &[&st
             Err("the program did not answer in time".into())
         }
     }
+}
+
+/// Where the default account's `claude` runs: the folder it keeps its settings in, else the home folder.
+pub fn default_claude_cwd() -> PathBuf {
+    let home = crate::platform::home_dir();
+    default_config_dir(std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).as_deref(), home.as_deref()).filter(|d| d.is_dir()).or(home).unwrap_or_else(|| "/".into())
 }
 
 /// Asks `claude auth status` about one config folder. `expect` is the canonical folder it must report when one is given; a different

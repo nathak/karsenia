@@ -1,6 +1,6 @@
 //! The limits `claude` reported for an account, as rows for the desktop app: a label, a percentage and a bar for each window (5 hours,
 //! the week, a model's week), when it resets, and one short line for the header. A value is as old as the last turn of that account
-//! (the card says when it was seen); a window whose reset time has passed is shown as reset, not as the old percentage.
+//! (the card says when it was seen); a window whose reset time has passed is shown as passed (current use not known), not as the old percentage.
 use super::i18n::{fill, tr, Lang};
 use super::panels::ago;
 use crate::usage::{AccountUsage, Win};
@@ -96,7 +96,8 @@ fn win_view(key: &str, w: &Win, now_s: u64, lang: Lang) -> WinView {
         "ok"
     };
     let pct = match (over, w.util) {
-        (true, _) => String::new(),
+        // A window whose time has passed: what it was says nothing of the one that follows, so no number is shown.
+        (true, _) => "—".to_owned(),
         (false, Some(u)) => format!("{}%", (u * 100.0).round() as i64),
         (false, None) => "—".to_owned(),
     };
@@ -165,7 +166,7 @@ mod tests {
         u.insert("five_hour".into(), win(Some(0.9), -3600, "allowed_warning"));
         u.insert("seven_day".into(), win(Some(0.3), 86400, "allowed"));
         let v = usage_view(Some(&u), NOW, Lang::Ko);
-        assert_eq!((v.wins[0].level, v.wins[0].pct.as_str(), v.wins[0].reset.as_str()), ("reset", "", "초기화됨"));
+        assert_eq!((v.wins[0].level, v.wins[0].pct.as_str(), v.wins[0].reset.as_str()), ("reset", "—", "초기화 시각 지남 · 현재 사용량 모름"));
         assert_eq!((v.chip.as_str(), v.chip_level), ("주간 30%", "ok"));
         assert_eq!(v.compact, "주간 30%");
         let none = usage_view(None, NOW, Lang::Ko);

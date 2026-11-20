@@ -686,6 +686,29 @@ impl Registry {
         &self.shared.usage
     }
 
+    /// Asks the program for the account's usage now (`/usage`, which it answers itself; see `usage_cli`) and keeps what it says as the
+    /// stream's events are kept. `account` None (or empty) is the default login. Ok(changed); the Err is a word for the page: `busy` (one
+    /// is running), `soon` (one ran a minute ago), `failed` (the program did not answer, or the account has no Claude login),
+    /// `unreadable` (it answered, and nothing in it was understood: the stored numbers stay).
+    pub async fn refresh_usage(&self, account: Option<&str>) -> Result<bool, &'static str> {
+        let account = account.filter(|a| !a.is_empty());
+        let now = crate::now_ms();
+        let _held = self.shared.usage.begin_probe(account.unwrap_or_default(), now).map_err(|skip| match skip {
+            crate::usage::Skip::Busy => "busy",
+            crate::usage::Skip::Soon => "soon",
+        })?;
+        let (dir, env) = match account {
+            Some(id) => self.account_login(id).map_err(|_| "failed")?,
+            None => (crate::accounts::default_claude_cwd(), EnvPlan::default()),
+        };
+        let text = crate::usage_cli::ask(&self.bin, &dir, &env).await.map_err(|error| {
+            tracing::warn!("the usage could not be asked: {error}");
+            "failed"
+        })?;
+        let info = crate::usage_cli::to_info(&text, crate::now_ms() / 1000, &chrono::Local).ok_or("unreadable")?;
+        Ok(self.shared.usage.record(account, &info, crate::now_ms()))
+    }
+
     pub fn accounts(&self) -> Arc<AccountStore> {
         self.accounts.clone()
     }

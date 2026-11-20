@@ -75,6 +75,12 @@ export global Usage {
     // The per-model weekly window is named by a guess: the card says so.
     in property <bool> assume;
     in-out property <bool> open;
+    // The card asked the program for the numbers now: running, and a word about how it ended ("" when well).
+    in property <bool> busy;
+    in property <string> note;
+    callback refresh();
+    // The card was opened (it asks by itself when what it holds is old or a window has ended).
+    callback opened();
     pure public function tone(level: string) -> color {
         return level == "ok" ? Theme.ok : level == "warn" ? Theme.primary : level == "limit" ? Theme.error : Theme.outline;
     }
@@ -588,7 +594,12 @@ export component UsageCard inherits Card {
             }
             Text { text: w.reset; color: Theme.outline; font-size: 11px; }
         }
-        if !Usage.empty: Text { text: Usage.seen; color: Theme.outline; font-size: 11px; font-family: Theme.mono; }
+        HorizontalLayout {
+            spacing: 8px;
+            Text { horizontal-stretch: 1; text: Usage.empty ? "" : Usage.seen; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; }
+            Btn { text: Usage.busy ? T.tr("us_refreshing") : T.tr("us_refresh"); height: 26px; enabled: !Usage.busy; clicked => { Usage.refresh(); } }
+        }
+        if Usage.note != "": WText { text: Usage.note; size: 11px; fg: Theme.primary-soft; }
         if Usage.assume: WText { text: T.tr("us_assume"); size: 11px; fg: Theme.outline; }
     }
 }

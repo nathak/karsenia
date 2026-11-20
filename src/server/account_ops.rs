@@ -16,8 +16,7 @@ fn result(out: &UnboundedSender<String>, rid: &Value, ok: bool, data: Value) {
 
 /// Where the default account's `claude` runs: the folder it keeps its settings in, else the home folder.
 fn default_dir() -> std::path::PathBuf {
-    let home = crate::platform::home_dir();
-    crate::accounts::default_config_dir(std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from).as_deref(), home.as_deref()).filter(|d| d.is_dir()).or(home).unwrap_or_else(|| "/".into())
+    crate::accounts::default_claude_cwd()
 }
 
 fn changed(state: &AppState) {
@@ -66,6 +65,16 @@ pub fn handle(state: &AppState, name: &str, op: &Value, out: &UnboundedSender<St
     match name {
         "account_usage" => {
             let _ = out.send(plain("account_usage", None, json!({"accounts": state.registry.usage().snapshot()})));
+        }
+        // The person wants the numbers now: the program is asked for its usage (see `Registry::refresh_usage`); the answer says whether
+        // it worked, and the numbers themselves come as `usage_changed`.
+        "account_usage_refresh" => {
+            let account = op["account"].as_str().map(str::to_owned).filter(|a| !a.is_empty());
+            let (state, out) = (state.clone(), out.clone());
+            tokio::spawn(async move {
+                let answer = state.registry.refresh_usage(account.as_deref()).await;
+                let _ = out.send(plain("usage_refresh", None, json!({"account": account, "ok": answer.is_ok(), "error": answer.err()})));
+            });
         }
         "account_list" => {
             let _ = out.send(plain("accounts", None, listing(state)));

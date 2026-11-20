@@ -27,6 +27,7 @@ pub mod session;
 pub mod settings;
 pub mod skills;
 pub mod usage;
+pub mod usage_cli;
 pub mod watch;
 pub mod workbench;
 pub mod worktree;

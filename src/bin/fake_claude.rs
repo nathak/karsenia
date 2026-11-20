@@ -67,6 +67,14 @@ fn main() {
         }
         return;
     }
+    // `claude -p /usage`: answered with no model, from FAKE_USAGE (a file with the text) or a sample.
+    if argv.iter().any(|a| a == "/usage") {
+        log(&log_path, "USAGE_ASKED");
+        let default = "Current session: 100% used · resets 6:39pm (Asia/Seoul)\nCurrent week (all models): 81% used · resets Nov 24, 4:59pm (Asia/Seoul)";
+        let text = std::env::var("FAKE_USAGE").ok().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_else(|| default.to_owned());
+        println!("{}", serde_json::json!({"type": "result", "subtype": "success", "is_error": false, "num_turns": 0, "total_cost_usd": 0, "result": text}));
+        return;
+    }
     // A scheduled run (--max-turns with --output-format json): the prompt on stdin, one JSON result out.
     //   FAKE_SCHED: a file holding the result line to print; FAKE_SCHED_SLEEP_MS: wait first; FAKE_SCHED_EXIT: exit with this code instead.
     if args_has(&std::env::args().collect::<Vec<_>>(), "--max-turns") {

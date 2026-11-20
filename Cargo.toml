@@ -32,6 +32,7 @@ desktop = ["dep:slint", "dep:slint-build", "dep:arboard", "dep:rfd", "dep:image"
 anyhow = "1"
 axum = { version = "0.7", features = ["ws"] }
 base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 fancy-regex = "0.20"
 futures-util = "0.3"
 getrandom = "0.2"

@@ -453,7 +453,7 @@ export component AppWindow inherits Window {
                             }
                         }
                         Pill {
-                            y: 17px; clickable: true; clicked => { Usage.open = !Usage.open; Wt.open = false; Team.open = false; }
+                            y: 17px; clickable: true; clicked => { Usage.open = !Usage.open; Wt.open = false; Team.open = false; if (Usage.open) { Usage.opened(); } }
                             text: Usage.chip;
                             fg: Usage.tone(Usage.level);
                         }

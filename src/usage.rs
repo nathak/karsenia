@@ -1,6 +1,7 @@
-//! The limits Claude reports for each login: the 5-hour window, the weekly one and the weekly ones of a model. The only source is the
-//! `rate_limit_event` a running `claude` prints in its stream, so a value is as fresh as the last turn a chat of that account ran
-//! (nothing is asked of Anthropic: no token leaves the app). The default account is kept under the empty name.
+//! The limits Claude reports for each login: the 5-hour window, the weekly one and the weekly ones of a model. The sources are the
+//! `rate_limit_event` a running `claude` prints in its stream, so a value is as fresh as the last turn a chat of that account ran, and,
+//! when the person asks, what the program's own `/usage` command says (see `usage_cli`; the program asks, the app asks Anthropic nothing:
+//! no token leaves the app). The default account is kept under the empty name.
 //!
 //! What a stream says is not trusted for size or shape: a window's name is a short lowercase word, a value is a finite number in a
 //! sane range, a reset time is a sane date, and an account holds a few windows. A chat of a provider is never counted (it has no
@@ -23,6 +24,8 @@ const MAX_RESET_S: u64 = 7_258_118_400;
 const MAX_AGE_S: u64 = 35 * 24 * 3600;
 /// Time a window stays listed as "reset" before it is dropped to make room (seconds), and the slack allowed for clocks.
 const RESET_SLACK_S: u64 = 60;
+/// Two reset times this close are one window: `/usage` says the minute (18:40) where the stream says the second (18:39:42).
+const SAME_WINDOW_S: u64 = 90;
 /// A value seen again unchanged is written back only when its time is this old.
 const REFRESH_MS: u64 = 60_000;
 
@@ -103,8 +106,9 @@ pub fn merge(cur: &mut AccountUsage, info: &Value, now_ms: u64) -> bool {
     let mut changed = false;
     for (key, util, resets_at, status) in incoming {
         match cur.get_mut(&key) {
-            Some(old) if resets_at < old.resets_at => {}
-            Some(old) if resets_at == old.resets_at => {
+            Some(old) if resets_at.abs_diff(old.resets_at) > SAME_WINDOW_S && resets_at < old.resets_at => {}
+            Some(old) if resets_at.abs_diff(old.resets_at) <= SAME_WINDOW_S => {
+                old.resets_at = old.resets_at.max(resets_at);
                 let merged = match (old.util, util) {
                     (Some(a), Some(b)) => Some(a.max(b)),
                     (a, b) => b.or(a),
@@ -141,6 +145,34 @@ pub struct UsageStore {
     path: PathBuf,
     map: Mutex<HashMap<String, AccountUsage>>,
     events: broadcast::Sender<Value>,
+    /// By account: when `/usage` was last asked (ms) and whether an ask is running now.
+    probes: Mutex<HashMap<String, (u64, bool)>>,
+}
+
+/// Why an ask for the usage was not made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Skip {
+    /// One is running for this account.
+    Busy,
+    /// The last one started less than `PROBE_GAP_MS` ago.
+    Soon,
+}
+
+/// The least time between two asks for one account.
+pub const PROBE_GAP_MS: u64 = 60_000;
+
+/// Held while an ask runs: it keeps a second one out, and ends that when dropped (an ask that fails or is cut off included).
+pub struct ProbeGuard<'a> {
+    store: &'a UsageStore,
+    key: String,
+}
+
+impl Drop for ProbeGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(p) = self.store.probes.lock().unwrap_or_else(|p| p.into_inner()).get_mut(&self.key) {
+            p.1 = false;
+        }
+    }
 }
 
 impl UsageStore {
@@ -167,7 +199,25 @@ impl UsageStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => tracing::warn!("usage.json could not be read: {}", error.kind()),
         }
-        Self { path: path.to_owned(), map: Mutex::new(map), events }
+        Self { path: path.to_owned(), map: Mutex::new(map), events, probes: Mutex::new(HashMap::new()) }
+    }
+
+    /// Leave to ask `/usage` for `account` ("" is the default one): not while one runs, not within a minute of the last one.
+    pub fn begin_probe(&self, account: &str, now_ms: u64) -> Result<ProbeGuard<'_>, Skip> {
+        let mut probes = self.probes.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((at, running)) = probes.get(account) {
+            if *running {
+                return Err(Skip::Busy);
+            }
+            if now_ms.saturating_sub(*at) < PROBE_GAP_MS {
+                return Err(Skip::Soon);
+            }
+        }
+        if probes.len() >= MAX_ACCOUNTS && !probes.contains_key(account) {
+            probes.clear();
+        }
+        probes.insert(account.to_owned(), (now_ms, true));
+        Ok(ProbeGuard { store: self, key: account.to_owned() })
     }
 
     /// Takes one event of a chat of `account` (None: the default one). Tells the pages when it changed something.
@@ -332,6 +382,33 @@ mod tests {
         // A file that is not understood starts empty.
         std::fs::write(&path, "{not json").unwrap();
         assert!(UsageStore::open_at(&path, broadcast::channel(1).0, NOW).snapshot().is_empty());
+    }
+
+    #[test]
+    fn a_reset_time_within_a_minute_and_a_half_is_the_same_window_whichever_comes_first() {
+        let mut cur = AccountUsage::new();
+        let reset = RESET;
+        // The stream gives the second, `/usage` the minute (before or after it): one window, the larger use stays.
+        assert!(merge(&mut cur, &json!({"unifiedWindows": {"five_hour": {"utilization": 0.4, "resetsAt": reset + 42, "status": "allowed"}}}), NOW));
+        merge(&mut cur, &json!({"unifiedWindows": {"five_hour": {"utilization": 1.0, "resetsAt": reset + 60, "status": ""}}}), NOW + 1000);
+        assert_eq!((cur["five_hour"].util, cur["five_hour"].resets_at), (Some(1.0), reset + 60));
+        merge(&mut cur, &json!({"unifiedWindows": {"five_hour": {"utilization": 0.5, "resetsAt": reset + 42}}}), NOW + 2000);
+        assert_eq!((cur["five_hour"].util, cur["five_hour"].resets_at), (Some(1.0), reset + 60), "an older second is not a new window and use does not fall");
+        // A reset a whole window earlier is still an older event, and one later replaces.
+        assert!(!merge(&mut cur, &json!({"unifiedWindows": {"five_hour": {"utilization": 0.1, "resetsAt": reset - 600}}}), NOW + 3000));
+        assert!(merge(&mut cur, &json!({"unifiedWindows": {"five_hour": {"utilization": 0.05, "resetsAt": reset + 18000}}}), NOW + 70_000));
+    }
+
+    #[test]
+    fn an_ask_is_held_to_one_at_a_time_and_a_minute_apart_per_account() {
+        let (tx, _rx) = broadcast::channel(4);
+        let store = UsageStore::open(&std::env::temp_dir().join("no-such-usage.json"), tx);
+        let first = store.begin_probe("a", NOW).unwrap();
+        assert_eq!(store.begin_probe("a", NOW + 1).err(), Some(Skip::Busy));
+        assert!(store.begin_probe("b", NOW + 1).is_ok(), "another account is its own");
+        drop(first);
+        assert_eq!(store.begin_probe("a", NOW + 30_000).err(), Some(Skip::Soon));
+        assert!(store.begin_probe("a", NOW + PROBE_GAP_MS).is_ok());
     }
 
     #[test]
