@@ -106,7 +106,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("nt_apply", "적용", "Apply"),
     ("nt_saved", "팀 설정을 저장했습니다. 다음 메시지부터 적용됩니다.", "Team settings saved. They apply from the next message."),
     ("team_err_model", "모델은 sonnet, opus, haiku, fable 같은 이름이나 claude- 로 시작하는 전체 이름이어야 합니다.", "The model must be a name like sonnet, opus, haiku or fable, or a full name that starts with claude-."),
-    ("team_err_provider", "게이트웨이 전용 채팅에는 팀 모드를 쓸 수 없습니다.", "A chat that is tied to a gateway cannot use team mode."),
+    ("team_err_provider", "게이트웨이 전용 채팅이나 컨테이너 채팅에는 팀 모드를 쓸 수 없습니다.", "A chat tied to a gateway, or one in a container, cannot use team mode."),
     ("team_err_op", "팀 설정이 아닌 변경입니다.", "That is not a team setting."),
     ("dbg_chat", "채팅", "Chat"),
     ("dbg_endpoint", "연결 대상", "Endpoint"),

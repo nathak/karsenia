@@ -1032,7 +1032,7 @@ impl Actor {
         let shown: Vec<Value> = images.iter().map(|i| json!({"media_type": i.media_type, "data": i.data})).collect();
         self.emit("user", json!({"text": text, "images": shown}));
         // What the person has set in the chat's workbench is added for the model; the transcript above shows only the person's words.
-        let context = if self.workbench_native() { crate::workbench::inject::blocks(&self.dir, &self.meta.sid, &self.meta.cwd) } else { Vec::new() };
+        let context = if self.workbench_native() { crate::workbench::inject::blocks(&self.dir, &self.meta.sid, &self.meta.cwd, self.team_spawned.is_some()) } else { Vec::new() };
         let sent = self.process.as_ref().map(|p| p.send_line(protocol::user_message(&text, &images, &context))).unwrap_or(false);
         if !sent {
             self.emit("error", json!({"message": "the claude process is gone; try again"}));
@@ -1055,8 +1055,9 @@ impl Actor {
     }
 
     /// Whether this app's own workbench is on for this chat: the switch is on and the chat can have its guard hook (a container chat has no
-    /// program of the app inside it, and without the app's own binary there is no hook). Otherwise the plug-in is left as it is, so a chat
-    /// never ends up with neither.
+    /// program of the app inside it, and without the app's own binary there is no hook). Where the plug-in is not forced off (not the
+    /// desktop app) it is then left as it is, so a chat never ends up with neither; in the desktop app a chat that cannot have the hook
+    /// runs without the plug-in and without the guard.
     fn workbench_native(&self) -> bool {
         self.settings.as_ref().is_some_and(|s| s.native()) && !self.meta.container && self.mcp.is_some()
     }

@@ -313,7 +313,7 @@ impl Registry {
             return Err("team_err_op");
         }
         let handle = self.get(sid).ok_or("wb_err_gone")?;
-        if handle.info().await.is_some_and(|i| i.meta.provider.as_ref().is_some_and(|p| !p.login)) {
+        if handle.info().await.is_some_and(|i| i.meta.container || i.meta.provider.as_ref().is_some_and(|p| !p.login)) {
             return Err("team_err_provider");
         }
         let mut last = None;

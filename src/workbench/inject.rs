@@ -133,9 +133,11 @@ pub fn pins_block(wb: &Workbench, cwd: &Path) -> Option<String> {
 }
 
 /// What is added to the next message of the chat, from the saved workbench; nothing when there is none or it cannot be read.
-pub fn blocks(data: &Path, sid: &str, cwd: &Path) -> Vec<String> {
+/// `team_active`: the process was given the helper subagents (see `team_now` in the session), so the one guidance line about them is
+/// added only then.
+pub fn blocks(data: &Path, sid: &str, cwd: &Path, team_active: bool) -> Vec<String> {
     let Ok(wb) = super::store::load(data, sid) else { return Vec::new() };
-    let team = wb.team.on.then(|| super::team::GUIDANCE.to_owned());
+    let team = (team_active && wb.team.on).then(|| super::team::GUIDANCE.to_owned());
     contract_block(&wb).into_iter().chain(pins_block(&wb, cwd)).chain(team).collect()
 }
 
@@ -156,12 +158,13 @@ mod tests {
         let cwd = dir.path();
         let mut w = Workbench::default();
         crate::workbench::store::save(dir.path(), "s1", &w).unwrap();
-        assert!(blocks(dir.path(), "s1", cwd).is_empty());
+        assert!(blocks(dir.path(), "s1", cwd, true).is_empty());
         w.apply(Op::SetTeam { on: true }).unwrap();
         crate::workbench::store::save(dir.path(), "s1", &w).unwrap();
-        let b = blocks(dir.path(), "s1", cwd);
+        let b = blocks(dir.path(), "s1", cwd, true);
         assert_eq!(b.len(), 1, "{b:?}");
         assert!(is_block(&b[0]) && b[0].contains("explorer") && b[0].contains("advisor"));
+        assert!(blocks(dir.path(), "s1", cwd, false).is_empty(), "no helpers were given to the process, so no line about them");
     }
 
     #[test]
