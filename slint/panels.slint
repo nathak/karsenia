@@ -339,6 +339,8 @@ export global Prov {
     in-out property <string> f-opus;
     in-out property <string> f-sonnet;
     in-out property <string> f-haiku;
+    // Extra request headers, one `Name: value` per line, `{key}` where the key goes.
+    in-out property <string> f-headers;
     in-out property <string> ctr-runtime;
     in-out property <string> ctr-image;
     callback new();
@@ -661,6 +663,8 @@ export component ProvidersCard inherits Card {
                         LineEdit { text <=> Prov.f-haiku; placeholder-text: "haiku"; }
                     }
                 }
+                Field { label: T.tr("pv_headers"); TextEdit { height: 70px; text <=> Prov.f-headers; } }
+                WText { text: T.tr("pv_headers_hint"); fg: Theme.outline; size: 11px; }
                 HorizontalLayout {
                     spacing: 8px; alignment: end;
                     Btn { text: T.cancel; clicked => { Prov.cancel(); } }

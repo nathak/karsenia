@@ -38,6 +38,10 @@ pub fn plan(inherited: &[String], provider: Option<&Provider>, config_dir: &Path
         Auth::Bearer => set.push(("ANTHROPIC_AUTH_TOKEN".into(), provider.token.clone().unwrap_or_else(|| PLACEHOLDER_TOKEN.into()))),
         Auth::XApiKey => set.push(("ANTHROPIC_API_KEY".into(), provider.token.clone().unwrap_or_else(|| PLACEHOLDER_TOKEN.into()))),
     }
+    // A gateway that wants its key in a header of its own: the lines of the provider, with the key where it says `{key}`.
+    if let Some(headers) = provider.custom_headers() {
+        set.push(("ANTHROPIC_CUSTOM_HEADERS".into(), headers));
+    }
     set.push(("CLAUDE_CONFIG_DIR".into(), config_dir.display().to_string()));
     set.push(("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(), "1".into()));
     for (name, value) in [("ANTHROPIC_DEFAULT_OPUS_MODEL", &provider.models.opus), ("ANTHROPIC_DEFAULT_SONNET_MODEL", &provider.models.sonnet), ("ANTHROPIC_DEFAULT_HAIKU_MODEL", &provider.models.haiku)] {
@@ -79,7 +83,7 @@ mod tests {
     use crate::providers::Aliases;
 
     fn provider(auth: Auth, token: Option<&str>) -> Provider {
-        Provider { id: "p1".into(), name: "P".into(), base_url: "https://gw.example.com/x".into(), auth, token: token.map(str::to_owned), model: None, models: Aliases::default(), created: 0, updated: 0 }
+        Provider { id: "p1".into(), name: "P".into(), base_url: "https://gw.example.com/x".into(), auth, token: token.map(str::to_owned), model: None, models: Aliases::default(), headers: None, created: 0, updated: 0 }
     }
 
     fn names(list: &[&str]) -> Vec<String> {
@@ -196,5 +200,20 @@ mod tests {
         let text = pin_settings("https://gw.example.com/x");
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v, serde_json::json!({"env": {"ANTHROPIC_BASE_URL": "https://gw.example.com/x"}}));
+    }
+
+    #[test]
+    fn a_providers_header_lines_get_its_key_where_they_say_so_and_only_when_it_has_headers() {
+        let mut p = provider(Auth::Bearer, Some("airkey-123456"));
+        let plain = plan(&[], Some(&p), Path::new("/cfg"));
+        assert!(!plain.set.iter().any(|(k, _)| k == "ANTHROPIC_CUSTOM_HEADERS"));
+        p.headers = Some("AIR-Api-Key: {key}\nAIR-Coding-Agent-Mode: subscription".into());
+        let with = plan(&names(&["ANTHROPIC_CUSTOM_HEADERS"]), Some(&p), Path::new("/cfg"));
+        assert_eq!(value(&with, "ANTHROPIC_CUSTOM_HEADERS"), Some("AIR-Api-Key: airkey-123456\nAIR-Coding-Agent-Mode: subscription"));
+        assert!(!with.remove.contains(&"ANTHROPIC_CUSTOM_HEADERS".to_owned()), "set by the plan, so not also removed");
+        // An inherited value of the variable is removed when the provider has none: a chat never gets another one's headers.
+        let none = provider(Auth::Bearer, Some("airkey-123456"));
+        let stripped = plan(&names(&["ANTHROPIC_CUSTOM_HEADERS"]), Some(&none), Path::new("/cfg"));
+        assert!(stripped.remove.contains(&"ANTHROPIC_CUSTOM_HEADERS".to_owned()));
     }
 }

@@ -358,6 +358,8 @@ pub struct ProvForm<'a> {
     pub clear: bool,
     pub model: &'a str,
     pub aliases: [&'a str; 3],
+    /// The header lines (`Name: value`, `{key}` where the key goes).
+    pub headers: &'a str,
 }
 
 /// The `provider_save` operation. An empty key field puts no "token" in it at all (the saved key stays); an empty id is a new
@@ -366,6 +368,7 @@ pub fn prov_op(f: &ProvForm) -> Value {
     let mut op = json!({
         "op": "provider_save", "name": f.name.trim(), "base_url": f.url.trim(), "auth": if f.auth == 1 { "x_api_key" } else { "bearer" },
         "model": f.model.trim(), "models": {"opus": f.aliases[0].trim(), "sonnet": f.aliases[1].trim(), "haiku": f.aliases[2].trim()},
+        "headers": f.headers.trim(),
     });
     if let Some(id) = f.id.filter(|id| !id.is_empty()) {
         op["id"] = json!(id);
@@ -499,13 +502,13 @@ mod tests {
         assert!(head.ctr_ready && head.ctr_runtime == "/usr/bin/docker");
         assert_eq!(rows[0].sub, "gw.example · key set · 2 chats");
         assert_eq!(rows[1].sub, "localhost · no key");
-        let new = prov_op(&ProvForm { id: None, name: " N ", url: "https://x.example", auth: 1, key: "abcdefgh12", clear: false, model: "", aliases: ["", "", ""] });
+        let new = prov_op(&ProvForm { id: None, name: " N ", url: "https://x.example", auth: 1, key: "abcdefgh12", clear: false, model: "", aliases: ["", "", ""], headers: "" });
         assert_eq!((new["token"].as_str(), new["auth"].as_str(), new["name"].as_str()), (Some("abcdefgh12"), Some("x_api_key"), Some("N")));
         assert!(new.get("id").is_none() && new.get("clear_token").is_none());
-        let keep = prov_op(&ProvForm { id: Some("p1"), name: "G", url: "https://x.example", auth: 0, key: "", clear: false, model: "m", aliases: ["o", "s", "h"] });
+        let keep = prov_op(&ProvForm { id: Some("p1"), name: "G", url: "https://x.example", auth: 0, key: "", clear: false, model: "m", aliases: ["o", "s", "h"], headers: "" });
         assert!(keep.get("token").is_none(), "an empty key field keeps the saved key");
         assert_eq!((keep["id"].as_str(), keep["models"]["haiku"].as_str()), (Some("p1"), Some("h")));
-        let clear = prov_op(&ProvForm { id: Some("p1"), name: "G", url: "https://x.example", auth: 0, key: "", clear: true, model: "", aliases: ["", "", ""] });
+        let clear = prov_op(&ProvForm { id: Some("p1"), name: "G", url: "https://x.example", auth: 0, key: "", clear: true, model: "", aliases: ["", "", ""], headers: "" });
         assert_eq!(clear["clear_token"], true);
     }
 }

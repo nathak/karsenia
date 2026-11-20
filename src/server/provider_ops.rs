@@ -29,6 +29,7 @@ fn form(op: &Value) -> Result<Form, String> {
         clear_token: op["clear_token"].as_bool() == Some(true),
         model: text(op, "model"),
         models: [text(&op["models"], "opus"), text(&op["models"], "sonnet"), text(&op["models"], "haiku")],
+        headers: text(op, "headers"),
     })
 }
 

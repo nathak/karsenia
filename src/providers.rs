@@ -57,6 +57,10 @@ pub struct Provider {
     pub model: Option<String>,
     #[serde(default)]
     pub models: Aliases,
+    /// Extra request headers, one `Name: value` per line, where `{key}` stands for the key (a gateway that wants its key in a header of its
+    /// own). The key is never in this text itself: only where it goes.
+    #[serde(default)]
+    pub headers: Option<String>,
     #[serde(default)]
     pub created: u64,
     #[serde(default)]
@@ -80,6 +84,8 @@ pub struct ProviderView {
     pub has_token: bool,
     pub model: Option<String>,
     pub models: Aliases,
+    /// The header lines as the person wrote them (with `{key}`, never the key).
+    pub headers: String,
 }
 
 /// What a chat remembers of its provider (no token, no full address).
@@ -92,7 +98,7 @@ pub struct ProviderRef {
 
 impl Provider {
     pub fn view(&self) -> ProviderView {
-        ProviderView { id: self.id.clone(), name: self.name.clone(), base_url: self.base_url.clone(), host: host_of(&self.base_url), auth: self.auth, has_token: self.token.is_some(), model: self.model.clone(), models: self.models.clone() }
+        ProviderView { id: self.id.clone(), name: self.name.clone(), base_url: self.base_url.clone(), host: host_of(&self.base_url), auth: self.auth, has_token: self.token.is_some(), model: self.model.clone(), models: self.models.clone(), headers: self.headers.clone().unwrap_or_default() }
     }
 
     pub fn reference(&self) -> ProviderRef {
@@ -183,6 +189,56 @@ pub fn validate_token(text: &str) -> Result<String, &'static str> {
     Ok(token.to_owned())
 }
 
+const MAX_HEADER_LINES: usize = 8;
+const MAX_HEADER_VALUE: usize = 500;
+/// Headers the app sets itself or that would break the request if set twice.
+const RESERVED_HEADERS: [&str; 8] = ["host", "content-length", "content-type", "transfer-encoding", "connection", "upgrade", "authorization", "x-api-key"];
+
+/// Checks the header lines of the form: `Name: value` one to a line, `{key}` where the provider's key goes. Returns them tidied (one line
+/// each, joined by a newline), or None when there are none. The error never repeats the input.
+pub fn validate_headers(text: &str, has_key: bool) -> Result<Option<String>, &'static str> {
+    let mut lines = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for line in text.split('\n').map(str::trim).filter(|l| !l.is_empty()) {
+        if lines.len() >= MAX_HEADER_LINES {
+            return Err("there are too many header lines");
+        }
+        let (name, value) = line.split_once(':').ok_or("a header line must be written Name: value")?;
+        let (name, value) = (name.trim(), value.trim());
+        if name.is_empty() || name.len() > 64 || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err("a header name has a character that is not allowed");
+        }
+        let lower = name.to_ascii_lowercase();
+        if RESERVED_HEADERS.contains(&lower.as_str()) {
+            return Err("that header is set by the app and cannot be changed here");
+        }
+        if seen.contains(&lower) {
+            return Err("a header name is written twice");
+        }
+        seen.push(lower);
+        if value.is_empty() || value.len() > MAX_HEADER_VALUE || !value.chars().all(|c| c == ' ' || c.is_ascii_graphic()) {
+            return Err("a header value is empty, too long, or has a character that is not plain text");
+        }
+        let rest = value.replace("{key}", "");
+        if rest.contains('{') || rest.contains('}') {
+            return Err("a header value may hold braces only as {key}");
+        }
+        if value.contains("{key}") && !has_key {
+            return Err("a header uses {key} but the provider has no key");
+        }
+        lines.push(format!("{name}: {value}"));
+    }
+    Ok((!lines.is_empty()).then(|| lines.join("\n")))
+}
+
+impl Provider {
+    /// The value of `ANTHROPIC_CUSTOM_HEADERS` for a chat: the lines with the key put where `{key}` stands. None when there are no lines.
+    pub fn custom_headers(&self) -> Option<String> {
+        let template = self.headers.as_ref()?;
+        Some(template.replace("{key}", self.token.as_deref().unwrap_or_default()))
+    }
+}
+
 /// A model name as Claude Code takes it (the same characters a chat's own model may use).
 pub fn validate_model(text: &str) -> Result<Option<String>, &'static str> {
     let model = text.trim();
@@ -207,6 +263,8 @@ pub struct Form {
     pub clear_token: bool,
     pub model: String,
     pub models: [String; 3],
+    /// The header lines; empty for none.
+    pub headers: String,
 }
 
 pub struct ProviderStore {
@@ -266,13 +324,14 @@ impl ProviderStore {
         if form.auth == Auth::XApiKey && token.is_none() {
             return Err("an API key address needs the key".into());
         }
+        let headers = validate_headers(&form.headers, token.is_some())?;
         if list.iter().enumerate().any(|(i, p)| p.name == name && Some(i) != existing) {
             return Err("another provider has this name".into());
         }
         let id = match existing {
             Some(i) => {
                 let p = &mut list[i];
-                (p.name, p.base_url, p.auth, p.token, p.model, p.models, p.updated) = (name, base_url, form.auth, token, model, models, now);
+                (p.name, p.base_url, p.auth, p.token, p.model, p.models, p.headers, p.updated) = (name, base_url, form.auth, token, model, models, headers, now);
                 p.id.clone()
             }
             None => {
@@ -280,7 +339,7 @@ impl ProviderStore {
                     return Err("there are too many providers".into());
                 }
                 let id = crate::random_hex(6);
-                list.push(Provider { id: id.clone(), name, base_url, auth: form.auth, token, model, models, created: now, updated: now });
+                list.push(Provider { id: id.clone(), name, base_url, auth: form.auth, token, model, models, headers, created: now, updated: now });
                 id
             }
         };
@@ -442,5 +501,62 @@ mod tests {
         let (broken, notice) = ProviderStore::open(path.clone());
         assert!(notice.is_some() && broken.list_views().is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json", "opening leaves the file as it is");
+    }
+
+    #[test]
+    fn header_lines_are_checked_and_tidied() {
+        let ok = validate_headers("  AIR-Api-Key:   {key}  \n\nAIR-Coding-Agent-Mode: subscription\n", true).unwrap();
+        assert_eq!(ok.as_deref(), Some("AIR-Api-Key: {key}\nAIR-Coding-Agent-Mode: subscription"));
+        assert_eq!(validate_headers("  \n ", false), Ok(None), "no lines is no headers");
+        for bad in [
+            "no colon here",
+            ": value",
+            "Bad Name: v",
+            "Name: ",
+            "Authorization: x",
+            "X-API-KEY: x",
+            "Host: example.com",
+            "A: 1\na: 2",
+            "A: {oops}",
+            "A: {key",
+            "A: tab\there",
+            "A: caf\u{e9}",
+        ] {
+            assert!(validate_headers(bad, true).is_err(), "{bad:?}");
+        }
+        assert!(validate_headers("A: {key}", false).is_err(), "{{key}} with no key saved");
+        assert!(validate_headers("A: plain", false).is_ok(), "a header with no key in it needs none");
+        assert!(validate_headers(&(0..9).map(|i| format!("H{i}: v")).collect::<Vec<_>>().join("\n"), true).is_err(), "too many lines");
+        assert!(validate_headers(&format!("A: {}", "x".repeat(501)), true).is_err());
+    }
+
+    #[test]
+    fn headers_are_saved_shown_without_the_key_kept_on_edit_and_rendered_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = ProviderStore::open(dir.path().join("providers.json"));
+        let mut f = form("Air");
+        f.token = Some("airkey-123456".into());
+        f.headers = "AIR-Api-Key: {key}\nAIR-Coding-Agent-Mode: subscription".into();
+        let id = store.save(f, 1).unwrap();
+        let view = store.list_views().remove(0);
+        assert_eq!(view.headers, "AIR-Api-Key: {key}\nAIR-Coding-Agent-Mode: subscription");
+        assert!(!serde_json::to_string(&view).unwrap().contains("airkey-123456"), "the page never gets the key");
+        let p = store.get(&id).unwrap();
+        assert_eq!(p.custom_headers().as_deref(), Some("AIR-Api-Key: airkey-123456\nAIR-Coding-Agent-Mode: subscription"));
+        assert!(!format!("{p:?}").contains("airkey-123456"), "Debug hides the key");
+        // An edit with no new key keeps the saved one for {key}; clearing the key while a header uses {key} is refused.
+        let keep = Form { id: Some(id.clone()), name: "Air".into(), base_url: "https://gateway.example.com/anthropic".into(), headers: "AIR-Api-Key: {key}".into(), ..Default::default() };
+        store.save(keep, 2).unwrap();
+        assert_eq!(store.get(&id).unwrap().custom_headers().as_deref(), Some("AIR-Api-Key: airkey-123456"));
+        let clear = Form { id: Some(id.clone()), name: "Air".into(), base_url: "https://gateway.example.com/anthropic".into(), clear_token: true, headers: "AIR-Api-Key: {key}".into(), ..Default::default() };
+        assert!(store.save(clear, 3).is_err());
+        assert!(store.get(&id).unwrap().token.is_some(), "a refused save changes nothing");
+        // Empty lines remove the headers.
+        let none = Form { id: Some(id.clone()), name: "Air".into(), base_url: "https://gateway.example.com/anthropic".into(), ..Default::default() };
+        store.save(none, 4).unwrap();
+        assert!(store.get(&id).unwrap().custom_headers().is_none());
+        // A file written before headers existed has none.
+        let old: Provider = serde_json::from_str(r#"{"id":"x","name":"N","base_url":"https://a.example"}"#).unwrap();
+        assert!(old.headers.is_none() && old.custom_headers().is_none());
     }
 }

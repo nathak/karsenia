@@ -693,6 +693,8 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("pv_key_clear", "저장된 키 지우기", "Clear the saved key"),
     ("pv_model", "기본 모델 (비우면 기본값)", "Default model (empty: default)"),
     ("pv_aliases", "opus / sonnet / haiku 대신 쓸 이름", "Names for opus / sonnet / haiku"),
+    ("pv_headers", "요청 헤더 (선택)", "Request headers (optional)"),
+    ("pv_headers_hint", "한 줄에 하나, 이름: 값. 키가 들어갈 자리는 {key} 로 씁니다 (예: AIR-Api-Key: {key}). 키는 이 칸에 적지 마세요.", "One per line, Name: value. Write {key} where the key goes (for example AIR-Api-Key: {key}). Do not type the key in this box."),
     ("pv_save", "저장", "Save"),
     ("pv_saved", "저장했습니다", "Saved"),
     ("pv_edit", "수정", "Edit"),

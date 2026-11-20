@@ -117,7 +117,7 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         let Some(ui) = weak.upgrade() else { return };
         let p = ui.global::<Prov>();
         p.set_edit_id(SharedString::new());
-        for set in [Prov::set_f_name, Prov::set_f_url, Prov::set_f_key, Prov::set_f_model, Prov::set_f_opus, Prov::set_f_sonnet, Prov::set_f_haiku] {
+        for set in [Prov::set_f_name, Prov::set_f_url, Prov::set_f_key, Prov::set_f_model, Prov::set_f_opus, Prov::set_f_sonnet, Prov::set_f_haiku, Prov::set_f_headers] {
             set(&p, SharedString::new());
         }
         p.set_f_auth(0);
@@ -144,6 +144,7 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         p.set_f_opus(text(&one["models"]["opus"]));
         p.set_f_sonnet(text(&one["models"]["sonnet"]));
         p.set_f_haiku(text(&one["models"]["haiku"]));
+        p.set_f_headers(text(&one["headers"]));
         p.set_editing(true);
     });
     let (a, weak) = (app.clone(), ui.as_weak());
@@ -152,7 +153,7 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         let p = ui.global::<Prov>();
         let (id, name, url, key, model) = (p.get_edit_id().to_string(), p.get_f_name().to_string(), p.get_f_url().to_string(), p.get_f_key().to_string(), p.get_f_model().to_string());
         let aliases = [p.get_f_opus().to_string(), p.get_f_sonnet().to_string(), p.get_f_haiku().to_string()];
-        let op = prov_op(&ProvForm { id: Some(id.as_str()), name: &name, url: &url, auth: p.get_f_auth(), key: &key, clear: p.get_f_clear(), model: &model, aliases: [&aliases[0], &aliases[1], &aliases[2]] });
+        let op = prov_op(&ProvForm { id: Some(id.as_str()), name: &name, url: &url, auth: p.get_f_auth(), key: &key, clear: p.get_f_clear(), model: &model, aliases: [&aliases[0], &aliases[1], &aliases[2]], headers: &p.get_f_headers().to_string() });
         // `send`, not `ask`: the operation (the key in it) is not kept waiting for its reply.
         let rid = a.bus.send(op);
         SAVE_RID.with(|r| r.set(rid));
