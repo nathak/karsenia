@@ -73,6 +73,10 @@ fn result_text(content: &Value) -> String {
 pub fn extract(envelope: &Envelope, own_calls: &mut HashSet<String>) -> Vec<Piece> {
     let mut out = Vec::new();
     let data = &envelope.data;
+    // What a gateway wrote or was told is not carried into the account's searchable history.
+    if data["via_gateway"] == true {
+        return out;
+    }
     match envelope.kind.as_str() {
         "user" => {
             if let Some(text) = data["text"].as_str().filter(|t| !t.trim().is_empty()) {

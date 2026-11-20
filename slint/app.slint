@@ -165,6 +165,12 @@ export component AppWindow inherits Window {
     in property <string> chat-perm;
     // The open chat's model as an index into the picker (0: the default), and the pick.
     in property <int> model-idx;
+    // The gateway of a chat of an account (the header's picker: none, then each provider that uses an account's login): shown only when
+    // the chat may switch, and the choice is checked again in Rust.
+    in property <bool> gw-shown: false;
+    in property <[string]> gw-names;
+    in-out property <int> gw-idx;
+    callback gw-picked(int, string);
     callback set-chat-model(int);
     in property <bool> chat-perm-danger;
     in-out property <int> new-prov;
@@ -498,6 +504,7 @@ export component AppWindow inherits Window {
                         }
                         if root.chat-account != "": VerticalLayout { alignment: center; Badge { text: root.chat-account; tone: "ok"; mono: false; } }
                         if root.has-chat && root.side == 0: VerticalLayout { alignment: center; ComboBox { width: 150px; model: [T.tr("model_default_opt"), "sonnet", "opus", "haiku", "fable", "sonnet[1m]", "opus[1m]"]; current-index: root.model-idx; enabled: root.state != "running"; selected(v) => { root.set-chat-model(self.current-index); } } }
+                        if root.has-chat && root.side == 0 && root.gw-shown && root.hw >= 1150px: VerticalLayout { alignment: center; ComboBox { width: 150px; model: root.gw-names; current-index <=> root.gw-idx; enabled: root.state != "running"; selected(v) => { root.gw-picked(self.current-index, v); } } }
                         if root.chat-perm != "": VerticalLayout { alignment: center; Badge { text: root.chat-perm; tone: root.chat-perm-danger ? "err" : "warn"; mono: false; } }
                         VerticalLayout {
                             alignment: center;

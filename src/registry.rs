@@ -240,7 +240,7 @@ impl Registry {
             let log = read_log(&session::log_path(&dir, sid));
             // The chat's own account's realm, or none (a provider chat; an account that is not available). A chat is never given another one.
             let realm = registry.realm_of_meta(&meta);
-            metas.push((sid.to_owned(), meta.account.as_ref().map(|a| a.id.clone()), meta.provider.is_some()));
+            metas.push((sid.to_owned(), meta.account.as_ref().map(|a| a.id.clone()), meta.provider.as_ref().is_some_and(|p| !p.login)));
             // The index is brought up to date before the session can emit anything of its own.
             if let Some(index) = realm.as_ref().and_then(|r| r.index.as_ref()) {
                 index.catch_up(sid, &meta.cwd.to_string_lossy(), meta.created, log.clone());
@@ -339,7 +339,7 @@ impl Registry {
             }
         }
         check_mode(mode, bound.is_some(), container)?;
-        let bound_account = self.bind_account(account, bound.is_some(), container)?;
+        let bound_account = self.account_of_new_chat(bound.as_ref(), account, container)?;
         let mut meta = session::new_meta(real, model, bound, container, bound_account);
         meta.permission_mode = mode;
         let realm = self.realm_of_meta(&meta);
@@ -544,7 +544,7 @@ impl Registry {
             None => None,
         };
         check_mode(mode, bound.is_some(), false)?;
-        let bound_account = self.bind_account(account, bound.is_some(), false)?;
+        let bound_account = self.account_of_new_chat(bound.as_ref(), account, false)?;
         let source = crate::worktree::inspect_source(path).await?;
         let home = crate::platform::home_dir();
         let root = crate::worktree::resolve_root(self.settings.get().worktree_root.as_deref(), home.as_deref(), &self.dir, &source.repo)?;
@@ -624,10 +624,27 @@ impl Registry {
     /// The realm a chat works in: its account's; none for a provider chat (which gets nothing of the account's side of the app) and
     /// for a chat whose account is not open.
     fn realm_of_meta(&self, meta: &Meta) -> Option<Arc<Realm>> {
-        if meta.provider.is_some() {
+        // A chat of a provider that uses an account's login belongs to that account (its realm); any other provider chat has none.
+        if meta.provider.as_ref().is_some_and(|p| !p.login) {
             return None;
         }
         self.realm(meta.account.as_ref().map(|a| a.id.as_str())).ok()
+    }
+
+    /// The account of a new chat. An ordinary chat has the one it was asked for (and no provider); a chat of a provider that uses an account's
+    /// login runs in THAT account (the provider's own; another one asked for is refused) and never in a container.
+    fn account_of_new_chat(&self, provider: Option<&crate::providers::ProviderRef>, account: Option<&str>, container: bool) -> Result<Option<AccountRef>, String> {
+        let Some(bound) = provider.filter(|p| p.login) else { return self.bind_account(account, provider.is_some(), container) };
+        if container {
+            return Err("a provider that uses an account's login cannot run in a container".into());
+        }
+        let login_account = self.providers.get(&bound.id).and_then(|p| p.login_account);
+        if let Some(asked) = account.filter(|a| !a.is_empty()) {
+            if Some(asked) != login_account.as_deref() {
+                return Err("a chat of a provider that uses an account's login runs in that account only".into());
+            }
+        }
+        self.bind_account(login_account.as_deref(), false, false)
     }
 
     /// The account a new chat is bound to, checked: it must exist and be open, and cannot be mixed with a provider or a container.

@@ -151,6 +151,8 @@ enum Cmd {
     Permission { request_id: String, allow: bool, message: Option<String>, grant: Grant, reply: oneshot::Sender<Result<(), String>> },
     Interrupt { reply: oneshot::Sender<Result<(), String>> },
     SetModel { model: Option<String>, reply: oneshot::Sender<Result<(), String>> },
+    /// Turns the gateway of an account's chat on (a provider that uses an account's login) or off (None), between turns.
+    SetProvider { provider: Option<String>, reply: oneshot::Sender<Result<(), String>> },
     Rename { title: String, reply: oneshot::Sender<Result<(), String>> },
     Remove { reply: oneshot::Sender<Result<(), String>> },
     Warm { reply: oneshot::Sender<Result<(), String>> },
@@ -250,6 +252,13 @@ impl SessionHandle {
     /// next message starts it again with `--resume` and the new `--model`, so the conversation goes on with the other model.
     pub async fn set_model(&self, model: Option<String>) -> Result<(), String> {
         ask(&self.tx, |reply| Cmd::SetModel { model, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
+    /// Switches the gateway of a chat that belongs to an account: to a provider that uses an account's login, or off (None). Only between
+    /// turns: the running `claude` is ended and the next message starts it again with `--resume` in the same account folder, so the
+    /// conversation goes on, with or without the gateway. The chat keeps its own account.
+    pub async fn set_provider(&self, provider: Option<String>) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::SetProvider { provider, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
     }
 
     /// Gives the chat a name (blank is refused; control characters are dropped; 60 characters at most). A first message does not replace it.
@@ -422,6 +431,14 @@ impl Actor {
 
     /// As `emit`, with the time the event happened (an event another chat made, taken over).
     fn emit_at(&mut self, kind: &str, data: Value, ts: u64) {
+        let mut data = data;
+        // What was said while a gateway was on is marked: the history index, auto-save and skill proposals leave it out (the third party's text
+        // is not carried over to the account's own notes), whichever way the chat is switched later.
+        if self.meta.provider.as_ref().is_some_and(|p| p.login) && matches!(kind, "user" | "claude") {
+            if let Value::Object(map) = &mut data {
+                map.insert("via_gateway".into(), Value::Bool(true));
+            }
+        }
         let data = self.scrub(data);
         self.seq += 1;
         let envelope = Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, ts, kind: kind.to_owned(), data };
@@ -484,6 +501,9 @@ impl Actor {
         if crate::providers::host_of(&provider.base_url) != bound.host {
             return Err("the address of this chat's provider was changed; make a new chat".into());
         }
+        if bound.login && provider.auth != crate::providers::Auth::AccountLogin {
+            return Err("this chat's provider no longer uses an account's login; turn the gateway off in the chat's header".into());
+        }
         Ok(Some(provider))
     }
 
@@ -492,7 +512,8 @@ impl Actor {
     /// removed leaves the chat readable but not startable, and it never falls back to the default account.
     fn account_env(&self) -> Result<Option<(PathBuf, crate::claude::env::EnvPlan)>, String> {
         let Some(bound) = &self.meta.account else { return Ok(None) };
-        if self.meta.provider.is_some() {
+        // Only a provider that uses an account's login may go with an account.
+        if self.meta.provider.as_ref().is_some_and(|p| !p.login) {
             return Err("a chat is of an account or of a provider, not both".into());
         }
         if !crate::accounts::valid_id(&bound.id) || self.realm.as_ref().and_then(|r| r.account.as_deref()) != Some(bound.id.as_str()) || self.realm.as_ref().is_some_and(|r| r.is_retired()) {
@@ -608,6 +629,14 @@ impl Actor {
             Cmd::Permission { request_id, allow, message, grant, reply } => {
                 let _ = reply.send(self.permission(&request_id, allow, message, grant));
             }
+            Cmd::SetProvider { provider, reply } => {
+                let (result, restarted) = self.set_provider(provider);
+                let _ = reply.send(result);
+                if restarted {
+                    let (_result, events) = self.warm();
+                    return Some(events.unwrap_or_else(|| mpsc::unbounded_channel().1));
+                }
+            }
             Cmd::SetModel { model, reply } => {
                 let (result, restarted) = self.set_model(model);
                 let _ = reply.send(result);
@@ -710,7 +739,7 @@ impl Actor {
                 let _ = reply.send(self.proposal_input(since));
             }
             Cmd::UserTexts { after, since, reply } => {
-                let texts = self.log.iter().filter(|_| self.meta.provider.is_none()).filter(|e| e.kind == "user" && e.seq > after && e.ts >= since && e.data["imported"] != true).filter_map(|e| e.data["text"].as_str().map(|t| (e.seq, t.to_owned()))).collect();
+                let texts = self.log.iter().filter(|_| self.meta.provider.is_none()).filter(|e| e.kind == "user" && e.seq > after && e.ts >= since && e.data["imported"] != true && e.data["via_gateway"] != true).filter_map(|e| e.data["text"].as_str().map(|t| (e.seq, t.to_owned()))).collect();
                 let _ = reply.send(texts);
             }
             Cmd::Subscribe { after, reply } => {
@@ -813,18 +842,30 @@ impl Actor {
                             self.emit("error", json!({"message": message}));
                             return Err(message);
                         }
-                        let account_dir = match provider.login_account.as_deref() {
-                            None => None,
-                            Some(id) => {
-                                let home = crate::platform::home_dir();
-                                let default = crate::accounts::default_config_dir(std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).as_deref(), home.as_deref());
-                                let found = if crate::accounts::valid_id(id) { crate::accounts::check_dir(&crate::accounts::config_dir(&self.dir, id), &self.dir.join("accounts"), default.as_deref()) } else { Err("not a valid account".to_owned()) };
-                                match found {
-                                    Ok(dir) => Some(dir),
-                                    Err(why) => {
-                                        let message = format!("the account whose login this provider uses is not available ({why}); change the provider or make a new chat");
-                                        self.emit("error", json!({"message": message}));
-                                        return Err(message);
+                        let account_dir = if self.meta.provider.as_ref().is_some_and(|p| p.login) {
+                            // A chat that belongs to an account: that account's folder (None is the default account), looked at again as for any
+                            // chat of an account.
+                            match self.account_env() {
+                                Ok(found) => found.map(|(dir, _)| dir),
+                                Err(message) => {
+                                    self.emit("error", json!({"message": message}));
+                                    return Err(message);
+                                }
+                            }
+                        } else {
+                            match provider.login_account.as_deref() {
+                                None => None,
+                                Some(id) => {
+                                    let home = crate::platform::home_dir();
+                                    let default = crate::accounts::default_config_dir(std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).as_deref(), home.as_deref());
+                                    let found = if crate::accounts::valid_id(id) { crate::accounts::check_dir(&crate::accounts::config_dir(&self.dir, id), &self.dir.join("accounts"), default.as_deref()) } else { Err("not a valid account".to_owned()) };
+                                    match found {
+                                        Ok(dir) => Some(dir),
+                                        Err(why) => {
+                                            let message = format!("the account whose login this provider uses is not available ({why}); change the provider or make a new chat");
+                                            self.emit("error", json!({"message": message}));
+                                            return Err(message);
+                                        }
                                     }
                                 }
                             }
@@ -1147,11 +1188,12 @@ impl Actor {
         let mut failed: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut turn_tools = 0usize;
         // Outside text is looked for in the WHOLE log, subagents included, whenever it came: it stays in the chat's context.
-        let external = self.log.iter().any(|e| {
+        // Text a gateway wrote stays in the chat's context after a switch as well: it counts as outside text.
+        let external = self.log.iter().any(|e| e.data["via_gateway"] == true) || self.log.iter().any(|e| {
             e.kind == "claude" && e.data["type"] == "assistant" && e.data["message"]["content"].as_array().into_iter().flatten().any(|b| b["type"] == "tool_use" && is_external_tool(b["name"].as_str().unwrap_or_default(), &b["input"]))
         });
         // What was imported from an earlier session (its messages, tool calls and results) is not this chat's own work.
-        for e in self.log.iter().filter(|e| e.ts >= since && e.data["imported"] != true) {
+        for e in self.log.iter().filter(|e| e.ts >= since && e.data["imported"] != true && e.data["via_gateway"] != true) {
             match e.kind.as_str() {
                 "user" => {
                     // What was imported from an earlier session is not read for a skill proposal: it is not this chat's own work.
@@ -1245,7 +1287,7 @@ impl Actor {
         if self.state == State::Running || !self.pending.is_empty() {
             return (Err("the model can be changed between turns, not while one runs or a question waits".into()), false);
         }
-        if self.meta.provider.is_some() {
+        if self.meta.provider.as_ref().is_some_and(|p| !p.login) {
             return (Err("a provider chat's models are set by its provider".into()), false);
         }
         if self.realm.as_ref().is_some_and(|r| r.is_retired()) {
@@ -1270,6 +1312,59 @@ impl Actor {
         self.meta.model = model.clone();
         self.save_meta();
         self.emit("model", json!({"model": model}));
+        self.set_state(State::Idle);
+        (Ok(()), restarted)
+    }
+
+    fn set_provider(&mut self, provider: Option<String>) -> (Result<(), String>, bool) {
+        if self.state == State::Running || !self.pending.is_empty() {
+            return (Err("the gateway can be changed between turns, not while one runs or a question waits".into()), false);
+        }
+        if self.retiring || self.gone {
+            return (Err("this chat is being removed".into()), false);
+        }
+        if self.meta.container {
+            return (Err("a chat in a container keeps its provider".into()), false);
+        }
+        // A provider chat that does not use an account's login stays with its provider: its isolation is the point of it.
+        if self.meta.provider.as_ref().is_some_and(|p| !p.login) {
+            return (Err("a provider chat stays with its provider".into()), false);
+        }
+        if self.realm.as_ref().is_none_or(|r| r.is_retired()) {
+            return (Err("this chat's account is not available; make a new chat".into()), false);
+        }
+        if self.meta.worktree.as_ref().is_some_and(|w| w.removed) {
+            return (Err("this chat's worktree was removed; the chat can only be read".into()), false);
+        }
+        let new_ref = match provider.as_deref().filter(|id| !id.is_empty()) {
+            None => None,
+            Some(id) => {
+                let Some(store) = &self.providers else { return (Err("providers are not available".into()), false) };
+                let Some(found) = store.get(id) else { return (Err("no such provider".into()), false) };
+                if found.auth != crate::providers::Auth::AccountLogin {
+                    return (Err("only a provider that uses an account's login can be switched to in a chat that has begun".into()), false);
+                }
+                Some(found.reference())
+            }
+        };
+        if self.meta.provider.as_ref().map(|p| &p.id) == new_ref.as_ref().map(|p| &p.id) {
+            return (Ok(()), false);
+        }
+        let had = self.process.take();
+        let restarted = had.is_some();
+        if let Some(process) = had {
+            process.stop();
+            if let Some(gate) = &self.mcp {
+                gate.revoke(&self.meta.sid);
+            }
+            let _ = std::fs::remove_file(self.recall_path());
+            let _ = std::fs::remove_dir_all(self.skills_path());
+        }
+        // The key and token of the old provider are no longer scrubbed for: the next start sets those of the new one.
+        self.secrets = Vec::new();
+        self.meta.provider = new_ref.clone();
+        self.save_meta();
+        self.emit("provider", json!({"provider": new_ref.as_ref().map(|p| json!({"id": p.id, "name": p.name, "host": p.host}))}));
         self.set_state(State::Idle);
         (Ok(()), restarted)
     }

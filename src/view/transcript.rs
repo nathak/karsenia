@@ -665,6 +665,14 @@ impl Transcript {
                 }
             }
             "state" => self.head.state = s(data, "state").to_owned(),
+            // The chat's gateway was switched on (a provider that uses an account's login) or off, between turns.
+            "provider" => {
+                let text = match data["provider"]["name"].as_str() {
+                    Some(name) => fill(&self.t("gw_on_note"), &[("name", name.chars().take(60).collect())]),
+                    None => self.t("gw_off_note"),
+                };
+                self.note(text, "note");
+            }
             "memory_used" => {
                 let n = data.get("ids").and_then(Value::as_array).map_or(0, Vec::len);
                 self.note(format!("{}: {n}", self.t("mem_used")), "note");
@@ -1569,6 +1577,16 @@ mod tests {
         let mut other = chat();
         other.apply("claude", &json!({"type": "system", "subtype": "hook_started"}), 0);
         assert_eq!(warnings(&other), 0);
+    }
+
+    #[test]
+    fn a_gateway_switch_is_noted_in_the_transcript_with_the_providers_name_or_as_off() {
+        let mut t = chat();
+        t.apply("provider", &json!({"provider": {"id": "p1", "name": "Air", "host": "gw.example.com"}}), 0);
+        t.apply("provider", &json!({"provider": null}), 0);
+        let notes: Vec<String> = t.rows().iter().filter(|r| r.kind == "note").map(|r| r.text.clone()).collect();
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes[0].contains("Air") && !notes[1].contains("Air"), "{notes:?}");
     }
 
     #[test]

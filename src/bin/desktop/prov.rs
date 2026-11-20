@@ -58,6 +58,16 @@ pub fn tabs() -> Option<Vec<(String, String)>> {
     })
 }
 
+/// The providers that use an account's login, `(id, name)`: what a chat of an account may switch its gateway to.
+pub fn login_list() -> Vec<(String, String)> {
+    LIST.with(|l| {
+        l.borrow()
+            .as_ref()
+            .map(|d| d["providers"].as_array().into_iter().flatten().filter(|p| p["auth"] == "account_login").filter_map(|p| Some((p["id"].as_str()?.to_owned(), p["name"].as_str()?.to_owned()))).collect())
+            .unwrap_or_default()
+    })
+}
+
 /// The new chat's provider from the picker: the index and the name it showed must still agree ("" means none was shown).
 pub fn chosen(index: i32, name: &str) -> Result<Option<String>, ()> {
     if name.is_empty() {

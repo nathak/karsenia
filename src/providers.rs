@@ -114,6 +114,10 @@ pub struct ProviderRef {
     pub id: String,
     pub name: String,
     pub host: String,
+    /// The provider uses an account's login (`Auth::AccountLogin`) when the chat was made with it: such a chat belongs to an account and may
+    /// switch its provider between turns. A meta file written before this field reads as false (an ordinary provider chat).
+    #[serde(default)]
+    pub login: bool,
 }
 
 impl Provider {
@@ -122,7 +126,7 @@ impl Provider {
     }
 
     pub fn reference(&self) -> ProviderRef {
-        ProviderRef { id: self.id.clone(), name: self.name.clone(), host: host_of(&self.base_url) }
+        ProviderRef { id: self.id.clone(), name: self.name.clone(), host: host_of(&self.base_url), login: self.auth == Auth::AccountLogin }
     }
 }
 
@@ -649,5 +653,15 @@ mod tests {
         store.save(Form { id: Some(id.clone()), auth: Auth::Bearer, account: Some("0123456789abcdef".into()), ..base() }, 4).unwrap();
         assert_eq!(store.get(&id).unwrap().login_account, None);
         assert_eq!(Auth::parse("account_login"), Some(Auth::AccountLogin));
+    }
+
+    #[test]
+    fn a_chats_provider_reference_written_before_login_existed_reads_as_an_ordinary_provider() {
+        let old: ProviderRef = serde_json::from_str(r#"{"id":"p1","name":"N","host":"a.example"}"#).unwrap();
+        assert!(!old.login);
+        let mut p = Provider { id: "p1".into(), name: "N".into(), base_url: "https://a.example".into(), auth: Auth::AccountLogin, token: None, oauth_token: None, login_account: None, model: None, models: Aliases::default(), headers: None, created: 0, updated: 0 };
+        assert!(p.reference().login);
+        p.auth = Auth::Bearer;
+        assert!(!p.reference().login);
     }
 }

@@ -65,6 +65,8 @@ struct App {
 const PLAIN_MAX_CHARS: usize = 200_000;
 
 thread_local! {
+    // The names the gateway picker shows (to set its model only when they change).
+    static GW_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     // The chat as text the last time the text view was opened or refreshed: what the "something new" note compares with.
     static PLAIN: RefCell<String> = const { RefCell::new(String::new()) };
     // The UI thread's copy of the rows on screen, to change only what changed.
@@ -751,6 +753,53 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
             let _ = weak.upgrade_in_event_loop(move |ui| toast(&ui, message));
         });
     });
+    // The gateway of the open chat: switched between turns; turning it on asks first (the conversation so far goes to the gateway).
+    let (a, weak) = (app.clone(), ui.as_weak());
+    ui.on_gw_picked(move |index, name| {
+        let Some(ui) = weak.upgrade() else { return };
+        let logins = prov::login_list();
+        let target: Option<String> = if index <= 0 {
+            None
+        } else {
+            match logins.get(index as usize - 1) {
+                Some((id, shown)) if shown.as_str() == name.as_str() => Some(id.clone()),
+                _ => {
+                    toast(&ui, tr(a.lang, "gw_stale"));
+                    return;
+                }
+            }
+        };
+        let Some(sid) = a.current.lock().expect("current").sid.clone() else { return };
+        let go = {
+            let a = a.clone();
+            move |target: Option<String>, sid: String| {
+                tokio::spawn(async move {
+                    let Some(handle) = a.registry.get(&sid) else { return };
+                    match handle.set_provider(target).await {
+                        Ok(()) => toast_later(&a.weak, tr(a.lang, "gw_changed")),
+                        Err(message) => toast_later(&a.weak, message),
+                    }
+                    refresh_sessions(&a).await;
+                });
+            }
+        };
+        match target {
+            None => go(None, sid),
+            Some(id) => {
+                let (b, restore) = (a.clone(), ui.get_gw_idx());
+                let _ = restore;
+                crate::panels::ask(&ui, tr(b.lang, "gw_confirm"), tr(b.lang, "gw_confirm_btn"), true, Box::new(move |ok| {
+                    if ok {
+                        go(Some(id), sid);
+                    } else {
+                        // Back to what the chat has: the picker is set again from the chat's own state.
+                        let b2 = b.clone();
+                        tokio::spawn(async move { refresh_sessions(&b2).await });
+                    }
+                }));
+            }
+        }
+    });
     let (a, weak) = (app.clone(), ui.as_weak());
     ui.on_refresh_plain(move || {
         if let Some(ui) = weak.upgrade() {
@@ -1143,6 +1192,7 @@ fn show_debug(app: &Arc<App>) {
                 .unwrap_or_default(),
             model: info.as_ref().and_then(|i| i.meta.model.clone()),
             endpoint: info.as_ref().map(|i| match (&i.meta.provider, &i.meta.account) {
+                (Some(p), Some(a)) => format!("→ {} · {}", p.host, a.name),
                 (Some(p), _) => format!("→ {}", p.host),
                 (None, Some(a)) => a.name.clone(),
                 _ => String::new(),
@@ -1471,7 +1521,10 @@ async fn refresh_sessions(app: &Arc<App>) {
     let active = list.iter().find(|i| current.as_deref() == Some(i.meta.sid.as_str()));
     *app.cwd.lock().expect("cwd") = active.map(|i| i.meta.cwd.to_string_lossy().into_owned());
     let chat_acct = active.and_then(|i| i.meta.account.as_ref().map(|a| a.id.clone()));
-    let chat_prov = active.and_then(|i| i.meta.provider.as_ref().map(|p| p.id.clone()));
+    let chat_prov = active.and_then(|i| tenrec::view::panels::listed_provider(i.meta.provider.as_ref()));
+    // The gateway picker: whether this chat may switch (it belongs to an account, has no container, and its provider is none or one that uses
+    // an account's login), and its current provider.
+    let chat_gw: Option<(bool, Option<String>)> = active.map(|i| (!i.meta.container && i.meta.provider.as_ref().is_none_or(|p| p.login) && !i.meta.worktree.as_ref().is_some_and(|w| w.removed), i.meta.provider.as_ref().map(|p| p.id.clone())));
     let active_csid = active.and_then(|i| i.meta.claude_session_id.clone());
     // The open chat's permission mode when it is not the default: shown in the header, so a chat that never asks is never a surprise.
     let chat_model = active.and_then(|i| i.meta.model.clone());
@@ -1485,7 +1538,7 @@ async fn refresh_sessions(app: &Arc<App>) {
     let mut chats: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for info in &list {
         // A provider chat has a tab of its own: it is not counted under the default account.
-        if info.meta.provider.is_some() {
+        if info.meta.provider.as_ref().is_some_and(|p| !p.login) {
             continue;
         }
         *chats.entry(info.meta.account.as_ref().map(|a| a.id.clone()).unwrap_or_default()).or_default() += 1;
@@ -1525,13 +1578,14 @@ async fn refresh_sessions(app: &Arc<App>) {
             let title = if m.title.is_empty() { tr(lang, "untitled") } else { m.title.clone() };
             let head = active.then(|| {
                 let prov = match (&m.provider, &m.account) {
+                    (Some(p), Some(a)) if p.login => format!("→ {} · {}", p.host, a.name),
                     (Some(p), _) => format!("→ {}", p.host),
                     (None, Some(a)) => a.name.clone(),
                     _ => tr(lang, "prov_anthropic"),
                 };
                 (title.clone(), m.cwd.display().to_string(), m.model.clone().unwrap_or_default(), prov)
             });
-            let mark = Mark { account: m.account.as_ref().map(|a| a.id.clone()), provider: m.provider.as_ref().map(|p| p.id.clone()), running: state == "running", pending: info.pending };
+            let mark = Mark { account: m.account.as_ref().map(|a| a.id.clone()), provider: tenrec::view::panels::listed_provider(m.provider.as_ref()), running: state == "running", pending: info.pending };
             let item = SessionItem { sid: m.sid.clone().into(), folder: folder.into(), title: title.into(), when: ago(m.created, now, lang).into(), state: state.into(), active, tags: tags.join(" · ").into(), pending: info.pending as i32, head: false, group: group.into(), open: false, count: 0, wt: m.worktree.is_some(), sub: SharedString::new() };
             (item, head, mark)
         })
@@ -1551,6 +1605,19 @@ async fn refresh_sessions(app: &Arc<App>) {
         }
         let alias = ["default", "sonnet", "opus", "haiku", "fable", "sonnet[1m]", "opus[1m]"].iter().position(|m| Some(*m) == chat_model.as_deref().or(Some("default"))).unwrap_or(0);
         ui.set_model_idx(alias as i32);
+        // The gateway picker: none, then each provider that uses an account's login.
+        let logins = prov::login_list();
+        let (may, current_gw) = chat_gw.clone().unwrap_or((false, None));
+        let names: Vec<String> = std::iter::once(tr(lang, "gw_none")).chain(logins.iter().map(|(_, name)| name.clone())).collect();
+        let index = current_gw.as_ref().and_then(|id| logins.iter().position(|(one, _)| one == id)).map_or(0, |i| i + 1);
+        ui.set_gw_shown(may && !logins.is_empty());
+        if GW_NAMES.with(|n| *n.borrow() != names) {
+            ui.set_gw_names(ModelRc::from(Rc::new(VecModel::from(names.iter().map(|n| n.as_str().into()).collect::<Vec<SharedString>>()))));
+            GW_NAMES.with(|n| *n.borrow_mut() = names);
+        }
+        if ui.get_gw_idx() != index as i32 {
+            ui.set_gw_idx(index as i32);
+        }
         let perm_text = chat_perm.map(|m| format!("{}: {}", tr(lang, "perm_tag"), m.name())).unwrap_or_default();
         if ui.get_chat_perm() != perm_text.as_str() {
             ui.set_chat_perm(perm_text.into());

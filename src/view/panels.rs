@@ -538,6 +538,12 @@ pub struct Mark {
     pub pending: usize,
 }
 
+/// The provider a chat is listed under, as an id: only one that is not an account's login. A chat of a provider that uses an account's login
+/// belongs to its account (it is listed there, with the provider shown as a tag).
+pub fn listed_provider(provider: Option<&crate::providers::ProviderRef>) -> Option<String> {
+    provider.filter(|p| !p.login).map(|p| p.id.clone())
+}
+
 /// The tab a chat is listed under. A provider chat is under its provider; a chat of a provider that was deleted, a chat of an account
 /// that was deleted, a chat of the default account all belong to the default account, so none of them becomes unreachable.
 pub fn owner(chat: &Mark, known: Known) -> Ctx {
@@ -827,5 +833,20 @@ mod tests {
         assert!(outside.sub.contains("API key") && outside.sub.contains("outside"), "{}", outside.sub);
         assert_eq!(ask(serde_json::json!({"logged_in": false, "method": null, "known": true, "file": false})).state, "out");
         assert_eq!(ask(serde_json::json!({"logged_in": false, "method": null, "known": false, "file": false})).state, "error");
+    }
+
+    #[test]
+    fn a_chat_of_an_account_login_provider_is_listed_under_its_account_not_the_provider() {
+        use crate::providers::ProviderRef;
+        let plain = ProviderRef { id: "p1".into(), name: "Plain".into(), host: "a.example".into(), login: false };
+        let login = ProviderRef { login: true, id: "p2".into(), ..plain.clone() };
+        assert_eq!(listed_provider(Some(&plain)).as_deref(), Some("p1"));
+        assert_eq!(listed_provider(Some(&login)), None);
+        assert_eq!(listed_provider(None), None);
+        let providers = vec!["p1".to_owned(), "p2".to_owned()];
+        let k = Known { accounts: None, providers: Some(&providers) };
+        let chat = |p: &ProviderRef| mark(Some("a1"), listed_provider(Some(p)).as_deref(), false, 0);
+        assert_eq!(owner(&chat(&login), k), acct(Some("a1")), "under its account");
+        assert_eq!(owner(&chat(&plain), k), Ctx::Provider("p1".into()), "under its provider");
     }
 }
