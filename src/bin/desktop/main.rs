@@ -88,6 +88,8 @@ thread_local! {
 }
 
 fn main() {
+    // In the app the built-in workbench is the only one: the plug-in is never used (before anything can start a `claude`).
+    tenrec::settings::force_native();
     // `tenrec-desktop mcp`: the MCP server claude starts for a chat (stdio), not the window.
     if std::env::args().nth(1).as_deref() == Some("mcp") {
         let rt = tokio::runtime::Runtime::new().expect("no tokio runtime");

@@ -135,19 +135,34 @@ pub fn pins_block(wb: &Workbench, cwd: &Path) -> Option<String> {
 /// What is added to the next message of the chat, from the saved workbench; nothing when there is none or it cannot be read.
 pub fn blocks(data: &Path, sid: &str, cwd: &Path) -> Vec<String> {
     let Ok(wb) = super::store::load(data, sid) else { return Vec::new() };
-    contract_block(&wb).into_iter().chain(pins_block(&wb, cwd)).collect()
+    let team = wb.team.on.then(|| super::team::GUIDANCE.to_owned());
+    contract_block(&wb).into_iter().chain(pins_block(&wb, cwd)).chain(team).collect()
 }
 
 /// The start of a block this module adds: what a view that reads a session file leaves out.
 pub fn is_block(text: &str) -> bool {
     let t = text.trim_start();
-    t.starts_with("<workbench_contract") || t.starts_with("<workbench_pins")
+    t.starts_with("<workbench_contract") || t.starts_with("<workbench_pins") || t.starts_with("<workbench_team")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::workbench::Op;
+
+    #[test]
+    fn the_team_line_is_added_while_team_mode_is_on_and_is_known_as_a_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        let mut w = Workbench::default();
+        crate::workbench::store::save(dir.path(), "s1", &w).unwrap();
+        assert!(blocks(dir.path(), "s1", cwd).is_empty());
+        w.apply(Op::SetTeam { on: true }).unwrap();
+        crate::workbench::store::save(dir.path(), "s1", &w).unwrap();
+        let b = blocks(dir.path(), "s1", cwd);
+        assert_eq!(b.len(), 1, "{b:?}");
+        assert!(is_block(&b[0]) && b[0].contains("explorer") && b[0].contains("advisor"));
+    }
 
     #[test]
     fn the_contract_is_added_only_while_locked_and_words_cannot_close_a_block() {

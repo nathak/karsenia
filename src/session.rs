@@ -151,6 +151,8 @@ enum Cmd {
     Permission { request_id: String, allow: bool, message: Option<String>, grant: Grant, reply: oneshot::Sender<Result<(), String>> },
     Interrupt { reply: oneshot::Sender<Result<(), String>> },
     SetModel { model: Option<String>, reply: oneshot::Sender<Result<(), String>> },
+    /// The chat's team settings were changed (in its workbench file): a running idle process is ended so the next message starts it with them.
+    TeamChanged { reply: oneshot::Sender<Result<(), String>> },
     /// Turns the gateway of an account's chat on (a provider that uses an account's login) or off (None), between turns.
     SetProvider { provider: Option<String>, reply: oneshot::Sender<Result<(), String>> },
     Rename { title: String, reply: oneshot::Sender<Result<(), String>> },
@@ -246,6 +248,12 @@ impl SessionHandle {
     /// The answer to a permission request, with what the person also asked Claude Code to remember (see `Grant`).
     pub async fn answer(&self, request_id: String, allow: bool, message: Option<String>, grant: Grant) -> Result<(), String> {
         ask(&self.tx, |reply| Cmd::Permission { request_id, allow, message, grant, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
+    /// Tells the chat that its team settings changed: between turns the running `claude` is ended and started again with the new ones
+    /// (`--resume`), and the transcript says so; during a turn the change applies from the message after it.
+    pub async fn team_changed(&self) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::TeamChanged { reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
     }
 
     /// Changes the model the chat runs with (None: Claude Code's default). Only between turns: the running `claude` is ended and the
@@ -361,7 +369,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, retire_reply: None };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, retire_reply: None };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -391,6 +399,8 @@ struct Actor {
     gone: bool,
     /// Whether the running process was started with the built-in workbench on (its plug-in switched off, its guard hook set).
     native_spawned: bool,
+    /// The team settings the running process was started with (None: team mode was off).
+    team_spawned: Option<crate::workbench::team::Team>,
     /// Who waits for the process to end before the worktree is removed.
     retire_reply: Option<oneshot::Sender<Result<(), String>>>,
 }
@@ -631,6 +641,14 @@ impl Actor {
             }
             Cmd::SetProvider { provider, reply } => {
                 let (result, restarted) = self.set_provider(provider);
+                let _ = reply.send(result);
+                if restarted {
+                    let (_result, events) = self.warm();
+                    return Some(events.unwrap_or_else(|| mpsc::unbounded_channel().1));
+                }
+            }
+            Cmd::TeamChanged { reply } => {
+                let (result, restarted) = self.team_changed();
                 let _ = reply.send(result);
                 if restarted {
                     let (_result, events) = self.warm();
@@ -930,11 +948,14 @@ impl Actor {
             // The Stop hook goes where the guard hook goes (it does nothing unless the person turned the gate on in the workbench).
             let stop_hook = if guard_hook.is_some() { self.mcp.as_ref().and_then(|gate| crate::workbench::stop_command(&gate.exe, &self.dir, &self.meta.sid).ok()) } else { None };
             let debug_file = self.debug_file();
-            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.cli_name(), plugins_off: self.workbench_native(), guard_hook, stop_hook, debug_file };
+            let team = self.team_now();
+            let (agents, effort) = (team.as_ref().map(crate::workbench::team::agents_json), team.as_ref().and_then(|t| t.lead_effort).map(|e| e.as_str().to_owned()));
+            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.cli_name(), plugins_off: self.plugins_off(), guard_hook, stop_hook, debug_file, agents, effort };
             match ClaudeProcess::spawn(&opts) {
                 Ok((process, rx)) => {
                     self.process = Some(process);
                     self.native_spawned = opts.plugins_off;
+                    self.team_spawned = team;
                     // What was started, for the debug view: the argument list (no key is ever in it), the environment with every credential
                     // hidden, and what was taken away. The key replacement of `emit` is a second guard.
                     let env: Vec<Value> = opts.env.describe().into_iter().map(|(name, shown)| json!([name, shown])).collect();
@@ -988,7 +1009,7 @@ impl Actor {
 
         // The switch of the built-in workbench changed since this process started: it still has the old plug-in settings and no (or a stale)
         // guard hook, so it is ended and the message starts a new one.
-        if self.process.is_some() && self.native_spawned != self.workbench_native() {
+        if self.process.is_some() && (self.native_spawned != self.plugins_off() || self.team_spawned != self.team_now()) {
             if let Some(process) = self.process.take() {
                 process.stop();
             }
@@ -1037,7 +1058,13 @@ impl Actor {
     /// program of the app inside it, and without the app's own binary there is no hook). Otherwise the plug-in is left as it is, so a chat
     /// never ends up with neither.
     fn workbench_native(&self) -> bool {
-        self.settings.as_ref().is_some_and(|s| s.get().workbench_native) && !self.meta.container && self.mcp.is_some()
+        self.settings.as_ref().is_some_and(|s| s.native()) && !self.meta.container && self.mcp.is_some()
+    }
+
+    /// Whether this chat's `claude` runs without the SmartWorkbench plug-in: always in the desktop app (the plug-in is never used there),
+    /// else when the app's own workbench is on for the chat.
+    fn plugins_off(&self) -> bool {
+        crate::settings::native_forced() || self.workbench_native()
     }
 
     /// A provider chat's or a container chat's rules are not written into the project (what such a chat wrote there outlives it and is
@@ -1280,6 +1307,34 @@ impl Actor {
         }
         self.gone = true;
         Ok(())
+    }
+
+    /// The team settings this chat's next process gets: the chat's workbench file says team mode is on and the app's own workbench is the
+    /// one in use. A provider chat that does not use an account's login is left out (its provider decides what it can run).
+    fn team_now(&self) -> Option<crate::workbench::team::Team> {
+        if !self.workbench_native() || self.meta.provider.as_ref().is_some_and(|p| !p.login) {
+            return None;
+        }
+        crate::workbench::store::load(&self.dir, &self.meta.sid).ok().map(|wb| wb.team).filter(|t| t.on)
+    }
+
+    /// See `SessionHandle::team_changed`. The second value is true when a process was ended.
+    fn team_changed(&mut self) -> (Result<(), String>, bool) {
+        if self.state == State::Running || !self.pending.is_empty() || self.process.is_none() || self.team_spawned == self.team_now() {
+            return (Ok(()), false);
+        }
+        if let Some(process) = self.process.take() {
+            process.stop();
+        }
+        if let Some(gate) = &self.mcp {
+            gate.revoke(&self.meta.sid);
+        }
+        let _ = std::fs::remove_file(self.recall_path());
+        let _ = std::fs::remove_dir_all(self.skills_path());
+        let summary = self.team_now().map(|t| crate::workbench::team::summary(&t)).unwrap_or_else(|| "off".into());
+        self.emit("team", json!({"summary": summary}));
+        self.set_state(State::Idle);
+        (Ok(()), true)
     }
 
     /// See `SessionHandle::set_model`. The second value is true when a process was ended.

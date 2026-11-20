@@ -63,6 +63,18 @@ pub struct Settings {
     pub debug_api: bool,
 }
 
+/// Set once, first thing, by the desktop app: in this process the built-in workbench is the only one, whatever the settings file says (the
+/// file is not changed, so a web server on the same data folder keeps its own choice). Never cleared.
+static NATIVE_FORCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn force_native() {
+    NATIVE_FORCED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn native_forced() -> bool {
+    NATIVE_FORCED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 pub struct SettingsStore {
     path: PathBuf,
     inner: Mutex<Settings>,
@@ -72,6 +84,11 @@ impl SettingsStore {
     pub fn open(path: PathBuf) -> Self {
         let inner = std::fs::read_to_string(&path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
         Self { path, inner: Mutex::new(inner) }
+    }
+
+    /// Whether the app's own workbench is on: forced in the desktop app, else the person's switch.
+    pub fn native(&self) -> bool {
+        native_forced() || self.get().workbench_native
     }
 
     pub fn get(&self) -> Settings {

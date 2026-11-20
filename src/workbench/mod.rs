@@ -6,6 +6,7 @@ pub mod inject;
 pub mod risk;
 pub mod rules;
 pub mod store;
+pub mod team;
 
 use serde::{Deserialize, Serialize};
 
@@ -92,11 +93,14 @@ pub struct Workbench {
     /// written before this existed has no such field and reads as off.
     #[serde(default)]
     pub stop_gate: bool,
+    /// The app's own team mode (helper subagents and efforts); old files have none and read as off.
+    #[serde(default)]
+    pub team: team::Team,
 }
 
 impl Default for Workbench {
     fn default() -> Self {
-        Self { version: VERSION, rev: 0, updated: 0, next_id: 1, task: Task::default(), pins: Vec::new(), profile: Profile::default(), paused: false, stop_gate: false }
+        Self { version: VERSION, rev: 0, updated: 0, next_id: 1, task: Task::default(), pins: Vec::new(), profile: Profile::default(), paused: false, stop_gate: false, team: team::Team::default() }
     }
 }
 
@@ -124,6 +128,11 @@ pub enum Op {
     SetProfile { profile: Profile },
     SetPaused { paused: bool },
     SetStopGate { on: bool },
+    /// Team mode on or off (not an edit of the contract: it applies while locked too).
+    SetTeam { on: bool },
+    SetLeadEffort { effort: Option<team::Effort> },
+    /// A helper's model (None: the lead's) and effort.
+    SetRole { role: team::Sub, model: Option<String>, effort: Option<team::Effort> },
 }
 
 pub const LINKS: [&str; 5] = ["test", "build", "typecheck", "lint", "ci"];
@@ -147,7 +156,7 @@ impl Workbench {
 
     /// Applies one change. Everything that edits the contract is refused while it is locked (unlock first), and a lock needs a goal.
     pub fn apply(&mut self, op: Op) -> Result<(), &'static str> {
-        let editing = !matches!(op, Op::Lock | Op::Unlock | Op::New | Op::SetProfile { .. } | Op::SetPaused { .. } | Op::SetStopGate { .. } | Op::PinFile { .. } | Op::PinNote { .. } | Op::Unpin { .. });
+        let editing = !matches!(op, Op::Lock | Op::Unlock | Op::New | Op::SetProfile { .. } | Op::SetPaused { .. } | Op::SetStopGate { .. } | Op::SetTeam { .. } | Op::SetLeadEffort { .. } | Op::SetRole { .. } | Op::PinFile { .. } | Op::PinNote { .. } | Op::Unpin { .. });
         if editing && self.task.locked {
             return Err("wb_err_locked");
         }
@@ -237,6 +246,14 @@ impl Workbench {
             Op::SetProfile { profile } => self.profile = profile,
             Op::SetPaused { paused } => self.paused = paused,
             Op::SetStopGate { on } => self.stop_gate = on,
+            Op::SetTeam { on } => self.team.on = on,
+            Op::SetLeadEffort { effort } => self.team.lead_effort = effort,
+            Op::SetRole { role, model, effort } => {
+                if model.as_deref().is_some_and(|m| !team::role_model_ok(m)) {
+                    return Err("team_err_model");
+                }
+                *self.team.role_mut(role) = team::RoleSet { model, effort };
+            }
         }
         self.rev += 1;
         self.updated = crate::now_ms();
@@ -553,6 +570,28 @@ mod lint_and_stop_tests {
         value.as_object_mut().unwrap().remove("stop_gate");
         let old: Workbench = serde_json::from_value(value).unwrap();
         assert!(!old.stop_gate);
+    }
+
+    #[test]
+    fn team_changes_apply_while_locked_reject_a_bad_model_and_old_files_read_as_off() {
+        use team::{Effort, Sub};
+        let mut wb = Workbench::default();
+        wb.apply(Op::SetGoal { text: "g".into() }).unwrap();
+        wb.apply(Op::Lock).unwrap();
+        let rev = wb.rev;
+        wb.apply(Op::SetTeam { on: true }).unwrap();
+        wb.apply(Op::SetLeadEffort { effort: Some(Effort::High) }).unwrap();
+        wb.apply(Op::SetRole { role: Sub::Advisor, model: Some("sonnet".into()), effort: Some(Effort::Low) }).unwrap();
+        assert!(wb.team.on && wb.team.lead_effort == Some(Effort::High));
+        assert_eq!(wb.team.advisor.model.as_deref(), Some("sonnet"));
+        assert_eq!(wb.rev, rev + 3);
+        let before = wb.clone();
+        assert_eq!(wb.apply(Op::SetRole { role: Sub::Explorer, model: Some("gpt 4".into()), effort: None }), Err("team_err_model"));
+        assert_eq!(wb, before, "a refused change leaves everything as it was");
+        let mut old = serde_json::to_value(Workbench::default()).unwrap();
+        old.as_object_mut().unwrap().remove("team");
+        let read: Workbench = serde_json::from_value(old).unwrap();
+        assert!(!read.team.on);
     }
 
     #[test]

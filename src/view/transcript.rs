@@ -673,6 +673,11 @@ impl Transcript {
                 };
                 self.note(text, "note");
             }
+            // The chat's team settings changed (the helper subagents and efforts of the app's own team mode).
+            "team" => {
+                let summary: String = s(data, "summary").chars().filter(|c| !c.is_control()).take(160).collect();
+                self.note(format!("{}: {summary}", self.t("team_changed_note")), "note");
+            }
             "memory_used" => {
                 let n = data.get("ids").and_then(Value::as_array).map_or(0, Vec::len);
                 self.note(format!("{}: {n}", self.t("mem_used")), "note");
@@ -1882,6 +1887,14 @@ mod plain_text_tests {
         assert!(t.message_text("n9999").is_none() && t.message_text("x").is_none() && t.message_text("n").is_none());
         let some_text_row = rows.iter().find(|r| r.kind == "para").unwrap();
         assert!(t.message_text(&some_text_row.key).is_none(), "only a message's header row names a message");
+    }
+
+    #[test]
+    fn a_team_change_is_a_one_line_note() {
+        let mut t = Transcript::new(Lang::Ko);
+        t.apply("team", &json!({"summary": "on · lead high · explorer haiku · advisor opus"}), 1);
+        let text = format!("{:?}", t.rows().iter().map(|r| r.text.clone()).collect::<Vec<_>>());
+        assert!(text.contains("explorer haiku") && text.contains("advisor opus"), "{text}");
     }
 
     #[test]
