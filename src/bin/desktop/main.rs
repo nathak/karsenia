@@ -1245,7 +1245,17 @@ fn push(app: &Arc<App>) {
         }
         let state = if head.state.is_empty() { "idle".to_owned() } else { head.state.clone() };
         ui.set_state(state.clone().into());
-        ui.set_state_label(tr(lang, &state).into());
+        // An idle chat that has work in the background is waiting for it (the model goes on by itself when it ends).
+        let label = if state == "idle" && !head.bg_tasks.is_empty() { fill(&tr(lang, "state_bg"), &[("n", head.bg_tasks.len().to_string())]) } else { tr(lang, &state) };
+        ui.set_state_label(label.into());
+        // The line above the message box: only while the chat is idle (a running one shows its own work).
+        let banner = if state == "idle" && !head.bg_tasks.is_empty() {
+            let what = head.bg_tasks.iter().take(2).cloned().collect::<Vec<_>>().join(" · ");
+            fill(&tr(lang, "bg_banner"), &[("n", head.bg_tasks.len().to_string()), ("what", what)])
+        } else {
+            String::new()
+        };
+        ui.set_bg_note(banner.into());
         if let Some((cost, tokens)) = &head.turn {
             ui.set_turn_cost(cost.clone().unwrap_or_default().into());
             ui.set_turn_tokens(tokens.clone().unwrap_or_default().into());

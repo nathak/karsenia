@@ -1268,9 +1268,24 @@ impl Actor {
         ProposalInput { cwd: self.meta.cwd.to_string_lossy().into_owned(), user_texts: texts, tool_lines: lines, last_turn_tools: turn_tools, external_used: external, last_seq: self.seq, provider: self.meta.provider.is_some(), account: self.meta.account.clone() }
     }
 
+    /// The model speaks with no message of ours before it (a background job ended and the program told it, so it goes on by itself): the
+    /// chat is running again, and shows so until that turn's result.
+    fn wake(&mut self) {
+        if self.state == State::Idle && self.process.is_some() {
+            self.set_state(State::Running);
+        }
+    }
+
     fn raw_event(&mut self, raw: Value) {
         match raw["type"].as_str() {
-            Some("stream_event") => self.emit_transient("claude", raw),
+            Some("stream_event") => {
+                self.wake();
+                self.emit_transient("claude", raw)
+            }
+            Some("assistant") => {
+                self.wake();
+                self.emit("claude", raw)
+            }
             Some("control_cancel_request") => {
                 if let Some(request_id) = raw["request_id"].as_str().map(str::to_owned) {
                     if self.pending.remove(&request_id).is_some() {

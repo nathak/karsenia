@@ -186,6 +186,8 @@ export component AppWindow inherits Window {
     // The chat as one selectable text (the header's "View as text"): a snapshot made when it is opened or refreshed, a note when the
     // beginning was left out, and whether the chat has changed since.
     in-out property <bool> text-view: false;
+    // The chat is idle but has work running in the background: a line above the message box says so ("" when there is none).
+    in property <string> bg-note;
     in property <string> chat-plain;
     in property <string> chat-plain-note;
     in property <bool> chat-plain-stale;
@@ -601,6 +603,19 @@ export component AppWindow inherits Window {
                                 x: root.gutter; y: row.kind == "day" ? 18px : 0px; width: list.visible-width - 2 * root.gutter;
                                 r: row; copy-msg(k) => { root.copy-msg(k); } toggle(k) => { root.toggle(k); } copy(t) => { root.copy(t); } link(u) => { root.link(u); } open-image(id, i) => { root.open-image(id, i); }
                             }
+                        }
+                    }
+                }
+                // What runs in the background: the chat is waiting for it, not stopped (the model goes on by itself when it ends).
+                if root.has-chat && root.side == 0 && !root.text-view && !root.debug-view && root.bg-note != "": Rectangle {
+                    height: 36px;
+                    Rectangle {
+                        x: root.gutter; y: 2px; width: parent.width - 2 * root.gutter; height: 30px;
+                        background: Theme.info.with-alpha(0.12); border-radius: 8px; border-width: 1px; border-color: Theme.info.with-alpha(0.4);
+                        HorizontalLayout {
+                            padding-left: 12px; padding-right: 12px; spacing: 8px;
+                            Rectangle { width: 8px; height: 8px; y: (parent.height - 8px) / 2; border-radius: 4px; background: Theme.info; }
+                            Text { horizontal-stretch: 1; text: root.bg-note; color: Theme.on-surface; font-size: 12px; vertical-alignment: center; overflow: elide; }
                         }
                     }
                 }

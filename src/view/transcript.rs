@@ -218,6 +218,10 @@ pub struct Head {
     pub team_turns: u32,
     /// What the last `/swb status` answered (the plug-in's text summary of the contract) and when: shown when no snapshot exists.
     pub swb_status: Option<(String, u64)>,
+    /// What the program says it is running in the background now (a command started with `run_in_background`, a background
+    /// sub-agent), one short line each: while there is any, a chat that is idle is waiting for them, and the model goes on by itself
+    /// when one ends.
+    pub bg_tasks: Vec<String>,
 }
 
 pub struct Transcript {
@@ -957,6 +961,34 @@ impl Transcript {
                     self.note(line, "note");
                 }
             }
+            // The set of work the program has in the background, whole each time (the last one is the truth).
+            "system" if s(d, "subtype") == "background_tasks_changed" => {
+                self.head.bg_tasks = d
+                    .get("tasks")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|t| t.get("ambient").and_then(Value::as_bool) != Some(true))
+                    .map(|t| first_line(s(t, "description")).chars().filter(|c| !c.is_control()).take(80).collect::<String>())
+                    .take(20)
+                    .collect();
+            }
+            // A background job started, or ended: said in the transcript, as the person would otherwise see nothing of it.
+            "system" if matches!(s(d, "subtype"), "task_started" | "task_notification") && d.get("ambient").and_then(Value::as_bool) != Some(true) => {
+                let line = |key: &str| first_line(s(d, key)).chars().filter(|c| !c.is_control()).take(160).collect::<String>();
+                if s(d, "subtype") == "task_started" {
+                    if d.get("is_backgrounded").and_then(Value::as_bool) == Some(true) {
+                        self.note(fill(&self.t("bg_started"), &[("what", line("description"))]), "note");
+                    }
+                } else {
+                    let key = match s(d, "status") {
+                        "failed" => "bg_failed",
+                        "stopped" => "bg_stopped",
+                        _ => "bg_done",
+                    };
+                    self.note(fill(&self.t(key), &[("what", line("summary"))]), "note");
+                }
+            }
             // The CLI is trying the endpoint again after an error: said in the transcript, as the person would otherwise see nothing happen.
             "system" if s(d, "subtype") == "api_retry" => {
                 let num = |key: &str| d.get(key).and_then(Value::as_u64);
@@ -973,6 +1005,8 @@ impl Transcript {
                 self.note(text, "note-warn");
             }
             "system" if s(d, "subtype") == "init" => {
+                // A new process starts with nothing in the background.
+                self.head.bg_tasks.clear();
                 if let Some(model) = d.get("model").and_then(Value::as_str) {
                     self.head.model = Some(model.to_owned());
                 }
@@ -2193,6 +2227,29 @@ mod plain_text_tests {
         result_event(&mut t, "r1", "…", json!({"type": "text", "file": {"filePath": "/p/a.rs", "numLines": 50, "startLine": 10, "totalLines": 99}}));
         let row = tool_row(&t, "Read");
         assert!(row.extra.contains("L10-60") && row.extra.contains("50"), "{}", row.extra);
+    }
+
+    #[test]
+    fn background_work_is_noted_and_counted_while_it_runs_and_forgotten_with_the_process() {
+        let mut t = Transcript::new(Lang::Ko);
+        t.apply("claude", &json!({"type": "system", "subtype": "task_started", "task_id": "a", "description": "sleep 600 && make", "is_backgrounded": true}), 1);
+        t.apply("claude", &json!({"type": "system", "subtype": "task_started", "task_id": "f", "description": "a foreground one", "is_backgrounded": false}), 1);
+        t.apply("claude", &json!({"type": "system", "subtype": "background_tasks_changed", "tasks": [
+            {"task_id": "a", "task_type": "local_bash", "description": "sleep 600 && make"},
+            {"task_id": "w", "task_type": "local_bash", "description": "a watcher", "ambient": true}]}), 2);
+        assert_eq!(t.head.bg_tasks, ["sleep 600 && make"], "the ambient one is not work of the chat");
+        let notes: Vec<String> = t.rows().into_iter().filter(|r| r.kind == "note").map(|r| r.text).collect();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("sleep 600"), "{notes:?}");
+        t.apply("claude", &json!({"type": "system", "subtype": "task_notification", "task_id": "a", "status": "completed", "summary": "make finished: 3 passed\nmore"}), 3);
+        t.apply("claude", &json!({"type": "system", "subtype": "background_tasks_changed", "tasks": []}), 4);
+        assert!(t.head.bg_tasks.is_empty());
+        let texts: Vec<String> = t.rows().into_iter().filter(|r| r.kind == "note").map(|r| r.text).collect();
+        assert!(texts.iter().any(|x| x.contains("make finished: 3 passed") && !x.contains("more")), "{texts:?}");
+        // A new process begins with nothing in the background.
+        t.apply("claude", &json!({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "b", "task_type": "local_bash", "description": "x"}]}), 5);
+        t.apply("claude", &json!({"type": "system", "subtype": "init", "model": "m"}), 6);
+        assert!(t.head.bg_tasks.is_empty());
     }
 
     #[test]
