@@ -804,22 +804,50 @@ impl Actor {
             let mut container = None;
             let (mcp_config, system_file, plugin_dir, env, pinned_url, model) = match &provider {
                 Some(provider) => {
-                    let config_dir = self.dir.join("chatcfg").join(&self.meta.sid);
-                    if let Err(error) = crate::private::create_dir(&self.dir.join("chatcfg")).and_then(|()| crate::private::create_dir(&config_dir)) {
-                        let message = format!("could not make this chat's own settings folder: {error}");
-                        self.emit("error", json!({"message": message}));
-                        return Err(message);
-                    }
-                    container = match self.container_spec(provider, &config_dir) {
-                        Ok(spec) => spec,
-                        Err(message) => {
+                    let inherited: Vec<String> = std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()).collect();
+                    let env = if provider.auth == crate::providers::Auth::AccountLogin {
+                        // The login of one of the person's accounts: the chat runs in that account's folder, in no container of its own (the
+                        // login would have to be inside it), and still gets nothing of the account's notes, skills or history.
+                        if self.meta.container {
+                            let message = "a provider that uses an account's login cannot run in a container".to_owned();
                             self.emit("error", json!({"message": message}));
                             return Err(message);
                         }
+                        let account_dir = match provider.login_account.as_deref() {
+                            None => None,
+                            Some(id) => {
+                                let home = crate::platform::home_dir();
+                                let default = crate::accounts::default_config_dir(std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).as_deref(), home.as_deref());
+                                let found = if crate::accounts::valid_id(id) { crate::accounts::check_dir(&crate::accounts::config_dir(&self.dir, id), &self.dir.join("accounts"), default.as_deref()) } else { Err("not a valid account".to_owned()) };
+                                match found {
+                                    Ok(dir) => Some(dir),
+                                    Err(why) => {
+                                        let message = format!("the account whose login this provider uses is not available ({why}); change the provider or make a new chat");
+                                        self.emit("error", json!({"message": message}));
+                                        return Err(message);
+                                    }
+                                }
+                            }
+                        };
+                        crate::claude::env::login_plan(&inherited, provider, account_dir.as_deref())
+                    } else {
+                        let config_dir = self.dir.join("chatcfg").join(&self.meta.sid);
+                        if let Err(error) = crate::private::create_dir(&self.dir.join("chatcfg")).and_then(|()| crate::private::create_dir(&config_dir)) {
+                            let message = format!("could not make this chat's own settings folder: {error}");
+                            self.emit("error", json!({"message": message}));
+                            return Err(message);
+                        }
+                        container = match self.container_spec(provider, &config_dir) {
+                            Ok(spec) => spec,
+                            Err(message) => {
+                                self.emit("error", json!({"message": message}));
+                                return Err(message);
+                            }
+                        };
+                        crate::claude::env::plan(&inherited, Some(provider), &config_dir)
                     };
-                    let inherited: Vec<String> = std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()).collect();
                     self.secrets = provider.secrets();
-                    (None, None, None, crate::claude::env::plan(&inherited, Some(provider), &config_dir), Some(provider.base_url.clone()), self.meta.model.clone().or_else(|| provider.model.clone()))
+                    (None, None, None, env, Some(provider.base_url.clone()), self.meta.model.clone().or_else(|| provider.model.clone()))
                 }
                 None if self.meta.container => {
                     let message = "a container chat needs a provider".to_owned();

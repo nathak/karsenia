@@ -29,6 +29,7 @@ fn form(op: &Value) -> Result<Form, String> {
         clear_token: op["clear_token"].as_bool() == Some(true),
         oauth_token: op["oauth_token"].as_str().filter(|t| !t.is_empty()).map(str::to_owned),
         clear_oauth: op["clear_oauth"].as_bool() == Some(true),
+        account: op["account"].as_str().filter(|a| !a.is_empty()).map(str::to_owned),
         model: text(op, "model"),
         models: [text(&op["models"], "opus"), text(&op["models"], "sonnet"), text(&op["models"], "haiku")],
         headers: text(op, "headers"),

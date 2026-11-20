@@ -65,6 +65,8 @@ pub fn plan(inherited: &[String], provider: Option<&Provider>, config_dir: &Path
         // The key goes in the header lines only; the CLI still needs some credential of its own, so it gets the placeholder.
         Auth::Headers => set.push(("ANTHROPIC_AUTH_TOKEN".into(), PLACEHOLDER_TOKEN.into())),
         // The subscription token is the CLI's own login: no `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` is set, as either would outrank it.
+        // An account's own login is the CLI's credential: nothing of the provider's is set, so no variable outranks it.
+        Auth::AccountLogin => {}
         Auth::OauthToken => set.push(("CLAUDE_CODE_OAUTH_TOKEN".into(), provider.oauth_token.clone().unwrap_or_else(|| PLACEHOLDER_TOKEN.into()))),
     }
     // A gateway that wants its key in a header of its own: the lines of the provider, with the key where it says `{key}`.
@@ -82,6 +84,19 @@ pub fn plan(inherited: &[String], provider: Option<&Provider>, config_dir: &Path
     remove.sort();
     remove.dedup();
     EnvPlan { set, remove }
+}
+
+/// The environment of a provider chat that uses an account's login (`Auth::AccountLogin`): the provider's address and header lines, and the
+/// folder of that account. `account_dir` is None for the default account: its folder is wherever the CLI looks by itself (so
+/// `CLAUDE_CONFIG_DIR` is neither set nor taken away: a person who moved it keeps the login where it is). Any other credential of
+/// this app's own environment is taken away, as for every provider chat.
+pub fn login_plan(inherited: &[String], provider: &Provider, account_dir: Option<&Path>) -> EnvPlan {
+    let mut plan = plan(inherited, Some(provider), account_dir.unwrap_or_else(|| Path::new("")));
+    if account_dir.is_none() {
+        plan.set.retain(|(name, _)| name != "CLAUDE_CONFIG_DIR");
+        plan.remove.retain(|name| name != "CLAUDE_CONFIG_DIR");
+    }
+    plan
 }
 
 /// The environment of a `claude` that runs for one of the person's extra accounts: its own settings folder, and none of the
@@ -112,7 +127,7 @@ mod tests {
     use crate::providers::Aliases;
 
     fn provider(auth: Auth, token: Option<&str>) -> Provider {
-        Provider { id: "p1".into(), name: "P".into(), base_url: "https://gw.example.com/x".into(), auth, token: token.map(str::to_owned), oauth_token: None, model: None, models: Aliases::default(), headers: None, created: 0, updated: 0 }
+        Provider { id: "p1".into(), name: "P".into(), base_url: "https://gw.example.com/x".into(), auth, token: token.map(str::to_owned), oauth_token: None, login_account: None, model: None, models: Aliases::default(), headers: None, created: 0, updated: 0 }
     }
 
     fn names(list: &[&str]) -> Vec<String> {
@@ -287,5 +302,27 @@ mod tests {
         let shown = format!("{:?}", plan.describe());
         assert!(!shown.contains("sk-ant-oat01") && !shown.contains("airkey-123456"), "{shown}");
         assert_eq!(p.secrets().len(), 2);
+    }
+
+    #[test]
+    fn an_account_login_provider_sets_no_credential_and_leaves_the_default_accounts_folder_alone() {
+        let mut p = provider(Auth::AccountLogin, Some("airkey-123456"));
+        p.headers = Some("AIR-Api-Key: {key}".into());
+        let inherited = names(&["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"]);
+        // The default account: its folder is wherever the CLI looks, so the variable is neither set nor removed.
+        let plan = login_plan(&inherited, &p, None);
+        for name in ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"] {
+            assert_eq!(value(&plan, name), None, "{name} is not set");
+        }
+        assert_eq!(value(&plan, "ANTHROPIC_BASE_URL"), Some("https://gw.example.com/x"));
+        assert_eq!(value(&plan, "ANTHROPIC_CUSTOM_HEADERS"), Some("AIR-Api-Key: airkey-123456"));
+        assert!(!plan.remove.contains(&"CLAUDE_CONFIG_DIR".to_owned()), "a moved default folder keeps working");
+        for name in ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] {
+            assert!(plan.remove.contains(&name.to_owned()), "an inherited {name} is taken away");
+        }
+        // An extra account: its folder.
+        let extra = login_plan(&inherited, &p, Some(Path::new("/data/accounts/0123456789abcdef")));
+        assert_eq!(value(&extra, "CLAUDE_CONFIG_DIR"), Some("/data/accounts/0123456789abcdef"));
+        assert_eq!(value(&extra, "ANTHROPIC_AUTH_TOKEN"), None);
     }
 }

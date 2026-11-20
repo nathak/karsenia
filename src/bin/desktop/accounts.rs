@@ -232,6 +232,18 @@ pub fn follow_chat(ui: &AppWindow, app: &App, sid: &str, account: Option<String>
     set_account(ui, app, account);
 }
 
+/// The account id at an index of the account picker (None outside the list; Some(None) is the default account), with the name it showed.
+pub fn id_at(index: i32, name: &str) -> Option<Option<String>> {
+    let i = index.max(0) as usize;
+    let same = NAMES.with(|n| n.borrow().get(i).map(String::as_str) == Some(name));
+    same.then(|| IDS.with(|ids| ids.borrow().get(i).cloned().flatten()))
+}
+
+/// The index of an account in the picker (the default account, None, is 0; an account that is gone is 0 too).
+pub fn index_of(id: Option<&str>) -> i32 {
+    IDS.with(|ids| ids.borrow().iter().position(|one| one.as_deref() == id).unwrap_or(0)) as i32
+}
+
 /// The new chat's account from the picker: the index and the name it showed must still agree.
 pub fn chosen(index: i32, name: &str) -> Result<Option<String>, ()> {
     if name.is_empty() {

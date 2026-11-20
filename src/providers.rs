@@ -27,6 +27,9 @@ pub enum Auth {
     /// The CLI is given the provider's subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, made by `claude setup-token`) as its own login, and no
     /// `ANTHROPIC_AUTH_TOKEN`: for a gateway that passes a Claude subscription through. That token is sent to the provider's address.
     OauthToken,
+    /// The chat's `claude` runs in the folder of one of the person's accounts and uses that account's own login (as it would without any
+    /// gateway variable): the login token is sent to the provider's address. No key or token of the provider's own is used for the login.
+    AccountLogin,
 }
 
 impl Auth {
@@ -36,6 +39,7 @@ impl Auth {
             "x_api_key" => Some(Self::XApiKey),
             "headers" => Some(Self::Headers),
             "oauth_token" => Some(Self::OauthToken),
+            "account_login" => Some(Self::AccountLogin),
             _ => None,
         }
     }
@@ -64,6 +68,9 @@ pub struct Provider {
     /// The subscription token of `Auth::OauthToken` (a separate secret from `token`, which is what `{key}` stands for).
     #[serde(default)]
     pub oauth_token: Option<String>,
+    /// For `Auth::AccountLogin`: the id of the account whose login is used; None is the default account.
+    #[serde(default)]
+    pub login_account: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -94,6 +101,7 @@ pub struct ProviderView {
     pub auth: Auth,
     pub has_token: bool,
     pub has_oauth: bool,
+    pub login_account: Option<String>,
     pub model: Option<String>,
     pub models: Aliases,
     /// The header lines as the person wrote them (with `{key}`, never the key).
@@ -110,7 +118,7 @@ pub struct ProviderRef {
 
 impl Provider {
     pub fn view(&self) -> ProviderView {
-        ProviderView { id: self.id.clone(), name: self.name.clone(), base_url: self.base_url.clone(), host: host_of(&self.base_url), auth: self.auth, has_token: self.token.is_some(), has_oauth: self.oauth_token.is_some(), model: self.model.clone(), models: self.models.clone(), headers: self.headers.clone().unwrap_or_default() }
+        ProviderView { id: self.id.clone(), name: self.name.clone(), base_url: self.base_url.clone(), host: host_of(&self.base_url), auth: self.auth, has_token: self.token.is_some(), has_oauth: self.oauth_token.is_some(), login_account: self.login_account.clone(), model: self.model.clone(), models: self.models.clone(), headers: self.headers.clone().unwrap_or_default() }
     }
 
     pub fn reference(&self) -> ProviderRef {
@@ -282,6 +290,8 @@ pub struct Form {
     /// The subscription token; None keeps the one already saved.
     pub oauth_token: Option<String>,
     pub clear_oauth: bool,
+    /// For `Auth::AccountLogin`: the account whose login is used (None: the default account).
+    pub account: Option<String>,
     pub model: String,
     pub models: [String; 3],
     /// The header lines; empty for none.
@@ -350,6 +360,11 @@ impl ProviderStore {
             (None, true) => None,
             (None, false) => existing.and_then(|i| list[i].oauth_token.clone()),
         };
+        let login_account = match (form.auth, &form.account) {
+            (Auth::AccountLogin, Some(id)) if !crate::accounts::valid_id(id) => return Err("that account is not valid".into()),
+            (Auth::AccountLogin, account) => account.clone(),
+            _ => None,
+        };
         if form.auth == Auth::OauthToken && oauth_token.is_none() {
             return Err("a subscription token address needs the token".into());
         }
@@ -360,7 +375,7 @@ impl ProviderStore {
         let id = match existing {
             Some(i) => {
                 let p = &mut list[i];
-                (p.name, p.base_url, p.auth, p.token, p.oauth_token, p.model, p.models, p.headers, p.updated) = (name, base_url, form.auth, token, oauth_token, model, models, headers, now);
+                (p.name, p.base_url, p.auth, p.token, p.oauth_token, p.login_account, p.model, p.models, p.headers, p.updated) = (name, base_url, form.auth, token, oauth_token, login_account, model, models, headers, now);
                 p.id.clone()
             }
             None => {
@@ -368,7 +383,7 @@ impl ProviderStore {
                     return Err("there are too many providers".into());
                 }
                 let id = crate::random_hex(6);
-                list.push(Provider { id: id.clone(), name, base_url, auth: form.auth, token, oauth_token, model, models, headers, created: now, updated: now });
+                list.push(Provider { id: id.clone(), name, base_url, auth: form.auth, token, oauth_token, login_account, model, models, headers, created: now, updated: now });
                 id
             }
         };
@@ -615,5 +630,24 @@ mod tests {
         assert!(store.get(&id).unwrap().oauth_token.is_none());
         let old: Provider = serde_json::from_str(r#"{"id":"x","name":"N","base_url":"https://a.example"}"#).unwrap();
         assert!(old.oauth_token.is_none() && old.secrets().is_empty());
+    }
+
+    #[test]
+    fn an_account_login_provider_names_an_account_or_the_default_and_nothing_else_keeps_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = ProviderStore::open(dir.path().join("providers.json"));
+        let base = || Form { name: "Air".into(), base_url: "https://gateway.example.com/anthropic".into(), auth: Auth::AccountLogin, ..Default::default() };
+        let id = store.save(base(), 1).unwrap();
+        assert_eq!(store.get(&id).unwrap().login_account, None, "the default account");
+        store.save(Form { id: Some(id.clone()), account: Some("0123456789abcdef".into()), ..base() }, 2).unwrap();
+        assert_eq!(store.list_views().remove(0).login_account.as_deref(), Some("0123456789abcdef"));
+        for bad in ["", "short", "../../etc/passwd0", "0123456789abcdeg", "0123456789ABCDEF"] {
+            assert!(store.save(Form { id: Some(id.clone()), account: Some(bad.into()), ..base() }, 3).is_err(), "{bad:?}");
+        }
+        assert_eq!(store.get(&id).unwrap().login_account.as_deref(), Some("0123456789abcdef"), "a refused save changes nothing");
+        // Another mode forgets the account, and no token of the provider's own is needed for the login.
+        store.save(Form { id: Some(id.clone()), auth: Auth::Bearer, account: Some("0123456789abcdef".into()), ..base() }, 4).unwrap();
+        assert_eq!(store.get(&id).unwrap().login_account, None);
+        assert_eq!(Auth::parse("account_login"), Some(Auth::AccountLogin));
     }
 }
