@@ -1442,7 +1442,7 @@ fn to_slint(row: &Row) -> ChatRow {
         indent: row.indent,
         img_id,
         imgs,
-        diff: ModelRc::from(Rc::new(VecModel::from(row.diff.iter().map(|l| DLine { kind: l.kind.to_string().into(), no: l.no as i32, text: l.text.as_str().into() }).collect::<Vec<_>>()))),
+        diff: ModelRc::from(Rc::new(VecModel::from(row.diff.iter().map(|l| DLine { kind: l.kind.to_string().into(), no: l.no as i32, text: l.text.replace('\r', "").replace('\t', "    ").into() }).collect::<Vec<_>>()))),
         // What the copy button of an opened diff copies: the lines as a diff (a space, `+` or `-` before each), whole, so what the
         // card cuts at its edge, and the removed lines, can be read.
         copy_text: row.diff.iter().filter(|l| matches!(l.kind, ' ' | '+' | '-')).map(|l| format!("{} {}", l.kind, l.text)).collect::<Vec<_>>().join("\n").into(),

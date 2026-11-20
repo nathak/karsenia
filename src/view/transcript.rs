@@ -447,8 +447,13 @@ fn patch_lines(result: &Value) -> Option<(Vec<DiffLine>, i32, i32)> {
         (add, del) = (a as i32, d as i32);
     }
     if lines.len() > MAX_DIFF_ROWS || unseen > 0 {
-        let hidden = lines.len().saturating_sub(MAX_DIFF_ROWS) + unseen;
+        // The gap marks of the cut part are not lines; and the part kept does not end on one.
+        let cut_lines = lines.iter().skip(MAX_DIFF_ROWS).filter(|l| l.kind != '@').count();
+        let hidden = cut_lines + unseen;
         lines.truncate(MAX_DIFF_ROWS);
+        while lines.last().is_some_and(|l| l.kind == '@') {
+            lines.pop();
+        }
         lines.push(DiffLine { kind: '…', no: hidden as u32, text: String::new() });
     }
     Some((lines, add, del))
@@ -1076,10 +1081,12 @@ impl Transcript {
             t.state = state;
             t.status = status;
             t.result = cut(&text, MAX_RESULT, lang);
+            // Only a file-editing tool's result is a patch (another tool's result may have a `type` of its own, `create` for one).
+            let edits = matches!(t.name.as_str(), "Edit" | "MultiEdit" | "Write" | "NotebookEdit");
             if let Some(res) = structured.filter(|_| !is_error) {
                 // The real diff of an edit (context and line numbers), shown at once as Claude Code shows it, unless the person has
                 // opened or closed the card already.
-                if let Some((lines, add, del)) = patch_lines(res) {
+                if let Some((lines, add, del)) = patch_lines(res).filter(|_| edits) {
                     t.patch = lines;
                     t.add = add;
                     t.del = del;
@@ -2125,6 +2132,10 @@ mod plain_text_tests {
         let last = row.diff.last().unwrap();
         assert_eq!(last.kind, '…');
         assert!(last.text.contains("30"), "{}", last.text);
+        // Another tool's result that happens to say `create` is not a diff.
+        edit_event(&mut t, "m1", "mcp__x__make", json!({"name": "z"}));
+        result_event(&mut t, "m1", "made", json!({"type": "create", "content": "a\nb"}));
+        assert!(t.rows().iter().find(|r| r.key == "m1").unwrap().diff.is_empty());
         // Cut for the log (400 lines kept of 500): the badge and the marker still say 500.
         let mut t = Transcript::new(Lang::Ko);
         edit_event(&mut t, "w2", "Write", json!({"file_path": "/p/big.txt", "content": "x"}));
@@ -2158,6 +2169,21 @@ mod plain_text_tests {
         assert!(preview.starts_with("one\ntwo\nthree\n") && preview.contains("+2"), "{preview}");
         t.toggle("b");
         assert_eq!(tool_row(&t, "Bash").preview, "", "no preview once it is open");
+    }
+
+    #[test]
+    fn a_cut_diff_counts_lines_not_gaps_and_does_not_end_on_a_gap() {
+        let mut t = Transcript::new(Lang::Ko);
+        edit_event(&mut t, "e1", "Edit", json!({"file_path": "/p/a.rs", "old_string": "b", "new_string": "c"}));
+        // Hunk one has exactly MAX_DIFF_ROWS lines, so the gap mark comes first after the cut, and hunk two has 3 lines.
+        let first = json!({"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": MAX_DIFF_ROWS, "lines": vec!["+a"; MAX_DIFF_ROWS]});
+        let second = json!({"oldStart": 500, "oldLines": 1, "newStart": 500, "newLines": 3, "lines": ["+x", "+y", "+z"]});
+        result_event(&mut t, "e1", "ok", json!({"structuredPatch": [first, second]}));
+        let row = tool_row(&t, "Edit");
+        let last = row.diff.last().unwrap();
+        assert_eq!(last.kind, '…');
+        assert_eq!(last.no, 3, "the three lines of the second hunk, not the gap mark");
+        assert_ne!(row.diff[row.diff.len() - 2].kind, '@');
     }
 
     #[test]
