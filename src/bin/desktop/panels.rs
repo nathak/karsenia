@@ -404,7 +404,7 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         }
     });
     let lang = app.lang;
-    ui.global::<crate::About>().set_version(tenrec::view::i18n::fill(&tr(lang, "about_version"), &[("v", env!("CARGO_PKG_VERSION").to_owned())]).into());
+    ui.global::<crate::About>().set_version(tenrec::view::i18n::fill(&tr(lang, "about_version"), &[("v", format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("TENREC_GIT")))]).into());
 
     let a = app.clone();
     ui.on_panel_open(move |side| {

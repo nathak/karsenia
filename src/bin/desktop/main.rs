@@ -296,7 +296,7 @@ fn start_log(data: &std::path::Path) -> Option<PathBuf> {
         }
         previous(info);
     }));
-    tracing::info!("tenrec-desktop {} started ({} {})", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
+    tracing::info!("tenrec-desktop {} ({}) started ({} {})", env!("CARGO_PKG_VERSION"), env!("TENREC_GIT"), std::env::consts::OS, std::env::consts::ARCH);
     Some(path)
 }
 

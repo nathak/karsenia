@@ -6,6 +6,18 @@ fn main() {
         slint_build::compile_with_config("slint/app.slint", config).expect("the Slint UI did not compile");
     }
     windows_icon();
+    git_revision();
+}
+
+/// The commit this build was made from (`TENREC_GIT`, with a `+` when tracked files differ from it), shown in Settings -> About and in the
+/// log, so that a person can tell which build is running. Without git (a source archive) it is `unknown`.
+fn git_revision() {
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/index");
+    let git = |args: &[&str]| std::process::Command::new("git").args(args).output().ok().filter(|o| o.status.success());
+    let hash = git(&["rev-parse", "--short", "HEAD"]).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()).filter(|h| !h.is_empty()).unwrap_or_else(|| "unknown".into());
+    let dirty = git(&["diff", "--quiet", "HEAD"]).is_none() && hash != "unknown";
+    println!("cargo:rustc-env=TENREC_GIT={hash}{}", if dirty { "+" } else { "" });
 }
 
 /// The program file's own icon (what Explorer and the taskbar show for the .exe): `assets/icon.ico` written as a Windows resource file

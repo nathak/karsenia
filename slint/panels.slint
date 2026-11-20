@@ -656,8 +656,9 @@ export component ProvidersCard inherits Card {
                 Field { label: T.tr("pv_model"); LineEdit { text <=> Prov.f-model; } }
                 Field {
                     label: T.tr("pv_aliases");
-                    HorizontalLayout {
-                        spacing: 8px;
+                    // One under the other: three side by side did not fit a narrow settings column (each field has a minimum width).
+                    VerticalLayout {
+                        spacing: 6px;
                         LineEdit { text <=> Prov.f-opus; placeholder-text: "opus"; }
                         LineEdit { text <=> Prov.f-sonnet; placeholder-text: "sonnet"; }
                         LineEdit { text <=> Prov.f-haiku; placeholder-text: "haiku"; }
