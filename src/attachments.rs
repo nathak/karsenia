@@ -18,6 +18,8 @@ pub const MAX_FILE_BYTES: usize = 25 * 1024 * 1024;
 pub const MAX_PDF_BYTES: usize = 20 * 1024 * 1024;
 /// Images and PDFs of one message together (they travel inside the message line).
 pub const MAX_INLINE_BYTES: usize = 24 * 1024 * 1024;
+/// All the files of one message together (decoded): with the base64 and the rest of the request this stays inside what the WebSocket takes.
+pub const MAX_TOTAL_BYTES: usize = 28 * 1024 * 1024;
 /// A text file is put in the message up to this size, and all of them together up to the second; beyond that they are saved.
 pub const MAX_TEXT_BYTES: usize = 128 * 1024;
 pub const MAX_TEXT_TOTAL: usize = 256 * 1024;
@@ -86,11 +88,15 @@ pub fn check(list: &[Image], container: bool) -> Result<Vec<Checked>, String> {
         return Err(format!("a file can be {} MB at most", MAX_FILE_BYTES / 1024 / 1024));
     }
     let mut out = Vec::with_capacity(list.len());
-    let (mut inline, mut text_total) = (0usize, 0usize);
+    let (mut inline, mut text_total, mut total) = (0usize, 0usize, 0usize);
     for (i, file) in list.iter().enumerate() {
         let bytes = base64::engine::general_purpose::STANDARD.decode(file.data.trim()).map_err(|_| "an attachment is not valid base64".to_owned())?;
         if bytes.len() > MAX_FILE_BYTES {
             return Err(format!("a file can be {} MB at most", MAX_FILE_BYTES / 1024 / 1024));
+        }
+        total += bytes.len();
+        if total > MAX_TOTAL_BYTES {
+            return Err(format!("the files of one message can be {} MB together", MAX_TOTAL_BYTES / 1024 / 1024));
         }
         let mut class = classify(&bytes);
         match class {
@@ -240,6 +246,8 @@ mod tests {
         let mut big_png = PNG.to_vec();
         big_png.resize(MAX_IMAGE_BYTES + 1, 0);
         assert!(check(&[file(&big_png, None)], false).unwrap_err().contains("5 MB"));
+        // Together they must stay under the total (two 20 MB files pass one by one, not together).
+        assert!(check(&[file(&vec![b'a'; 20 * 1024 * 1024], None), file(&vec![0u8; 20 * 1024 * 1024], None)], false).unwrap_err().contains("28 MB together"));
         // Text up to the limit is text; over it, and over the total, it is saved like any file.
         let ok = check(&[file(b"hello", Some("n.txt")), file(&vec![b'a'; MAX_TEXT_BYTES], Some("big.txt")), file(&vec![b'b'; MAX_TEXT_BYTES], Some("big2.txt")), file(&vec![b'c'; MAX_TEXT_BYTES + 1], Some("huge.txt"))], false).unwrap();
         let kinds: Vec<Class> = ok.iter().map(|c| c.class).collect();

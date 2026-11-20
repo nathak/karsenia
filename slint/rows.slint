@@ -7,8 +7,8 @@ export struct ChatRow {
     kind: string, depth: int, key: string, text: string, rich: styled-text, plain: string, label: string, extra: string, status: string,
     state: string, detail: string, open: bool, badge: string, add: int, del: int, indent: int,
     img-id: int, imgs: [ChatImg], trows: [TRow],
-    // The rich text has a link (it is then not selectable by a drag: see Rich).
-    has-link: bool,
+    // The rich text is styled or has a link (it is then not selectable by a drag: see Rich).
+    no-select: bool,
     // A table's column weights (the widest cell of each column, in characters): every row of the table splits its width by them, so the columns line up.
     col-w: [float],
 }
@@ -72,17 +72,17 @@ export component RowView inherits Rectangle {
         }
         if r.kind == "para": VerticalLayout {
             padding-left: 4px; padding-right: 24px; padding-top: 2px; padding-bottom: 14px;
-            Rich { selectable: !r.has-link; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
+            Rich { selectable: !r.no-select; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
         }
         if r.kind == "heading": VerticalLayout {
             padding-left: 4px; padding-top: 14px; padding-bottom: 10px; spacing: 6px;
-            Rich { selectable: !r.has-link; rich: r.rich; plain: r.plain; size: r.extra == "1" ? 21px : r.extra == "2" ? 18px : 16px; fg: Theme.on-surface; }
+            Rich { selectable: !r.no-select; rich: r.rich; plain: r.plain; size: r.extra == "1" ? 21px : r.extra == "2" ? 18px : 16px; fg: Theme.on-surface; }
             if r.extra == "1" || r.extra == "2": Rectangle { height: 1px; background: Theme.hairline; }
         }
         if r.kind == "item": HorizontalLayout {
             padding-left: 8px + r.indent * 18px; padding-top: 1px; padding-bottom: 8px; spacing: 8px;
             Text { text: r.label; color: Theme.primary-soft; font-size: 15px; min-width: 14px; vertical-alignment: top; }
-            Rich { horizontal-stretch: 1; selectable: !r.has-link; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
+            Rich { horizontal-stretch: 1; selectable: !r.no-select; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-surface; link(u) => { root.link(u); } }
         }
         if r.kind == "quote": VerticalLayout {
             padding-left: 4px; padding-right: 24px; padding-bottom: 12px;
@@ -91,7 +91,7 @@ export component RowView inherits Rectangle {
                 ql := HorizontalLayout {
                     spacing: 12px;
                     Rectangle { width: 3px; background: Theme.primary.with-alpha(0.7); }
-                    VerticalLayout { padding-top: 10px; padding-bottom: 10px; padding-right: 12px; horizontal-stretch: 1; Rich { selectable: !r.has-link; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-var; } }
+                    VerticalLayout { padding-top: 10px; padding-bottom: 10px; padding-right: 12px; horizontal-stretch: 1; Rich { selectable: !r.no-select; rich: r.rich; plain: r.plain; size: 15px; fg: Theme.on-var; } }
                 }
             }
         }
