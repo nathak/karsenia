@@ -438,8 +438,16 @@ fn patch_lines(result: &Value) -> Option<(Vec<DiffLine>, i32, i32)> {
     } else {
         return None;
     }
-    if lines.len() > MAX_DIFF_ROWS {
-        let hidden = lines.len() - MAX_DIFF_ROWS;
+    // What was logged is cut to a size (see `slim_tool_result`), which also counted the whole: those numbers are the badge's and the
+    // "more lines" marker's, not those of what is left.
+    let counted = |key: &str| result.get(key).and_then(Value::as_u64);
+    let drawn = lines.iter().filter(|l| l.kind != '@').count();
+    let unseen = counted("lineCount").map_or(0, |n| (n as usize).saturating_sub(drawn));
+    if let (Some(a), Some(d)) = (counted("addCount"), counted("delCount")) {
+        (add, del) = (a as i32, d as i32);
+    }
+    if lines.len() > MAX_DIFF_ROWS || unseen > 0 {
+        let hidden = lines.len().saturating_sub(MAX_DIFF_ROWS) + unseen;
         lines.truncate(MAX_DIFF_ROWS);
         lines.push(DiffLine { kind: '…', no: hidden as u32, text: String::new() });
     }
@@ -2117,6 +2125,16 @@ mod plain_text_tests {
         let last = row.diff.last().unwrap();
         assert_eq!(last.kind, '…');
         assert!(last.text.contains("30"), "{}", last.text);
+        // Cut for the log (400 lines kept of 500): the badge and the marker still say 500.
+        let mut t = Transcript::new(Lang::Ko);
+        edit_event(&mut t, "w2", "Write", json!({"file_path": "/p/big.txt", "content": "x"}));
+        let big = (1..=500).map(|i| format!("l{i}")).collect::<Vec<_>>().join("\n");
+        let mut ev = json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "w2", "content": "created"}]}, "tool_use_result": {"type": "create", "filePath": "/p/big.txt", "content": big, "originalFile": null}});
+        crate::claude::protocol::slim_tool_result(&mut ev);
+        t.apply("claude", &ev, 2);
+        let row = tool_row(&t, "Write");
+        assert_eq!(row.add, 500);
+        assert!(row.diff.last().unwrap().text.contains("380"), "{}", row.diff.last().unwrap().text);
     }
 
     #[test]

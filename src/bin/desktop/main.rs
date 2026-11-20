@@ -1443,8 +1443,9 @@ fn to_slint(row: &Row) -> ChatRow {
         img_id,
         imgs,
         diff: ModelRc::from(Rc::new(VecModel::from(row.diff.iter().map(|l| DLine { kind: l.kind.to_string().into(), no: l.no as i32, text: l.text.as_str().into() }).collect::<Vec<_>>()))),
-        // What the copy button of an opened diff copies: the new text of the lines shown (context and added), without numbers or marks.
-        copy_text: row.diff.iter().filter(|l| matches!(l.kind, ' ' | '+')).map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n").into(),
+        // What the copy button of an opened diff copies: the lines as a diff (a space, `+` or `-` before each), whole, so what the
+        // card cuts at its edge, and the removed lines, can be read.
+        copy_text: row.diff.iter().filter(|l| matches!(l.kind, ' ' | '+' | '-')).map(|l| format!("{} {}", l.kind, l.text)).collect::<Vec<_>>().join("\n").into(),
         preview: row.preview.as_str().into(),
         col_w: ModelRc::from(Rc::new(VecModel::from(column_weights(&row.grid)))),
         trows: ModelRc::from(Rc::new(VecModel::from(row.grid.iter().enumerate().map(|(i, cells)| TRow { cells: ModelRc::from(Rc::new(VecModel::from(cells.iter().map(|c| SharedString::from(c.as_str())).chain(std::iter::repeat_n(SharedString::new(), columns - cells.len())).collect::<Vec<_>>()))), head: i == 0 }).collect::<Vec<_>>()))),

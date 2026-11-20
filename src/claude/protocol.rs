@@ -153,6 +153,30 @@ pub fn slim_tool_result(event: &mut Value) {
                 keep.insert(name.into(), v.clone());
             }
         }
+        // The counts of the whole result, made before it is cut (the badge and the "N more lines" of a card must not shrink with the cut).
+        let counted = |lines: &mut dyn Iterator<Item = &str>| -> (u64, u64, u64) {
+            lines.fold((0, 0, 0), |(a, d, n), l| match l.as_bytes().first() {
+                Some(b'+') => (a + 1, d, n + 1),
+                Some(b'-') => (a, d + 1, n + 1),
+                Some(b'\\') => (a, d, n),
+                _ => (a, d, n + 1),
+            })
+        };
+        let mut totals = None;
+        if let Some(hunks) = old.get("structuredPatch").and_then(Value::as_array).filter(|h| !h.is_empty()) {
+            let mut all = hunks.iter().flat_map(|h| h.get("lines").and_then(Value::as_array).into_iter().flatten()).filter_map(Value::as_str);
+            totals = Some(counted(&mut all));
+        } else if old.get("type").and_then(Value::as_str) == Some("create") {
+            if let Some(content) = old.get("content").and_then(Value::as_str) {
+                let n = content.lines().count() as u64;
+                totals = Some((n, 0, n));
+            }
+        }
+        if let Some((a, d, n)) = totals {
+            keep.insert("addCount".into(), a.into());
+            keep.insert("delCount".into(), d.into());
+            keep.insert("lineCount".into(), n.into());
+        }
         if let Some(hunks) = old.get("structuredPatch").and_then(Value::as_array) {
             let mut left = MAX_RESULT_LINES;
             let mut out = Vec::new();
@@ -388,6 +412,8 @@ mod tests {
         slim_tool_result(&mut e);
         let total: usize = e["tool_use_result"]["structuredPatch"].as_array().unwrap().iter().map(|h| h["lines"].as_array().unwrap().len()).sum();
         assert_eq!(total, MAX_RESULT_LINES);
+        // The counts of the whole patch are kept, made before the cut.
+        assert_eq!((e["tool_use_result"]["addCount"].as_u64(), e["tool_use_result"]["lineCount"].as_u64()), (Some(600), Some(600)));
         assert!(e["tool_use_result"].get("filePath").is_none());
         let mut other = json!({"type": "assistant", "tool_use_result": {"originalFile": "x"}});
         slim_tool_result(&mut other);
