@@ -42,11 +42,20 @@ fn render(ui: &AppWindow, app: &App) {
     if ui.get_new_prov() as usize >= IDS.with(|i| i.borrow().len()) {
         ui.set_new_prov(0);
     }
+    // A provider is a tab of the header: the tabs follow the list (a new one, a new name, one that is gone).
+    crate::accounts::refresh_tabs(ui, app);
     if !CTR_FILLED.with(Cell::get) {
         prov.set_ctr_runtime(head.ctr_runtime.into());
         prov.set_ctr_image(head.ctr_image.into());
         CTR_FILLED.with(|c| c.set(true));
     }
+}
+
+/// The providers as the header's tabs list them: `(id, name)`, in the order of the new-chat picker (after "none"). None before the list came.
+pub fn tabs() -> Option<Vec<(String, String)>> {
+    LIST.with(|l| {
+        l.borrow().as_ref().map(|d| d["providers"].as_array().into_iter().flatten().filter_map(|p| Some((p["id"].as_str()?.to_owned(), p["name"].as_str()?.to_owned()))).collect())
+    })
 }
 
 /// The new chat's provider from the picker: the index and the name it showed must still agree ("" means none was shown).

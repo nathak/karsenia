@@ -285,6 +285,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("perm_tag", "권한", "permission"),
     ("acct_context", "계정 컨텍스트", "ACCOUNT CONTEXT"),
     ("no_chats_here", "이 계정에는 대화가 없습니다.", "No chats under this account."),
+    ("no_chats_provider", "이 제공자로 만든 대화가 없습니다.", "No chats made with this provider."),
     ("tab_team", "스마트워크벤치", "SmartWorkbench"),
     ("cli_sessions", "CLI 세션", "CLI sessions"),
     ("foot_provider", "공급자", "Provider"),

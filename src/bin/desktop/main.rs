@@ -35,7 +35,7 @@ use std::time::Duration;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, StyledText, VecModel};
 use tenrec::registry::Registry;
 use tenrec::view::i18n::{fill, tr, Lang};
-use tenrec::view::panels::{ago, attention, in_context, Mark};
+use tenrec::view::panels::{ago, attention, in_context, Ctx, Known, Mark};
 use tenrec::view::transcript::{model_label, Row, Transcript};
 
 /// What the core side keeps about the chat on screen.
@@ -1391,6 +1391,7 @@ async fn refresh_sessions(app: &Arc<App>) {
     let active = list.iter().find(|i| current.as_deref() == Some(i.meta.sid.as_str()));
     *app.cwd.lock().expect("cwd") = active.map(|i| i.meta.cwd.to_string_lossy().into_owned());
     let chat_acct = active.and_then(|i| i.meta.account.as_ref().map(|a| a.id.clone()));
+    let chat_prov = active.and_then(|i| i.meta.provider.as_ref().map(|p| p.id.clone()));
     let active_csid = active.and_then(|i| i.meta.claude_session_id.clone());
     // The open chat's permission mode when it is not the default: shown in the header, so a chat that never asks is never a surprise.
     let chat_model = active.and_then(|i| i.meta.model.clone());
@@ -1403,6 +1404,10 @@ async fn refresh_sessions(app: &Arc<App>) {
     *app.chat_acct.lock().expect("chat account") = chat_acct.clone();
     let mut chats: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for info in &list {
+        // A provider chat has a tab of its own: it is not counted under the default account.
+        if info.meta.provider.is_some() {
+            continue;
+        }
         *chats.entry(info.meta.account.as_ref().map(|a| a.id.clone()).unwrap_or_default()).or_default() += 1;
     }
     let wt_info: wt::Info = active.and_then(|i| i.meta.worktree.as_ref().map(|w| (w.branch.clone(), w.base_branch.clone(), w.repo.display().to_string(), w.removed)));
@@ -1446,7 +1451,7 @@ async fn refresh_sessions(app: &Arc<App>) {
                 };
                 (title.clone(), m.cwd.display().to_string(), m.model.clone().unwrap_or_default(), prov)
             });
-            let mark = Mark { account: m.account.as_ref().map(|a| a.id.clone()), running: state == "running", pending: info.pending };
+            let mark = Mark { account: m.account.as_ref().map(|a| a.id.clone()), provider: m.provider.as_ref().map(|p| p.id.clone()), running: state == "running", pending: info.pending };
             let item = SessionItem { sid: m.sid.clone().into(), folder: folder.into(), title: title.into(), when: ago(m.created, now, lang).into(), state: state.into(), active, tags: tags.join(" · ").into(), pending: info.pending as i32, head: false, group: group.into(), open: false, count: 0, wt: m.worktree.is_some(), sub: SharedString::new() };
             (item, head, mark)
         })
@@ -1482,7 +1487,7 @@ async fn refresh_sessions(app: &Arc<App>) {
         }
         // The panels follow a newly opened chat's account, if that chat is still the one on screen.
         if let Some(sid) = followed.filter(|sid| b.current.lock().expect("current").sid.as_deref() == Some(sid.as_str())) {
-            accounts::follow_chat(&ui, &b, &sid, chat_acct);
+            accounts::follow_chat(&ui, &b, &sid, chat_acct, chat_prov);
         }
         for (_, head) in items {
             if let Some((title, cwd, model, prov)) = head {
@@ -1544,21 +1549,22 @@ fn grouped(chats: &[SessionItem]) -> Vec<SessionItem> {
 }
 
 pub(crate) fn show_sessions(ui: &AppWindow, app: &App) {
-    let view = app.bus.account();
-    let known = accounts::known();
-    let chats: Vec<SessionItem> = ALL.with(|all| all.borrow().iter().filter(|(_, m)| in_context(m.account.as_deref(), view.as_deref(), known.as_deref())).map(|(item, _)| item.clone()).collect());
+    let view = accounts::ctx(app);
+    let (known_accounts, known_providers) = accounts::known_all();
+    let known = Known { accounts: known_accounts.as_deref(), providers: known_providers.as_deref() };
+    let chats: Vec<SessionItem> = ALL.with(|all| all.borrow().iter().filter(|(_, m)| in_context(m, &view, known)).map(|(item, _)| item.clone()).collect());
     let list = grouped(&chats);
-    ui.set_no_chats(chats.is_empty() && known.as_ref().is_some_and(|k| !k.is_empty()));
+    ui.set_no_chats(chats.is_empty() && known_accounts.as_ref().is_some_and(|k| !k.is_empty()));
     if !ui.get_sessions().iter().eq(list.iter().cloned()) {
         ui.set_sessions(ModelRc::from(Rc::new(VecModel::from(list))));
     }
     accounts::set_labels(ui, app);
 }
 
-/// What waits or runs under the accounts that are not shown.
-pub(crate) fn attention_now(view: Option<&str>, known: Option<&[String]>) -> std::collections::HashMap<String, (usize, usize)> {
+/// What waits or runs under the tabs that are not shown.
+pub(crate) fn attention_now(view: &Ctx, known: Known) -> std::collections::HashMap<Ctx, (usize, usize)> {
     ALL.with(|all| {
-        let marks: Vec<Mark> = all.borrow().iter().map(|(_, m)| Mark { account: m.account.clone(), running: m.running, pending: m.pending }).collect();
+        let marks: Vec<Mark> = all.borrow().iter().map(|(_, m)| m.clone()).collect();
         attention(&marks, view, known)
     })
 }

@@ -285,8 +285,8 @@ export component AppWindow inherits Window {
                                 Label { text: T.tr("acct_context"); vertical-alignment: center; horizontal-stretch: 1; }
                                 Badge { text: "ACTIVE"; tone: "primary"; }
                             }
-                            if Acct.names.length <= 3: SegTabs { items: Acct.labels; current: Acct.view; chosen(i) => { Acct.view = i; Acct.view-chosen(i); } }
-                            if Acct.names.length > 3: ComboBox { model: Acct.labels; current-index <=> Acct.view; selected(v) => { Acct.view-chosen(self.current-index); } }
+                            if Acct.labels.length <= 3: SegTabs { items: Acct.labels; current: Acct.view; chosen(i) => { Acct.view = i; Acct.view-chosen(i); } }
+                            if Acct.labels.length > 3: ComboBox { model: Acct.labels; current-index <=> Acct.view; selected(v) => { Acct.view-chosen(self.current-index); } }
                         }
                     }
                     VerticalLayout {
@@ -305,7 +305,7 @@ export component AppWindow inherits Window {
                         padding-left: 6px; padding-right: 2px; padding-bottom: 8px; padding-top: 12px; spacing: 6px;
                         Label { text: T.sessions; vertical-alignment: center; horizontal-stretch: 1; }
                         Rectangle { width: 7px; height: 7px; y: (parent.height - 7px) / 2; border-radius: 3.5px; background: Theme.ok; }
-                        IconBtn { y: -4px; icon: @image-url("icons/plus.svg"); clicked => { root.new-acct = Acct.view; Imp.open = false; root.new-open = true; } }
+                        IconBtn { y: -4px; icon: @image-url("icons/plus.svg"); clicked => { root.new-acct = Acct.pre-acct; root.new-prov = Acct.pre-prov; Imp.open = false; root.new-open = true; } }
                     }
                     if Search.text != "": ScrollView {
                         vertical-stretch: 1;
@@ -326,7 +326,7 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                    if Search.text == "" && root.no-chats: Rectangle { height: 40px; Text { text: T.tr("no_chats_here"); color: Theme.outline; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; } }
+                    if Search.text == "" && root.no-chats: Rectangle { height: 40px; Text { text: T.tr(Acct.pre-prov > 0 ? "no_chats_provider" : "no_chats_here"); color: Theme.outline; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; } }
                     if Search.text == "": ListView {
                         vertical-stretch: 1;
                         for s in root.sessions: Rectangle {
@@ -386,7 +386,7 @@ export component AppWindow inherits Window {
                             Text { text: root.conn-host + " · " + T.connected; color: Theme.ok; font-size: 11px; font-family: Theme.mono; overflow: elide; }
                         }
                     }
-                    VerticalLayout { padding-top: 10px; Btn { text: "+  " + T.new-chat; primary: true; height: 42px; clicked => { root.new-acct = Acct.view; Imp.open = false; root.new-open = true; } } }
+                    VerticalLayout { padding-top: 10px; Btn { text: "+  " + T.new-chat; primary: true; height: 42px; clicked => { root.new-acct = Acct.pre-acct; root.new-prov = Acct.pre-prov; Imp.open = false; root.new-open = true; } } }
                     HorizontalLayout {
                         padding-top: 8px; spacing: 6px;
                         Rectangle {
@@ -405,7 +405,7 @@ export component AppWindow inherits Window {
                                 Text { text: T.tr("cli_sessions"); color: Theme.on-var; font-size: 13px; vertical-alignment: center; }
                                 Image { source: @image-url("icons/terminal.svg"); width: 16px; height: 16px; y: (parent.height - 16px) / 2; colorize: Theme.on-var; }
                             }
-                            cli-area := TouchArea { mouse-cursor: pointer; clicked => { root.new-acct = Acct.view; root.new-open = true; Imp.acct = root.new-acct; Imp.open = true; Imp.scan(Imp.acct, Acct.names.length > 1 ? Acct.names[Imp.acct] : ""); } }
+                            cli-area := TouchArea { mouse-cursor: pointer; clicked => { root.new-acct = Acct.pre-acct; root.new-prov = Acct.pre-prov; root.new-open = true; Imp.acct = root.new-acct; Imp.open = true; Imp.scan(Imp.acct, Acct.names.length > 1 ? Acct.names[Imp.acct] : ""); } }
                         }
                     }
                 }
@@ -423,8 +423,8 @@ export component AppWindow inherits Window {
                         // Sized by the header, not the other way round: what is shown depends on this width.
                         width: parent.width; height: parent.height;
                         padding-left: 16px; padding-right: 16px; spacing: 10px; alignment: start;
-                        for n[i] in Acct.labels: AcctTab { text: n; cap: Acct.names.length >= 4 ? (root.hw < 900px ? 56px : 80px) : (root.hw < 900px ? 90px : 120px); active: !root.new-open && Acct.view == i; clicked => { Acct.view = i; Acct.view-chosen(i); root.new-open = false; } }
-                        AcctTab { text: T.tr("tab_manage"); cap: Acct.names.length >= 4 ? 72px : 120px; active: root.new-open; clicked => { root.new-acct = Acct.view; Imp.open = false; root.new-open = true; } }
+                        for n[i] in Acct.labels: AcctTab { text: n; cap: Acct.labels.length >= 4 ? (root.hw < 900px ? 56px : 80px) : (root.hw < 900px ? 90px : 120px); active: !root.new-open && Acct.view == i; clicked => { Acct.view = i; Acct.view-chosen(i); root.new-open = false; } }
+                        AcctTab { text: T.tr("tab_manage"); cap: Acct.labels.length >= 4 ? 72px : 120px; active: root.new-open; clicked => { root.new-acct = Acct.pre-acct; root.new-prov = Acct.pre-prov; Imp.open = false; root.new-open = true; } }
                         Rectangle { y: 16px; width: 1px; height: 24px; background: Theme.hairline; }
                         // breadcrumb: workspace / project, or the page's name when no chat is open
                         Rectangle {

@@ -28,6 +28,10 @@ export global Acct {
     in property <[string]> labels;
     // The account the panels show, as an index into `names` (0: the default account).
     in-out property <int> view;
+    // What the new-chat form starts on while the tab `view` is shown: the account card (an index in `names`) and the provider (an index in
+    // Prov.new-names; 0 is none). An account tab gives its account and no provider; a provider tab gives the default account and that provider.
+    in property <int> pre-acct;
+    in property <int> pre-prov;
     in property <string> notice;
     in property <bool> can-add;
     // Windows: "open login window"; elsewhere: "copy login command".

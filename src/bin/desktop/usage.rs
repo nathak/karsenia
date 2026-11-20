@@ -48,7 +48,7 @@ pub fn render(ui: &AppWindow, app: &App) {
     let view = DATA.with(|d| usage_view(d.borrow().get(&key), tenrec::now_ms(), app.lang));
     let u = ui.global::<Usage>();
     let acct = ui.global::<Acct>();
-    let who = acct.get_names().row_data(acct.get_view().max(0) as usize).unwrap_or_default();
+    let who = acct.get_names().row_data(acct.get_pre_acct().max(0) as usize).unwrap_or_default();
     u.set_who(who);
     u.set_chip(view.chip.into());
     u.set_level(view.chip_level.into());
