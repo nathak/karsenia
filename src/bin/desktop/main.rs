@@ -1535,13 +1535,7 @@ async fn refresh_sessions(app: &Arc<App>) {
         .map(|i| tenrec::view::notify::Chat {
             sid: i.meta.sid.clone(),
             pending: i.pending as u32,
-            phase: match &i.state {
-                tenrec::session::State::Running => tenrec::view::notify::Phase::Running,
-                tenrec::session::State::Idle => tenrec::view::notify::Phase::Idle,
-                // A program that ended with a code other than 0 stopped on its own; no code is a signal (the app ending it).
-                tenrec::session::State::Exited { code: Some(c) } if *c != 0 => tenrec::view::notify::Phase::Crashed,
-                tenrec::session::State::Exited { .. } => tenrec::view::notify::Phase::Other,
-            },
+            phase: tenrec::view::notify::Phase::of(&i.state),
         })
         .collect();
     notify::check(&app.data, app.lang, &watched, current.as_deref());

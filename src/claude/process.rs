@@ -281,6 +281,7 @@ impl ClaudeProcess {
 
     /// SIGKILL to the whole group now, for a host that is exiting and cannot wait three seconds.
     pub fn kill_now(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
         if let Some(group) = &self.group {
             group.kill();
         }

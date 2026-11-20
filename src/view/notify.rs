@@ -16,6 +16,20 @@ pub enum Phase {
     Other,
 }
 
+impl Phase {
+    /// How a chat's state reads for a notice: a program that ended with a code other than 0 stopped on its own; one that ended with no
+    /// code was ended by a signal, as when this app stops it, and is nothing to tell.
+    pub fn of(state: &crate::session::State) -> Self {
+        use crate::session::State;
+        match state {
+            State::Running => Self::Running,
+            State::Idle => Self::Idle,
+            State::Exited { code: Some(c) } if *c != 0 => Self::Crashed,
+            State::Exited { .. } => Self::Other,
+        }
+    }
+}
+
 /// What to tell, the most urgent last (the largest one is the one shown when several are due at once).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Reason {
@@ -124,6 +138,27 @@ mod tests {
         assert!(w.update(&[chat("a", 0, Phase::Idle)], None, true, 100_000).is_empty());
         w.update(&[chat("a", 0, Phase::Running)], Some("a"), true, 110_000);
         assert!(w.update(&[chat("a", 0, Phase::Idle)], Some("a"), true, 200_000).is_empty());
+    }
+
+    #[test]
+    fn a_state_reads_as_a_phase_and_only_a_nonzero_exit_is_a_crash() {
+        use crate::session::State;
+        assert_eq!(Phase::of(&State::Running), Phase::Running);
+        assert_eq!(Phase::of(&State::Idle), Phase::Idle);
+        assert_eq!(Phase::of(&State::Exited { code: Some(2) }), Phase::Crashed);
+        assert_eq!(Phase::of(&State::Exited { code: Some(0) }), Phase::Other);
+        assert_eq!(Phase::of(&State::Exited { code: None }), Phase::Other, "ended by a signal: this app stopping it");
+    }
+
+    #[test]
+    fn a_crash_already_there_at_the_first_look_or_in_the_chat_in_front_is_not_announced() {
+        let mut w = Watch::default();
+        // Met for the first time already crashed: not news (even once the start is over).
+        w.update(&[chat("x", 0, Phase::Idle)], None, true, 0);
+        assert!(w.update(&[chat("x", 0, Phase::Idle), chat("late", 0, Phase::Crashed)], None, true, 1).is_empty());
+        // The chat in front, the app in front: the person sees it.
+        w.update(&[chat("a", 0, Phase::Running)], Some("a"), true, 2);
+        assert!(w.update(&[chat("a", 0, Phase::Crashed)], Some("a"), true, 3).is_empty());
     }
 
     #[test]

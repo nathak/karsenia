@@ -111,7 +111,7 @@ mod imp {
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::Shell::{Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIIF_INFO, NIF_INFO, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICON_VERSION_4};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        AllowSetForegroundWindow, AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW, GetForegroundWindow, GetMessageW, GetSystemMetrics, GetWindowThreadProcessId, IsIconic,
+        AllowSetForegroundWindow, AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW, GetForegroundWindow, GetMessageW, IsWindowVisible, GetSystemMetrics, GetWindowThreadProcessId, IsIconic,
         LoadIconW, LoadImageW, PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SetForegroundWindow, SetMenuDefaultItem, ShowWindow, TrackPopupMenuEx, TranslateMessage, HICON, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR, MF_SEPARATOR,
         MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON, SM_MENUDROPALIGNMENT, SW_RESTORE, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_DESTROY, WM_ENDSESSION, WM_NULL, WM_QUERYENDSESSION, WNDCLASSEXW,
         WS_EX_TOOLWINDOW, WS_OVERLAPPED,
@@ -191,7 +191,8 @@ mod imp {
             }
             let mut pid = 0u32;
             GetWindowThreadProcessId(front, &mut pid);
-            pid == GetCurrentProcessId()
+            // A window of ours that is minimized or hidden may still be the foreground one, and nobody sees it then.
+            pid == GetCurrentProcessId() && IsIconic(front) == 0 && IsWindowVisible(front) != 0
         }
     }
 
@@ -472,6 +473,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_click_on_a_notice_brings_the_window_back_like_a_click_on_the_icon() {
+        assert_eq!(event(0x405), Some(Ev::Select), "NIN_BALLOONUSERCLICK");
+        assert_eq!(event(0x400), Some(Ev::Select));
+        assert_eq!(event(0x7B), Some(Ev::Menu));
+        // The high word of lParam is the icon id (version 4): only the low word is the event.
+        assert_eq!(event(0x0001_0405), Some(Ev::Select));
+        assert_eq!(event(0x404), None, "NIN_BALLOONTIMEOUT is nothing to act on");
+    }
+
+    #[test]
     fn the_icons_events_are_a_select_or_a_menu_and_nothing_else() {
         // The high word of lParam (the icon's id) does not matter.
         for select in [0x400, 0x401, 0x203, 0x0001_0400] {
@@ -483,3 +494,4 @@ mod tests {
         }
     }
 }
+
