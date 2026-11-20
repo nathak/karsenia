@@ -833,6 +833,21 @@ impl Transcript {
                     self.note(line, "note");
                 }
             }
+            // The CLI is trying the endpoint again after an error: said in the transcript, as the person would otherwise see nothing happen.
+            "system" if s(d, "subtype") == "api_retry" => {
+                let num = |key: &str| d.get(key).and_then(Value::as_u64);
+                let mut text = fill(&self.t("api_retry"), &[("n", num("attempt").map_or("?".into(), |n| n.to_string())), ("max", num("max_retries").map_or("?".into(), |n| n.to_string()))]);
+                let status = num("error_status").map(|n| n.to_string());
+                let error = d.get("error").and_then(Value::as_str).map(|e| e.chars().take(80).collect::<String>());
+                let why: Vec<String> = status.into_iter().chain(error).collect();
+                if !why.is_empty() {
+                    text.push_str(&format!(" ({})", why.join(" · ")));
+                }
+                if let Some(ms) = num("retry_delay_ms") {
+                    text.push_str(&fill(&self.t("api_retry_in"), &[("s", format!("{:.1}", ms as f64 / 1000.0))]));
+                }
+                self.note(text, "note-warn");
+            }
             "system" if s(d, "subtype") == "init" => {
                 if let Some(model) = d.get("model").and_then(Value::as_str) {
                     self.head.model = Some(model.to_owned());
@@ -1535,6 +1550,25 @@ mod tests {
         call(&mut t, "c5");
         call(&mut t, "c6");
         assert_eq!(warnings(&t), 1, "not said again while it goes on");
+    }
+
+    #[test]
+    fn an_api_retry_from_the_cli_is_said_as_a_warning_with_what_it_knows_of_the_error() {
+        let mut t = chat();
+        t.apply("claude", &json!({"type": "system", "subtype": "api_retry", "attempt": 2, "max_retries": 10, "retry_delay_ms": 2500, "error_status": 401, "error": "authentication_failed"}), 0);
+        let rows = t.rows();
+        let note = rows.iter().find(|r| r.kind == "note-warn").expect("a warning row");
+        for part in ["2", "10", "401", "authentication_failed", "2.5"] {
+            assert!(note.text.contains(part), "{part} in {}", note.text);
+        }
+        // A retry with nothing else known still says that it happened.
+        let mut bare = chat();
+        bare.apply("claude", &json!({"type": "system", "subtype": "api_retry"}), 0);
+        assert_eq!(warnings(&bare), 1);
+        // Other system lines are left alone.
+        let mut other = chat();
+        other.apply("claude", &json!({"type": "system", "subtype": "hook_started"}), 0);
+        assert_eq!(warnings(&other), 0);
     }
 
     #[test]

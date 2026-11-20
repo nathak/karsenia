@@ -829,6 +829,10 @@ impl Actor {
                 Ok((process, rx)) => {
                     self.process = Some(process);
                     self.native_spawned = opts.plugins_off;
+                    // What was started, for the debug view: the argument list (no key is ever in it), the environment with every credential
+                    // hidden, and what was taken away. The key replacement of `emit` is a second guard.
+                    let env: Vec<Value> = opts.env.describe().into_iter().map(|(name, shown)| json!([name, shown])).collect();
+                    self.emit("spawn", json!({"bin": opts.bin, "cwd": opts.cwd, "args": crate::claude::process::args(&opts), "env": env, "env_removed": opts.env.remove, "container": opts.container.is_some()}));
                     events = Some(rx);
                 }
                 Err(error) => {

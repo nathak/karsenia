@@ -17,6 +17,31 @@ pub struct EnvPlan {
     pub remove: Vec<String>,
 }
 
+impl EnvPlan {
+    /// What a person may be shown of what this plan sets, for a debug view: each name with its value, except that a value that carries a
+    /// credential is only said to be set (and how long it is), and the lines of `ANTHROPIC_CUSTOM_HEADERS` show their names only.
+    pub fn describe(&self) -> Vec<(String, String)> {
+        let secret = |name: &str| {
+            let upper = name.to_ascii_uppercase();
+            ["TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIAL"].iter().any(|word| upper.contains(word))
+        };
+        self.set
+            .iter()
+            .map(|(name, value)| {
+                let shown = if name == "ANTHROPIC_CUSTOM_HEADERS" {
+                    let names: Vec<String> = value.lines().filter_map(|line| line.split_once(':')).map(|(header, _)| format!("{}: ***", header.trim())).collect();
+                    format!("(set: {})", names.join(", "))
+                } else if secret(name) {
+                    format!("(set, {} characters)", value.chars().count())
+                } else {
+                    value.clone()
+                };
+                (name.clone(), shown)
+            })
+            .collect()
+    }
+}
+
 /// Values are never printed (the token is one of them): only the names.
 impl std::fmt::Debug for EnvPlan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -215,5 +240,19 @@ mod tests {
         let none = provider(Auth::Bearer, Some("airkey-123456"));
         let stripped = plan(&names(&["ANTHROPIC_CUSTOM_HEADERS"]), Some(&none), Path::new("/cfg"));
         assert!(stripped.remove.contains(&"ANTHROPIC_CUSTOM_HEADERS".to_owned()));
+    }
+
+    #[test]
+    fn a_plan_is_described_without_a_credential_or_a_header_value() {
+        let mut p = provider(Auth::Bearer, Some("airkey-123456"));
+        p.headers = Some("AIR-Api-Key: {key}\nAIR-Coding-Agent-Mode: subscription".into());
+        let shown = plan(&[], Some(&p), Path::new("/cfg")).describe();
+        let all = format!("{shown:?}");
+        assert!(!all.contains("airkey-123456") && !all.contains("subscription"), "{all}");
+        let get = |name: &str| shown.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
+        assert_eq!(get("ANTHROPIC_BASE_URL"), Some("https://gw.example.com/x"), "an address is shown");
+        assert_eq!(get("ANTHROPIC_AUTH_TOKEN"), Some("(set, 13 characters)"));
+        assert_eq!(get("ANTHROPIC_CUSTOM_HEADERS"), Some("(set: AIR-Api-Key: ***, AIR-Coding-Agent-Mode: ***)"));
+        assert_eq!(get("CLAUDE_CONFIG_DIR"), Some("/cfg"));
     }
 }
