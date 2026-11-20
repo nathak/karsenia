@@ -352,10 +352,13 @@ pub struct ProvForm<'a> {
     pub id: Option<&'a str>,
     pub name: &'a str,
     pub url: &'a str,
-    /// 0 bearer, 1 x-api-key, 2 headers only.
+    /// 0 bearer, 1 x-api-key, 2 headers only, 3 subscription token.
     pub auth: i32,
     pub key: &'a str,
     pub clear: bool,
+    /// The subscription token (empty keeps the saved one) and whether to remove the saved one.
+    pub oauth: &'a str,
+    pub clear_oauth: bool,
     pub model: &'a str,
     pub aliases: [&'a str; 3],
     /// The header lines (`Name: value`, `{key}` where the key goes).
@@ -366,7 +369,7 @@ pub struct ProvForm<'a> {
 /// provider.
 pub fn prov_op(f: &ProvForm) -> Value {
     let mut op = json!({
-        "op": "provider_save", "name": f.name.trim(), "base_url": f.url.trim(), "auth": match f.auth { 1 => "x_api_key", 2 => "headers", _ => "bearer" },
+        "op": "provider_save", "name": f.name.trim(), "base_url": f.url.trim(), "auth": match f.auth { 1 => "x_api_key", 2 => "headers", 3 => "oauth_token", _ => "bearer" },
         "model": f.model.trim(), "models": {"opus": f.aliases[0].trim(), "sonnet": f.aliases[1].trim(), "haiku": f.aliases[2].trim()},
         "headers": f.headers.trim(),
     });
@@ -378,6 +381,12 @@ pub fn prov_op(f: &ProvForm) -> Value {
     }
     if f.clear {
         op["clear_token"] = json!(true);
+    }
+    if !f.oauth.is_empty() {
+        op["oauth_token"] = json!(f.oauth);
+    }
+    if f.clear_oauth {
+        op["clear_oauth"] = json!(true);
     }
     op
 }
@@ -502,13 +511,13 @@ mod tests {
         assert!(head.ctr_ready && head.ctr_runtime == "/usr/bin/docker");
         assert_eq!(rows[0].sub, "gw.example · key set · 2 chats");
         assert_eq!(rows[1].sub, "localhost · no key");
-        let new = prov_op(&ProvForm { id: None, name: " N ", url: "https://x.example", auth: 1, key: "abcdefgh12", clear: false, model: "", aliases: ["", "", ""], headers: "" });
+        let new = prov_op(&ProvForm { id: None, name: " N ", url: "https://x.example", auth: 1, key: "abcdefgh12", clear: false, oauth: "", clear_oauth: false, model: "", aliases: ["", "", ""], headers: "" });
         assert_eq!((new["token"].as_str(), new["auth"].as_str(), new["name"].as_str()), (Some("abcdefgh12"), Some("x_api_key"), Some("N")));
         assert!(new.get("id").is_none() && new.get("clear_token").is_none());
-        let keep = prov_op(&ProvForm { id: Some("p1"), name: "G", url: "https://x.example", auth: 0, key: "", clear: false, model: "m", aliases: ["o", "s", "h"], headers: "" });
+        let keep = prov_op(&ProvForm { id: Some("p1"), name: "G", url: "https://x.example", auth: 0, key: "", clear: false, oauth: "", clear_oauth: false, model: "m", aliases: ["o", "s", "h"], headers: "" });
         assert!(keep.get("token").is_none(), "an empty key field keeps the saved key");
         assert_eq!((keep["id"].as_str(), keep["models"]["haiku"].as_str()), (Some("p1"), Some("h")));
-        let clear = prov_op(&ProvForm { id: Some("p1"), name: "G", url: "https://x.example", auth: 0, key: "", clear: true, model: "", aliases: ["", "", ""], headers: "" });
+        let clear = prov_op(&ProvForm { id: Some("p1"), name: "G", url: "https://x.example", auth: 0, key: "", clear: true, oauth: "", clear_oauth: false, model: "", aliases: ["", "", ""], headers: "" });
         assert_eq!(clear["clear_token"], true);
     }
 }

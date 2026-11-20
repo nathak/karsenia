@@ -330,11 +330,15 @@ export global Prov {
     in-out property <string> edit-id;
     in-out property <string> f-name;
     in-out property <string> f-url;
-    // 0 bearer, 1 x-api-key, 2 headers only (the key goes only where the header lines say {key}).
+    // 0 bearer, 1 x-api-key, 2 headers only (the key goes only where the header lines say {key}), 3 subscription token (the CLI's own login).
     in-out property <int> f-auth;
     in-out property <string> f-key;
     in-out property <bool> f-clear;
     in-out property <bool> f-has-key;
+    // The subscription token (auth 3): a secret apart from the key; an empty field keeps the saved one.
+    in-out property <string> f-oauth;
+    in-out property <bool> f-clear-oauth;
+    in-out property <bool> f-has-oauth;
     in-out property <string> f-model;
     in-out property <string> f-opus;
     in-out property <string> f-sonnet;
@@ -648,11 +652,14 @@ export component ProvidersCard inherits Card {
                 Field { label: T.tr("pv_url"); LineEdit { text <=> Prov.f-url; placeholder-text: "https://"; } }
                 Field {
                     label: T.tr("pv_auth");
-                    HorizontalLayout { alignment: start; Segment { items: ["Bearer", "x-api-key", T.tr("pv_auth_headers")]; current: Prov.f-auth; chosen(i) => { Prov.f-auth = i; } } }
+                    HorizontalLayout { alignment: start; Segment { items: ["Bearer", "x-api-key", T.tr("pv_auth_headers"), T.tr("pv_auth_oauth")]; current: Prov.f-auth; chosen(i) => { Prov.f-auth = i; } } }
                 }
                 Field { label: T.tr("pv_key"); LineEdit { text <=> Prov.f-key; input-type: InputType.password; } }
                 WText { text: Prov.f-has-key ? T.tr("pv_key_keep") : T.tr("pv_key_none"); fg: Theme.outline; size: 11px; }
                 if Prov.f-has-key: CheckBox { text: T.tr("pv_key_clear"); checked <=> Prov.f-clear; }
+                if Prov.f-auth == 3: Field { label: T.tr("pv_oauth"); LineEdit { text <=> Prov.f-oauth; input-type: InputType.password; } }
+                if Prov.f-auth == 3: WText { text: Prov.f-has-oauth ? T.tr("pv_oauth_keep") : T.tr("pv_oauth_note"); fg: Theme.primary-soft; size: 11px; }
+                if Prov.f-auth == 3 && Prov.f-has-oauth: CheckBox { text: T.tr("pv_oauth_clear"); checked <=> Prov.f-clear-oauth; }
                 Field { label: T.tr("pv_model"); LineEdit { text <=> Prov.f-model; } }
                 Field {
                     label: T.tr("pv_aliases");

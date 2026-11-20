@@ -64,6 +64,8 @@ pub fn plan(inherited: &[String], provider: Option<&Provider>, config_dir: &Path
         Auth::XApiKey => set.push(("ANTHROPIC_API_KEY".into(), provider.token.clone().unwrap_or_else(|| PLACEHOLDER_TOKEN.into()))),
         // The key goes in the header lines only; the CLI still needs some credential of its own, so it gets the placeholder.
         Auth::Headers => set.push(("ANTHROPIC_AUTH_TOKEN".into(), PLACEHOLDER_TOKEN.into())),
+        // The subscription token is the CLI's own login: no `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` is set, as either would outrank it.
+        Auth::OauthToken => set.push(("CLAUDE_CODE_OAUTH_TOKEN".into(), provider.oauth_token.clone().unwrap_or_else(|| PLACEHOLDER_TOKEN.into()))),
     }
     // A gateway that wants its key in a header of its own: the lines of the provider, with the key where it says `{key}`.
     if let Some(headers) = provider.custom_headers() {
@@ -110,7 +112,7 @@ mod tests {
     use crate::providers::Aliases;
 
     fn provider(auth: Auth, token: Option<&str>) -> Provider {
-        Provider { id: "p1".into(), name: "P".into(), base_url: "https://gw.example.com/x".into(), auth, token: token.map(str::to_owned), model: None, models: Aliases::default(), headers: None, created: 0, updated: 0 }
+        Provider { id: "p1".into(), name: "P".into(), base_url: "https://gw.example.com/x".into(), auth, token: token.map(str::to_owned), oauth_token: None, model: None, models: Aliases::default(), headers: None, created: 0, updated: 0 }
     }
 
     fn names(list: &[&str]) -> Vec<String> {
@@ -268,5 +270,22 @@ mod tests {
         assert_eq!(value(&plan, "ANTHROPIC_API_KEY"), None);
         let all = format!("{:?}", plan.set.iter().filter(|(k, _)| k != "ANTHROPIC_CUSTOM_HEADERS").collect::<Vec<_>>());
         assert!(!all.contains("airkey-123456"), "the key is in no other variable: {all}");
+    }
+
+    #[test]
+    fn a_subscription_token_is_the_clis_login_and_nothing_outranks_it() {
+        let mut p = provider(Auth::OauthToken, Some("airkey-123456"));
+        p.oauth_token = Some("sk-ant-oat01-subscription-token".into());
+        p.headers = Some("AIR-Api-Key: {key}".into());
+        let plan = plan(&names(&["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]), Some(&p), Path::new("/cfg"));
+        assert_eq!(value(&plan, "CLAUDE_CODE_OAUTH_TOKEN"), Some("sk-ant-oat01-subscription-token"));
+        assert_eq!(value(&plan, "ANTHROPIC_AUTH_TOKEN"), None);
+        assert_eq!(value(&plan, "ANTHROPIC_API_KEY"), None);
+        assert!(plan.remove.contains(&"ANTHROPIC_AUTH_TOKEN".to_owned()), "an inherited one is taken away");
+        assert!(!plan.remove.contains(&"CLAUDE_CODE_OAUTH_TOKEN".to_owned()), "this one is set by the plan");
+        assert_eq!(value(&plan, "ANTHROPIC_CUSTOM_HEADERS"), Some("AIR-Api-Key: airkey-123456"), "{{key}} is the key, not the subscription token");
+        let shown = format!("{:?}", plan.describe());
+        assert!(!shown.contains("sk-ant-oat01") && !shown.contains("airkey-123456"), "{shown}");
+        assert_eq!(p.secrets().len(), 2);
     }
 }

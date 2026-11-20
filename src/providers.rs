@@ -24,6 +24,9 @@ pub enum Auth {
     /// The key is sent only where the provider's header lines say `{key}`: `Authorization` carries a placeholder, not the key (a gateway
     /// that takes its key in a header of its own and may refuse an `Authorization` it does not know).
     Headers,
+    /// The CLI is given the provider's subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, made by `claude setup-token`) as its own login, and no
+    /// `ANTHROPIC_AUTH_TOKEN`: for a gateway that passes a Claude subscription through. That token is sent to the provider's address.
+    OauthToken,
 }
 
 impl Auth {
@@ -32,6 +35,7 @@ impl Auth {
             "bearer" => Some(Self::Bearer),
             "x_api_key" => Some(Self::XApiKey),
             "headers" => Some(Self::Headers),
+            "oauth_token" => Some(Self::OauthToken),
             _ => None,
         }
     }
@@ -57,6 +61,9 @@ pub struct Provider {
     pub auth: Auth,
     #[serde(default)]
     pub token: Option<String>,
+    /// The subscription token of `Auth::OauthToken` (a separate secret from `token`, which is what `{key}` stands for).
+    #[serde(default)]
+    pub oauth_token: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -86,6 +93,7 @@ pub struct ProviderView {
     pub host: String,
     pub auth: Auth,
     pub has_token: bool,
+    pub has_oauth: bool,
     pub model: Option<String>,
     pub models: Aliases,
     /// The header lines as the person wrote them (with `{key}`, never the key).
@@ -102,7 +110,7 @@ pub struct ProviderRef {
 
 impl Provider {
     pub fn view(&self) -> ProviderView {
-        ProviderView { id: self.id.clone(), name: self.name.clone(), base_url: self.base_url.clone(), host: host_of(&self.base_url), auth: self.auth, has_token: self.token.is_some(), model: self.model.clone(), models: self.models.clone(), headers: self.headers.clone().unwrap_or_default() }
+        ProviderView { id: self.id.clone(), name: self.name.clone(), base_url: self.base_url.clone(), host: host_of(&self.base_url), auth: self.auth, has_token: self.token.is_some(), has_oauth: self.oauth_token.is_some(), model: self.model.clone(), models: self.models.clone(), headers: self.headers.clone().unwrap_or_default() }
     }
 
     pub fn reference(&self) -> ProviderRef {
@@ -236,6 +244,12 @@ pub fn validate_headers(text: &str, has_key: bool) -> Result<Option<String>, &'s
 }
 
 impl Provider {
+    /// Every secret of this provider that a chat must never show or store (what a chat's events are scrubbed of): the key and the
+    /// subscription token, those long enough to be told apart from other text.
+    pub fn secrets(&self) -> Vec<String> {
+        [&self.token, &self.oauth_token].into_iter().flatten().filter(|t| t.len() >= 8).cloned().collect()
+    }
+
     /// The value of `ANTHROPIC_CUSTOM_HEADERS` for a chat: the lines with the key put where `{key}` stands. None when there are no lines.
     pub fn custom_headers(&self) -> Option<String> {
         let template = self.headers.as_ref()?;
@@ -265,6 +279,9 @@ pub struct Form {
     /// None keeps the key already saved.
     pub token: Option<String>,
     pub clear_token: bool,
+    /// The subscription token; None keeps the one already saved.
+    pub oauth_token: Option<String>,
+    pub clear_oauth: bool,
     pub model: String,
     pub models: [String; 3],
     /// The header lines; empty for none.
@@ -328,6 +345,14 @@ impl ProviderStore {
         if form.auth == Auth::XApiKey && token.is_none() {
             return Err("an API key address needs the key".into());
         }
+        let oauth_token = match (&form.oauth_token, form.clear_oauth) {
+            (Some(text), _) => Some(validate_token(text).map_err(|_| "the subscription token must be 8 to 4096 characters, with no space or character that is not plain text")?),
+            (None, true) => None,
+            (None, false) => existing.and_then(|i| list[i].oauth_token.clone()),
+        };
+        if form.auth == Auth::OauthToken && oauth_token.is_none() {
+            return Err("a subscription token address needs the token".into());
+        }
         let headers = validate_headers(&form.headers, token.is_some())?;
         if list.iter().enumerate().any(|(i, p)| p.name == name && Some(i) != existing) {
             return Err("another provider has this name".into());
@@ -335,7 +360,7 @@ impl ProviderStore {
         let id = match existing {
             Some(i) => {
                 let p = &mut list[i];
-                (p.name, p.base_url, p.auth, p.token, p.model, p.models, p.headers, p.updated) = (name, base_url, form.auth, token, model, models, headers, now);
+                (p.name, p.base_url, p.auth, p.token, p.oauth_token, p.model, p.models, p.headers, p.updated) = (name, base_url, form.auth, token, oauth_token, model, models, headers, now);
                 p.id.clone()
             }
             None => {
@@ -343,7 +368,7 @@ impl ProviderStore {
                     return Err("there are too many providers".into());
                 }
                 let id = crate::random_hex(6);
-                list.push(Provider { id: id.clone(), name, base_url, auth: form.auth, token, model, models, headers, created: now, updated: now });
+                list.push(Provider { id: id.clone(), name, base_url, auth: form.auth, token, oauth_token, model, models, headers, created: now, updated: now });
                 id
             }
         };
@@ -562,5 +587,33 @@ mod tests {
         // A file written before headers existed has none.
         let old: Provider = serde_json::from_str(r#"{"id":"x","name":"N","base_url":"https://a.example"}"#).unwrap();
         assert!(old.headers.is_none() && old.custom_headers().is_none());
+    }
+
+    #[test]
+    fn a_subscription_token_is_kept_apart_from_the_key_never_shown_and_needed_for_its_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = ProviderStore::open(dir.path().join("providers.json"));
+        let base = || Form { name: "Air".into(), base_url: "https://gateway.example.com/anthropic".into(), auth: Auth::OauthToken, ..Default::default() };
+        assert!(store.save(base(), 1).is_err(), "the mode needs the token");
+        assert!(store.save(Form { oauth_token: Some("short".into()), ..base() }, 1).is_err(), "too short to be a token");
+        let id = store.save(Form { oauth_token: Some("sk-ant-oat01-subscription-token".into()), token: Some("airkey-123456".into()), headers: "AIR-Api-Key: {key}".into(), ..base() }, 1).unwrap();
+        let view = store.list_views().remove(0);
+        assert!(view.has_oauth && view.has_token);
+        let shown = serde_json::to_string(&view).unwrap();
+        assert!(!shown.contains("sk-ant-oat01") && !shown.contains("airkey-123456"), "{shown}");
+        let p = store.get(&id).unwrap();
+        assert_eq!(p.custom_headers().as_deref(), Some("AIR-Api-Key: airkey-123456"), "{{key}} is the key, not the subscription token");
+        assert_eq!(p.secrets().len(), 2);
+        assert!(!format!("{p:?}").contains("sk-ant-oat01"));
+        // An edit with no new token keeps it; clearing it while the mode needs it is refused and changes nothing.
+        store.save(Form { id: Some(id.clone()), ..base() }, 2).unwrap();
+        assert_eq!(store.get(&id).unwrap().oauth_token.as_deref(), Some("sk-ant-oat01-subscription-token"));
+        assert!(store.save(Form { id: Some(id.clone()), clear_oauth: true, ..base() }, 3).is_err());
+        assert!(store.get(&id).unwrap().oauth_token.is_some());
+        // Another mode may drop it.
+        store.save(Form { id: Some(id.clone()), auth: Auth::Bearer, clear_oauth: true, ..base() }, 4).unwrap();
+        assert!(store.get(&id).unwrap().oauth_token.is_none());
+        let old: Provider = serde_json::from_str(r#"{"id":"x","name":"N","base_url":"https://a.example"}"#).unwrap();
+        assert!(old.oauth_token.is_none() && old.secrets().is_empty());
     }
 }

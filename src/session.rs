@@ -352,7 +352,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secret: None, seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, retire_reply: None };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, retire_reply: None };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -369,7 +369,8 @@ struct Actor {
     settings: Option<Arc<crate::settings::SettingsStore>>,
     instance: String,
     /// The key of this chat's provider while its process runs: whatever the chat shows or stores has it replaced.
-    secret: Option<String>,
+    /// The key and the subscription token of this chat's provider: replaced wherever the chat would show or store them.
+    secrets: Vec<String>,
     seq: u64,
     bcast: broadcast::Sender<Envelope>,
     state: State,
@@ -443,10 +444,7 @@ impl Actor {
     /// A provider chat's key, wherever it turns up in what the chat shows or stores (an error, a command's output, a tool result), is
     /// replaced. It catches the key as one piece of text; a key printed in an encoded or split form is not recognised.
     fn scrub(&self, data: Value) -> Value {
-        match &self.secret {
-            Some(secret) => redact(data, secret),
-            None => data,
-        }
+        self.secrets.iter().fold(data, |data, secret| redact(data, secret))
     }
 
     fn debug_path(&self) -> PathBuf {
@@ -820,7 +818,7 @@ impl Actor {
                         }
                     };
                     let inherited: Vec<String> = std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()).collect();
-                    self.secret = provider.token.clone().filter(|token| token.len() >= 8);
+                    self.secrets = provider.secrets();
                     (None, None, None, crate::claude::env::plan(&inherited, Some(provider), &config_dir), Some(provider.base_url.clone()), self.meta.model.clone().or_else(|| provider.model.clone()))
                 }
                 None if self.meta.container => {
