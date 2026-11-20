@@ -1056,6 +1056,10 @@ fn open_chat(app: &Arc<App>, sid: String) {
         team::reset(&ui);
         // The Team page shows the new chat's team settings, contract and project guard rules.
         team::load_quiet(&ui, app);
+        // The Team page may be on screen (the page itself does not change with the chat): its guard rules are the new project's.
+        if ui.get_side() == 6 {
+            team::gf_open(&ui, app);
+        }
         attach::switch(&ui, left_att.as_deref(), &sid);
         files::reset(&ui);
         // The VHDB page is on screen: it reads the new chat's project.
