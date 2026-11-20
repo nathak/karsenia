@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use tenrec::view::i18n::{tr, Lang};
-use tenrec::view::notify::{Chat, Reason, Watch};
+use tenrec::view::notify::{gate, Chat, Reason, Watch};
 
 fn state() -> &'static Mutex<Watch> {
     static ST: OnceLock<Mutex<Watch>> = OnceLock::new();
@@ -18,6 +18,11 @@ fn state() -> &'static Mutex<Watch> {
 /// When the last notice was sent (ms): two are not sent within `GAP_MS`.
 static LAST: AtomicU64 = AtomicU64::new(0);
 const GAP_MS: u64 = 5_000;
+/// What is due and not yet said (a notice that came within `GAP_MS` of the last one waits, it is not dropped): the most urgent reason.
+fn due() -> &'static Mutex<Option<Reason>> {
+    static DUE: OnceLock<Mutex<Option<Reason>>> = OnceLock::new();
+    DUE.get_or_init(|| Mutex::new(None))
+}
 
 /// Whether notifications are on (the setting `notify` of `desktop.json`; on unless it is false).
 pub fn on(data: &Path) -> bool {
@@ -29,11 +34,14 @@ pub fn check(data: &Path, lang: Lang, chats: &[Chat], current: Option<&str>) {
     // The numbers are always kept up to date, so turning notifications on does not announce what already waited.
     let now = tenrec::now_ms();
     let tell = state().lock().unwrap_or_else(|e| e.into_inner()).update(chats, current, crate::tray::app_in_front(), now);
-    // One notification however many chats are due: the most urgent reason is the one said.
-    let Some(reason) = tell.iter().map(|(_, r)| *r).max() else { return };
-    if !on(data) || now.saturating_sub(LAST.load(Ordering::Relaxed)) < GAP_MS {
+    // One notification however many chats are due: the most urgent reason is the one said. What cannot be said yet (a notice went out a
+    // moment ago) waits for a later look, so it is not lost; turned off, nothing is kept.
+    let mut waiting = due().lock().unwrap_or_else(|e| e.into_inner());
+    if !on(data) {
+        *waiting = None;
         return;
     }
+    let Some(reason) = gate(&mut waiting, tell.iter().map(|(_, r)| *r), now, LAST.load(Ordering::Relaxed), GAP_MS) else { return };
     LAST.store(now, Ordering::Relaxed);
     let (title, body) = match reason {
         Reason::Permission => ("notify_title", "notify_body"),

@@ -70,6 +70,9 @@ pub struct ClaudeProcess {
     group: Option<Arc<crate::proc_group::Group>>,
     /// False once stdout has ended: a line queued after that would never be read.
     alive: Arc<AtomicBool>,
+    /// Set when this host ended the process (`stop`): its exit is then reported with no code, whatever code the system gave (on
+    /// Windows a process that is ended gets the code 1, which is also what a failure looks like).
+    stopped: Arc<AtomicBool>,
     /// The runtime and the container's name: killing the client of `docker run` does not stop the container, `rm -f` does.
     container: Option<(PathBuf, String)>,
 }
@@ -202,6 +205,8 @@ impl ClaudeProcess {
 
         let alive = Arc::new(AtomicBool::new(true));
         let reader_alive = alive.clone();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let reader_stopped = stopped.clone();
         let (line_tx, mut line_rx) = mpsc::unbounded_channel::<String>();
         let (event_tx, event_rx) = mpsc::unbounded_channel::<ProcEvent>();
 
@@ -261,11 +266,12 @@ impl ClaudeProcess {
                 tail_text.push_str("\n[host] a line longer than the limit ended the process\n");
             }
             let _ = event_tx.send(ProcEvent::Stderr(tail_text));
-            let _ = event_tx.send(ProcEvent::Exited(code));
+            // Ended by this host (`stop`): no code, whatever the system said (see `ClaudeProcess::stopped`).
+            let _ = event_tx.send(ProcEvent::Exited(if reader_stopped.load(Ordering::SeqCst) { None } else { code }));
         });
 
         let container = opts.container.as_ref().map(|spec| (spec.runtime.program.clone(), spec.name.clone()));
-        Ok((Self { stdin: line_tx, group, alive, container }, event_rx))
+        Ok((Self { stdin: line_tx, group, alive, stopped, container }, event_rx))
     }
 
     /// Queues one line for stdin; false when the process is gone.
@@ -285,6 +291,7 @@ impl ClaudeProcess {
 
     /// Ends the process and everything it started: SIGTERM to its group, SIGKILL after three seconds.
     pub fn stop(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
         kill_group(self.group.as_ref());
         if let Some((program, name)) = self.container.clone() {
             // The client passes SIGTERM on; whatever is left after three seconds is removed with the container.

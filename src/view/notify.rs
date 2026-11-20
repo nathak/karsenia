@@ -70,6 +70,16 @@ impl Watch {
     }
 }
 
+/// What to say now. `waiting` is what was due and not yet said: it is kept (merged with `new`, the most urgent reason wins) until a
+/// notice may go out, so one that came within `gap_ms` of the last is delayed, never lost; `last_ms` is when the last one went out.
+pub fn gate(waiting: &mut Option<Reason>, new: impl IntoIterator<Item = Reason>, now_ms: u64, last_ms: u64, gap_ms: u64) -> Option<Reason> {
+    *waiting = new.into_iter().chain(*waiting).max();
+    if now_ms.saturating_sub(last_ms) < gap_ms {
+        return None;
+    }
+    waiting.take()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +124,17 @@ mod tests {
         assert!(w.update(&[chat("a", 0, Phase::Idle)], None, true, 100_000).is_empty());
         w.update(&[chat("a", 0, Phase::Running)], Some("a"), true, 110_000);
         assert!(w.update(&[chat("a", 0, Phase::Idle)], Some("a"), true, 200_000).is_empty());
+    }
+
+    #[test]
+    fn a_notice_within_the_gap_waits_and_is_said_later_the_most_urgent_first() {
+        let mut waiting = None;
+        // A notice of an end, then a permission request two seconds later: neither is lost.
+        assert_eq!(gate(&mut waiting, [Reason::Done], 100_000, 0, 5_000), Some(Reason::Done));
+        assert_eq!(gate(&mut waiting, [Reason::Permission], 102_000, 100_000, 5_000), None, "too soon");
+        assert_eq!(gate(&mut waiting, [], 103_000, 100_000, 5_000), None, "still too soon, and kept");
+        assert_eq!(gate(&mut waiting, [Reason::Done], 106_000, 100_000, 5_000), Some(Reason::Permission), "the more urgent one is said");
+        assert_eq!(gate(&mut waiting, [], 120_000, 106_000, 5_000), None, "nothing more is due");
     }
 
     #[test]
