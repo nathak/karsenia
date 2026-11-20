@@ -692,20 +692,27 @@ impl Registry {
     /// `unreadable` (it answered, and nothing in it was understood: the stored numbers stay).
     pub async fn refresh_usage(&self, account: Option<&str>) -> Result<bool, &'static str> {
         let account = account.filter(|a| !a.is_empty());
+        // The account is looked at first: an id that is none must not take a place among the asks that are held.
+        let (dir, env) = match account {
+            Some(id) => self.account_login(id).map_err(|_| "failed")?,
+            None => (crate::accounts::default_claude_cwd(), EnvPlan::default()),
+        };
         let now = crate::now_ms();
         let _held = self.shared.usage.begin_probe(account.unwrap_or_default(), now).map_err(|skip| match skip {
             crate::usage::Skip::Busy => "busy",
             crate::usage::Skip::Soon => "soon",
         })?;
-        let (dir, env) = match account {
-            Some(id) => self.account_login(id).map_err(|_| "failed")?,
-            None => (crate::accounts::default_claude_cwd(), EnvPlan::default()),
-        };
         let text = crate::usage_cli::ask(&self.bin, &dir, &env).await.map_err(|error| {
             tracing::warn!("the usage could not be asked: {error}");
             "failed"
         })?;
         let info = crate::usage_cli::to_info(&text, crate::now_ms() / 1000, &chrono::Local).ok_or("unreadable")?;
+        // The account may have been removed while the program was answering: its numbers must not come back.
+        if let Some(id) = account {
+            if self.accounts.get(id).is_none() || self.realm(Some(id)).map_or(true, |r| r.is_retired()) {
+                return Err("failed");
+            }
+        }
         Ok(self.shared.usage.record(account, &info, crate::now_ms()))
     }
 

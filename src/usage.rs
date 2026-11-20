@@ -214,7 +214,11 @@ impl UsageStore {
             }
         }
         if probes.len() >= MAX_ACCOUNTS && !probes.contains_key(account) {
-            probes.clear();
+            // Only entries that are over (not running, and a minute old) make room; when none is, this one waits.
+            probes.retain(|_, (at, running)| *running || now_ms.saturating_sub(*at) < PROBE_GAP_MS);
+            if probes.len() >= MAX_ACCOUNTS {
+                return Err(Skip::Busy);
+            }
         }
         probes.insert(account.to_owned(), (now_ms, true));
         Ok(ProbeGuard { store: self, key: account.to_owned() })
@@ -409,6 +413,19 @@ mod tests {
         drop(first);
         assert_eq!(store.begin_probe("a", NOW + 30_000).err(), Some(Skip::Soon));
         assert!(store.begin_probe("a", NOW + PROBE_GAP_MS).is_ok());
+    }
+
+    #[test]
+    fn a_full_table_keeps_running_and_recent_asks_and_makes_room_only_from_old_ones() {
+        let (tx, _rx) = broadcast::channel(4);
+        let store = UsageStore::open(&std::env::temp_dir().join("no-such-usage-2.json"), tx);
+        let held: Vec<_> = (0..MAX_ACCOUNTS).map(|i| store.begin_probe(&format!("r{i}"), NOW).unwrap()).collect();
+        // Every place is a running ask: another account waits, and nothing running is let go.
+        assert_eq!(store.begin_probe("new", NOW + PROBE_GAP_MS + 1).err(), Some(Skip::Busy));
+        assert_eq!(store.begin_probe("r0", NOW + PROBE_GAP_MS + 1).err(), Some(Skip::Busy), "still running");
+        drop(held);
+        // Over (not running, a minute old): they make room.
+        assert!(store.begin_probe("new", NOW + PROBE_GAP_MS + 1).is_ok());
     }
 
     #[test]
