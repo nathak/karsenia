@@ -621,14 +621,16 @@ export component AppWindow inherits Window {
                                 }
                             }
                             Rectangle {
-                                // Grows with the lines written, up to about eight; beyond that the field scrolls and keeps the cursor in view.
-                                height: min(max(76px, composer.preferred-height + 24px), 220px);
-                                Flickable {
-                                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                                // Grows with the lines written, up to about eight; beyond that the field scrolls and keeps the cursor in view. The height
+                                // comes from a hidden Text with the same words, font and width (a wrapping TextInput does not report its wrapped height).
+                                height: min(max(76px, measure.preferred-height + 24px), 220px);
+                                measure := Text { x: 12px; width: parent.width - 24px; text: root.draft + " "; wrap: word-wrap; font-size: 15px; opacity: 0; }
+                                cf := Flickable {
+                                    x: 12px; y: 10px; width: parent.width - 24px; height: parent.height - 14px;
                                     interactive: false;
-                                    content-height: max(self.height, composer.preferred-height + 24px);
+                                    content-height: max(self.height, measure.preferred-height);
                                     composer := TextInput {
-                                        x: 12px; y: 10px; width: parent.width - 24px; height: max(parent.height - 14px, self.preferred-height);
+                                        width: cf.width; height: cf.content-height;
                                         text <=> root.draft;
                                         enabled: root.has-chat;
                                         wrap: word-wrap;
@@ -636,6 +638,14 @@ export component AppWindow inherits Window {
                                         color: Theme.on-surface;
                                         font-size: 15px;
                                         selection-background-color: Theme.primary.with-alpha(0.4);
+                                        // The field does not move the flickable it sits in: the cursor is kept in view here (as the toolkit's own TextEdit does).
+                                        cursor-position-changed(p) => {
+                                            if (p.y + cf.content-y < 0px) {
+                                                cf.content-y = min(0px, -p.y);
+                                            } else if (p.y + cf.content-y > cf.height - 22px) {
+                                                cf.content-y = min(0px, max(cf.height - cf.content-height, cf.height - p.y - 22px));
+                                            }
+                                        }
                                         key-pressed(event) => {
                                             if (event.text == Key.Return && !event.modifiers.shift && !event.modifiers.control) {
                                                 if (root.side == 0 && !root.new-open && root.state != "running" && (root.draft != "" || Att.items.length > 0)) { root.send(root.draft); }
