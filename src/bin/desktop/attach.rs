@@ -66,6 +66,22 @@ pub fn restore(ui: &AppWindow, held: Vec<Pending>) {
     }
 }
 
+/// A send that failed and whose text could not go back into the composer (something new was typed, or another chat is open): the files
+/// are kept for the chat they were meant for, so they are not lost: put back among the held ones when that chat is on screen and nothing
+/// is held, else left with that chat for when it is opened again.
+pub fn keep(ui: &AppWindow, sid: &str, on_screen: bool, held: Vec<Pending>) {
+    if held.is_empty() {
+        return;
+    }
+    if on_screen {
+        restore(ui, held);
+    } else {
+        STASH.with(|s| {
+            s.borrow_mut().entry(sid.to_owned()).or_insert(held);
+        });
+    }
+}
+
 /// Another chat was opened: what is attached stays with the chat that was left, and the opened chat has its own.
 pub fn switch(ui: &AppWindow, left: Option<&str>, to: &str) {
     let held: Vec<Pending> = HELD.with(|h| std::mem::take(&mut *h.borrow_mut()));

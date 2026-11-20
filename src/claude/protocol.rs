@@ -125,6 +125,21 @@ fn one_line(value: &Value) -> String {
 
 /// One user turn: the images first, then the text, then `context` (blocks the model is told besides what the person wrote; the
 /// transcript shows only the text).
+/// `</attached_file` in a file's text, in any letter case, made harmless; the rest of the file stays as it is.
+fn neutralise_closing_tag(body: &str) -> String {
+    const TAG: &str = "</attached_file";
+    let lower = body.to_ascii_lowercase();
+    let (mut out, mut from) = (String::with_capacity(body.len()), 0);
+    while let Some(at) = lower[from..].find(TAG) {
+        out.push_str(&body[from..from + at]);
+        out.push_str("&lt;/");
+        out.push_str(&body[from + at + 2..from + at + TAG.len()]);
+        from += at + TAG.len();
+    }
+    out.push_str(&body[from..]);
+    out
+}
+
 pub fn user_message(text: &str, parts: &[Part], context: &[String]) -> String {
     use crate::workbench::inject::esc;
     let mut content: Vec<Value> = Vec::new();
@@ -140,7 +155,7 @@ pub fn user_message(text: &str, parts: &[Part], context: &[String]) -> String {
         match part {
             Part::Text { name, body } => {
                 // Only the closing tag is neutralised: the file's own code stays as it is.
-                let body = body.replace("</attached_file", "&lt;/attached_file");
+                let body = neutralise_closing_tag(body);
                 content.push(json!({"type": "text", "text": format!("<attached_file name=\"{}\">\n{body}\n</attached_file>", esc(name))}));
             }
             Part::Stored { name, path, size } => content.push(json!({"type": "text", "text": format!(
@@ -276,7 +291,7 @@ mod tests {
         // Files: a PDF is a document block before the words; a text file and a saved file are text blocks after them, then the context.
         let parts = [
             Part::Pdf { name: "a.pdf".into(), data: "JVBERg==".into() },
-            Part::Text { name: "n<1>.txt".into(), body: "x </attached_file> y".into() },
+            Part::Text { name: "n<1>.txt".into(), body: "x </attached_file> y </ATTACHED_FILE>".into() },
             Part::Stored { name: "z.bin".into(), path: "/d/attachments/s/z.bin".into(), size: 7 },
         ];
         let v: Value = serde_json::from_str(&user_message("see", &parts, &["<ctx/>".into()])).unwrap();
@@ -285,7 +300,7 @@ mod tests {
         assert_eq!(c[0]["source"]["media_type"], "application/pdf");
         assert_eq!(c[1]["text"], "see");
         let text = c[2]["text"].as_str().unwrap();
-        assert!(text.starts_with("<attached_file name=\"n&lt;1&gt;.txt\">") && text.contains("x &lt;/attached_file> y") && text.matches("</attached_file>").count() == 1, "{text}");
+        assert!(text.starts_with("<attached_file name=\"n&lt;1&gt;.txt\">") && text.contains("x &lt;/attached_file> y &lt;/ATTACHED_FILE>") && text.matches("</attached_file>").count() == 1, "{text}");
         assert!(c[3]["text"].as_str().unwrap().contains("path=\"/d/attachments/s/z.bin\"") && c[3]["text"].as_str().unwrap().contains("size=\"7\""));
         assert_eq!(c[4]["text"], "<ctx/>");
         let v: Value = serde_json::from_str(&allow("r1", &json!({"command": "ls"}), None)).unwrap();

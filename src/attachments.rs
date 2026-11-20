@@ -65,14 +65,21 @@ fn decoded_len(b64: &str) -> usize {
 pub fn safe_name(name: Option<&str>) -> String {
     let raw = name.unwrap_or("");
     let last = raw.rsplit(['/', '\\']).next().unwrap_or("");
-    let mut clean: String = last.chars().filter(|c| !c.is_control() && *c != ':').take(100).collect();
-    clean = clean.trim().to_owned();
-    // Nothing but dots (`.`, `..`) or underscores is no name.
+    // Characters no file name may have on Windows go too (the host may be Windows whatever the sender runs on).
+    let mut clean: String = last.chars().filter(|c| !c.is_control() && !":<>\"|?*".contains(*c)).take(100).collect();
+    clean = clean.trim().trim_end_matches(['.', ' ']).to_owned();
+    // Nothing but dots or underscores is no name.
     if clean.chars().all(|c| c == '.' || c == '_') {
         return "file".into();
     }
     if clean.starts_with('.') {
         clean.replace_range(..1, "_");
+    }
+    // A device name (`NUL`, `CON`, `COM1`, with or without an extension) is a device on Windows, not a file.
+    let stem = clean.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
+    if device {
+        clean.insert(0, '_');
     }
     clean
 }
@@ -99,10 +106,9 @@ pub fn check(list: &[Image], container: bool) -> Result<Vec<Checked>, String> {
             return Err(format!("the files of one message can be {} MB together", MAX_TOTAL_BYTES / 1024 / 1024));
         }
         let mut class = classify(&bytes);
-        match class {
-            Class::Image(_) if bytes.len() > MAX_IMAGE_BYTES => return Err("an image is larger than 5 MB".into()),
-            Class::Pdf if bytes.len() > MAX_PDF_BYTES => return Err(format!("a PDF can be {} MB at most", MAX_PDF_BYTES / 1024 / 1024)),
-            _ => {}
+        // An image or a PDF over what the model takes inside a message is kept as a file instead (a container chat cannot, below).
+        if matches!(class, Class::Image(_)) && bytes.len() > MAX_IMAGE_BYTES || class == Class::Pdf && bytes.len() > MAX_PDF_BYTES {
+            class = Class::Binary;
         }
         if matches!(class, Class::Image(_) | Class::Pdf) {
             inline += bytes.len();
@@ -118,7 +124,7 @@ pub fn check(list: &[Image], container: bool) -> Result<Vec<Checked>, String> {
             }
         }
         if container && class == Class::Binary {
-            return Err("a container chat can take images, PDFs and small text files only".into());
+            return Err("a container chat can take images up to 5 MB, PDFs up to 20 MB and small text files only".into());
         }
         let name = match file.name.as_deref() {
             Some(n) => safe_name(Some(n)),
@@ -153,7 +159,11 @@ pub fn store(dir: &Path, sid: &str, name: &str, bytes: &[u8]) -> std::io::Result
         match crate::private::write_bytes_new(&path, bytes) {
             Ok(()) => return Ok(path),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
+            Err(e) => {
+                // Half written (the disk was full): not left behind.
+                let _ = std::fs::remove_file(&path);
+                return Err(e);
+            }
         }
     }
     Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "too many files with that name"))
@@ -236,6 +246,11 @@ mod tests {
         assert_eq!(safe_name(None), "file");
         assert_eq!(safe_name(Some("..")), "file");
         assert_eq!(safe_name(Some(&"x".repeat(300))).len(), 100);
+        assert_eq!(safe_name(Some("a<b>|c?.txt")), "abc.txt");
+        assert_eq!(safe_name(Some("report. ")), "report");
+        assert_eq!(safe_name(Some("NUL.txt")), "_NUL.txt");
+        assert_eq!(safe_name(Some("com1")), "_com1");
+        assert_eq!(safe_name(Some("console.log")), "console.log");
     }
 
     #[test]
@@ -243,9 +258,11 @@ mod tests {
         assert!(check(&(0..11).map(|_| file(b"a", None)).collect::<Vec<_>>(), false).unwrap_err().contains("at most 10"));
         assert!(check(&[Image { media_type: "x".into(), data: "!!!!".into(), name: None }], false).unwrap_err().contains("base64"));
         assert!(check(&[file(&vec![b'a'; MAX_FILE_BYTES + 1], None)], false).unwrap_err().contains("25 MB"));
+        // An image over 5 MB (or a PDF over 20 MB) is kept as a file; a container chat cannot take that.
         let mut big_png = PNG.to_vec();
         big_png.resize(MAX_IMAGE_BYTES + 1, 0);
-        assert!(check(&[file(&big_png, None)], false).unwrap_err().contains("5 MB"));
+        assert_eq!(check(&[file(&big_png, Some("big.png"))], false).unwrap()[0].class, Class::Binary);
+        assert!(check(&[file(&big_png, Some("big.png"))], true).unwrap_err().contains("container"));
         // Together they must stay under the total (two 20 MB files pass one by one, not together).
         assert!(check(&[file(&vec![b'a'; 20 * 1024 * 1024], None), file(&vec![0u8; 20 * 1024 * 1024], None)], false).unwrap_err().contains("28 MB together"));
         // Text up to the limit is text; over it, and over the total, it is saved like any file.

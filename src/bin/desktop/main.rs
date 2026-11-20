@@ -890,9 +890,13 @@ fn send_text(a: &Arc<App>, text: String, from_composer: bool) {
             // open (the draft is shared by every chat).
             let b = a.clone();
             let _ = a.weak.upgrade_in_event_loop(move |ui| {
-                if from_composer && ui.get_draft().is_empty() && b.current.lock().expect("current").sid.as_deref() == Some(sid.as_str()) {
+                let here = b.current.lock().expect("current").sid.as_deref() == Some(sid.as_str());
+                if from_composer && ui.get_draft().is_empty() && here {
                     ui.set_draft(text.into());
                     attach::restore(&ui, held);
+                } else {
+                    // The words cannot go back, but the files are not lost.
+                    attach::keep(&ui, &sid, here, held);
                 }
             });
             toast_later(&a.weak, message);
@@ -1425,7 +1429,7 @@ fn to_slint(row: &Row) -> ChatRow {
         plain: plain_of(&row.md).into(),
         // Not selectable by a drag where the visible text is styled (bold, italic, code: other glyph widths than the plain text the
         // selection works on, so the highlight would be on the wrong letters) or has a link (the styled text needs the clicks).
-        no_select: row.md.contains("](http") || unescape(&row.md) != plain_of(&row.md),
+        no_select: row.md.contains("](") || unescape(&row.md) != plain_of(&row.md),
         label: row.label.clone().into(),
         extra: row.extra.clone().into(),
         status: row.status.clone().into(),
