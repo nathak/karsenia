@@ -184,6 +184,8 @@ export global Team {
     callback panel-visible(bool);
     // The app's own team mode of the open chat (see src/workbench/team.rs): the switch, and the pickers' entries (0 is the default).
     in-out property <bool> nt-on;
+    // The helpers' models in a few words, for the header chip ("explorer haiku · advisor opus").
+    in property <string> nt-line;
     in-out property <int> nt-lead-effort;
     in-out property <int> nt-exp-model;
     in-out property <int> nt-exp-effort;

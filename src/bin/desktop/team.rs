@@ -74,6 +74,8 @@ fn wb_show(ui: &AppWindow, lang: Lang, wb: &Workbench) {
     t.set_wb_paused(wb.paused);
     t.set_wb_stop_gate(wb.stop_gate);
     t.set_nt_on(wb.team.on);
+    let who = |set: &tenrec::workbench::team::RoleSet| set.model.clone().unwrap_or_else(|| "lead".to_owned());
+    t.set_nt_line(format!("explorer {} · advisor {}", who(&wb.team.explorer), who(&wb.team.advisor)).into());
     t.set_nt_lead_effort(pick::effort_index(wb.team.lead_effort));
     t.set_nt_exp_model(pick::model_index(wb.team.explorer.model.as_deref()));
     t.set_nt_exp_effort(pick::effort_index(wb.team.explorer.effort));

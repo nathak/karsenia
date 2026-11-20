@@ -111,7 +111,6 @@ export component AppWindow inherits Window {
     property <length> hw: 1000px;
     function relayout() {
         root.hw = root.width - 280px;
-        root.gutter = max(16px, (root.width - 280px - 1000px) / 2);
     }
     changed width => { root.relayout(); }
     // The widgets of the toolkit (fields, lists) follow the look chosen above.
@@ -143,7 +142,7 @@ export component AppWindow inherits Window {
     // The panel shown changed (0 chats, 1 memory, 2 skills, 3 schedule, 4 files, 5 settings).
     callback panel-open(int);
     in-out property <int> side: 0;
-    // The side margin of the transcript and the composer: the column is at most 1000px wide.
+    // The side margin of the transcript and the composer: the chat takes the whole width of the page (no narrower column to be centred).
     property <length> gutter: 16px;
     out property <bool> at-bottom: list.content-y <= min(0px, list.visible-height - list.content-height) + 120px;
 
@@ -474,6 +473,9 @@ export component AppWindow inherits Window {
                 if root.has-chat && root.side == 0: Rectangle {
                     height: 52px;
                     background: Theme.surface;
+                    // The header never asks the page for more width than the window has (a header that wants more widened the whole page
+                    // past the window's edge and what was laid out in the middle ended up off it).
+                    min-width: 0px;
                     Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
                     HorizontalLayout {
                         padding-left: root.gutter; padding-right: root.gutter; spacing: 10px; alignment: start;
@@ -506,6 +508,16 @@ export component AppWindow inherits Window {
                                 text: root.state-label; pulse: root.state == "running";
                                 fg: root.state == "running" ? Theme.primary-soft : root.state == "idle" ? Theme.ok : Theme.outline;
                                 fill: root.state == "running" ? Theme.primary.with-alpha(0.15) : root.state == "idle" ? Theme.ok.with-alpha(0.1) : transparent;
+                            }
+                        }
+                        // This chat's own team mode (see the Team page): on or off, and with it on the two helpers' models.
+                        if Team.wb-ready && root.hw >= 800px: VerticalLayout {
+                            alignment: center;
+                            Pill {
+                                clickable: true; clicked => { root.new-open = false; root.side = 6; }
+                                text: T.tr("team_chip") + " " + (Team.nt-on ? "ON" : "OFF") + (Team.nt-on && root.hw >= 1400px ? " · " + Team.nt-line : "");
+                                fg: Team.nt-on ? Theme.primary-soft : Theme.outline;
+                                fill: Team.nt-on ? Theme.primary.with-alpha(0.15) : transparent;
                             }
                         }
                         if Wt.show: VerticalLayout { alignment: center; Pill { clickable: true; clicked => { Wt.open = !Wt.open; Usage.open = false; if (Wt.open) { Wt.check(); } } text: T.tr("wt_chip"); fg: Theme.info; } }
