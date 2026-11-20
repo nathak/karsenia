@@ -59,22 +59,29 @@ fn read_line(line: &str) -> Option<(&'static str, f64, &str)> {
     Some((key, pct / 100.0, when))
 }
 
-/// `6:39pm`, `6pm`, `12am`.
+/// `6:39pm`, `6pm`, `12am`, and a 24-hour `18:39`.
 fn read_time(token: &str) -> Option<NaiveTime> {
     let lower = token.to_ascii_lowercase();
-    let (digits, pm) = match (lower.strip_suffix("am"), lower.strip_suffix("pm")) {
-        (Some(d), _) => (d, false),
-        (_, Some(d)) => (d, true),
-        _ => return None,
+    let (digits, suffix) = match (lower.strip_suffix("am"), lower.strip_suffix("pm")) {
+        (Some(d), _) => (d, Some(false)),
+        (_, Some(d)) => (d, Some(true)),
+        _ => (lower.as_str(), None),
     };
     let (h, m) = match digits.split_once(':') {
         Some((h, m)) => (h.parse::<u32>().ok()?, m.parse::<u32>().ok()?),
-        None => (digits.parse::<u32>().ok()?, 0),
+        // A bare number is not a time without am or pm.
+        None if suffix.is_some() => (digits.parse::<u32>().ok()?, 0),
+        None => return None,
     };
-    if !(1..=12).contains(&h) || m > 59 {
+    if m > 59 {
         return None;
     }
-    NaiveTime::from_hms_opt(h % 12 + if pm { 12 } else { 0 }, m, 0)
+    match suffix {
+        Some(pm) if (1..=12).contains(&h) => NaiveTime::from_hms_opt(h % 12 + if pm { 12 } else { 0 }, m, 0),
+        Some(_) => None,
+        None if h < 24 => NaiveTime::from_hms_opt(h, m, 0),
+        None => None,
+    }
 }
 
 fn month_number(name: &str) -> Option<u32> {
@@ -88,9 +95,15 @@ fn month_number(name: &str) -> Option<u32> {
 /// without a year it is this year, or the next when that puts it half a year back (a January answer read in December).
 fn read_reset<Tz: TimeZone>(text: &str, now_s: u64, tz: &Tz) -> Option<u64> {
     let text = text.split(" (").next().unwrap_or(text).trim();
-    let text = text.replace(',', " ").replace(" at ", " ");
-    let mut parts: Vec<&str> = text.split_whitespace().collect();
-    let time = read_time(parts.pop()?)?;
+    // A no-break or narrow no-break space (a clock printed through a locale library) is a space; an `AM` set apart from its number
+    // belongs to it.
+    let text = text.replace(['\u{a0}', '\u{202f}'], " ").replace(',', " ").replace(" at ", " ");
+    let mut parts: Vec<String> = text.split_whitespace().map(str::to_owned).collect();
+    if parts.len() >= 2 && matches!(parts.last().map(|p| p.to_ascii_lowercase()).as_deref(), Some("am" | "pm")) {
+        let mark = parts.pop()?;
+        parts.last_mut()?.push_str(&mark);
+    }
+    let time = read_time(&parts.pop()?)?;
     let now = tz.timestamp_opt(i64::try_from(now_s).ok()?, 0).single()?;
     let date = match parts.as_slice() {
         [] => {
@@ -172,7 +185,12 @@ mod tests {
         assert_eq!(t("12am"), Some(at(11, 21, 0, 0)));
         assert_eq!(t("12pm"), Some(at(11, 21, 12, 0)));
         assert_eq!(t("Nov 21 at 12:05AM"), Some(at(11, 21, 0, 5)));
-        for bad in ["", "soon", "Nov 20", "25pm", "13:00pm", "6:75pm", "Foo 20, 6pm", "Nov 31, 6pm", "Nov 20, 21, 6pm"] {
+        // Other ways a clock may be printed: a space before PM, a narrow no-break space, 24 hours.
+        assert_eq!(t("Nov 24, 4:59 PM"), Some(at(11, 24, 16, 59)));
+        assert_eq!(t("Nov 24, 4:59\u{202f}PM (Asia/Seoul)"), Some(at(11, 24, 16, 59)));
+        assert_eq!(t("Nov\u{a0}24, 16:59"), Some(at(11, 24, 16, 59)));
+        assert_eq!(t("18:39"), Some(at(11, 20, 18, 39)));
+        for bad in ["", "soon", "Nov 20", "25pm", "13:00pm", "6:75pm", "Foo 20, 6pm", "Nov 31, 6pm", "Nov 20, 21, 6pm", "PM", "24:00", "6", "Nov 20, 6"] {
             assert_eq!(t(bad), None, "{bad:?}");
         }
     }
@@ -195,6 +213,15 @@ mod tests {
         assert_eq!(keys, ["seven_day_opus", "seven_day_sonnet"]);
         assert!(to_info("nothing here\nCurrent session: ?", now(), &seoul()).is_none());
         assert!(to_info("", now(), &seoul()).is_none());
+    }
+
+    #[test]
+    fn a_window_with_no_reset_time_is_left_out_and_the_others_are_kept() {
+        // A session that is not running says no time: nothing to put in a window, and the week still reads.
+        let text = "Current session: 0% used\nCurrent week (all models): 12% used · resets Nov 24, 4:59pm (Asia/Seoul)";
+        let info = to_info(text, now(), &seoul()).unwrap();
+        let keys: Vec<&str> = info["unifiedWindows"].as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, ["seven_day"]);
     }
 
     #[test]
