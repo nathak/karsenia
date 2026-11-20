@@ -26,12 +26,21 @@ pub fn apply(ui: &AppWindow, can_send: bool) {
     ui.global::<Team>().set_can_send(can_send);
 }
 
-/// The chat changed: the card is closed.
+/// The chat changed or was closed: the card is closed and what it showed of the old chat is dropped.
 pub fn reset(ui: &AppWindow) {
-    ui.global::<Team>().set_open(false);
+    let t = ui.global::<Team>();
+    t.set_open(false);
+    t.set_wb_ready(false);
+    WB.with(|w| *w.borrow_mut() = None);
 }
 
 /// The chat's own workbench is read and shown (nothing of its text is logged).
+/// The Team page's data for the chat on screen: its workbench (with the team settings) and the project's guard rules.
+pub fn open_page(ui: &AppWindow, app: &Arc<App>) {
+    gf_open(ui, app);
+    wb_open(ui, app);
+}
+
 pub fn wb_open(ui: &AppWindow, app: &Arc<App>) {
     let t = ui.global::<Team>();
     let sid = app.current.lock().expect("current").sid.clone();
@@ -200,9 +209,12 @@ fn team_do(app: &Arc<App>, ops: Vec<Op>) {
     tokio::spawn(async move {
         match a.registry.team_apply_many(&sid, ops).await {
             Ok(wb) => {
-                let lang = a.lang;
+                let (lang, b) = (a.lang, a.clone());
                 let _ = a.weak.clone().upgrade_in_event_loop(move |ui| {
-                    wb_show(&ui, lang, &wb);
+                    // The person may have gone to another chat meanwhile: its card must not show this one's settings.
+                    if b.current.lock().expect("current").sid.as_deref() == Some(sid.as_str()) {
+                        wb_show(&ui, lang, &wb);
+                    }
                     crate::toast(&ui, tr(lang, "nt_saved"));
                 });
             }

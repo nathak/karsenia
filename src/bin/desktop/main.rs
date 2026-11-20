@@ -1050,6 +1050,8 @@ fn open_chat(app: &Arc<App>, sid: String) {
         // Shell mode belongs to the chat it was turned on in.
         ui.set_shell_mode(false);
         team::reset(&ui);
+        // The Team page shows the new chat's team settings, contract and project guard rules.
+        team::open_page(&ui, app);
         attach::switch(&ui, left_att.as_deref(), &sid);
         files::reset(&ui);
         // The VHDB page is on screen: it reads the new chat's project.
