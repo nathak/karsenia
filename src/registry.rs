@@ -26,17 +26,10 @@ pub fn clean_model(name: &str) -> Option<String> {
     (name != "default" && !name.is_empty() && name.len() <= 100 && name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.:/[]".contains(c))).then(|| name.to_owned())
 }
 
-/// What a permission mode may be combined with, as the key of the sentence that says why not (None: allowed). A provider chat sends
-/// everything it reads to a third party's address: `auto` (a classifier that needs a supported model or plan) is not known to work
-/// there, and `bypassPermissions` there would let that model run commands and edit files without asking, so it is only allowed
-/// inside a container. Claude Code itself refuses `bypassPermissions` for root, so it is refused here before a chat is made.
-pub fn mode_refusal(mode: PermMode, provider: bool, container: bool) -> Option<&'static str> {
-    if provider && mode == PermMode::Auto {
-        return Some("perm_err_auto_provider");
-    }
-    if provider && mode == PermMode::Bypass && !container {
-        return Some("perm_err_bypass_provider");
-    }
+/// What a permission mode may be combined with, as the key of the sentence that says why not (None: allowed). Every mode may be used
+/// in every kind of chat, a provider chat included (the person chose that provider, and skipping the checks is asked about first).
+/// Only Claude Code's own refusal is repeated here: it will not skip permission checks as root, so it is refused before a chat is made.
+pub fn mode_refusal(mode: PermMode, _provider: bool, _container: bool) -> Option<&'static str> {
     #[cfg(unix)]
     {
         // SAFETY: geteuid only reads the process's own id.
@@ -51,8 +44,6 @@ pub fn mode_refusal(mode: PermMode, provider: bool, container: bool) -> Option<&
 pub fn check_mode(mode: PermMode, provider: bool, container: bool) -> Result<(), String> {
     match mode_refusal(mode, provider, container) {
         None => Ok(()),
-        Some("perm_err_auto_provider") => Err("auto mode is not available in a provider chat".into()),
-        Some("perm_err_bypass_provider") => Err("a provider chat can skip permission checks only inside a container".into()),
         Some(_) => Err("Claude Code refuses to skip permission checks when it runs as root".into()),
     }
 }

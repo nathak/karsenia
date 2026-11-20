@@ -1423,6 +1423,7 @@ fn to_slint(row: &Row) -> ChatRow {
         text: row.text.clone().into(),
         rich,
         plain: plain_of(&row.md).into(),
+        has_link: row.md.contains("](http"),
         label: row.label.clone().into(),
         extra: row.extra.clone().into(),
         status: row.status.clone().into(),

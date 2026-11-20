@@ -372,11 +372,11 @@ export function attn(sessions, view, known) {
 export const PERM_MODES = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions']
 
 /**
- * The modes offered for a chat of this kind. A provider chat sends what it reads to a third party's address: `auto` (it needs a model
- * and plan Claude Code supports) is not offered there, and skipping every check only inside a container (the host refuses the rest).
+ * The modes offered for a chat of this kind: all six, whatever the chat (a provider chat too). Skipping every check is asked about first
+ * (see `permNeedsConfirm`).
  */
-export function permChoices({ provider = false, container = false } = {}) {
-  return PERM_MODES.filter(m => !(provider && m === 'auto') && !(provider && m === 'bypassPermissions' && !container))
+export function permChoices() {
+  return PERM_MODES
 }
 
 /** True for the mode that skips every check: it is only sent after the person confirmed it. */

@@ -542,6 +542,8 @@ export component AppWindow inherits Window {
                         }
                         pf := Flickable {
                             vertical-stretch: 1;
+                            // Not draggable: a drag must select the text, not move the page (the wheel and the scroll bar still scroll).
+                            interactive: false;
                             property <int> seen-gen: -1;
                             content-height: max(self.height, st.height + 24px);
                             st := SelText { x: root.gutter; y: 12px; width: parent.width - 2 * root.gutter; text: root.chat-plain; size: 14px; init => { self.grab(); } }
@@ -569,6 +571,7 @@ export component AppWindow inherits Window {
                             triggered => { dpf.content-y = min(0px, dpf.height - dpf.content-height); dpf.seen-gen = root.debug-gen; }
                         }
                         dpf := Flickable {
+                            interactive: false;
                             vertical-stretch: 1;
                             property <int> seen-gen: -1;
                             content-height: max(self.height, dst.height + 24px);
@@ -618,25 +621,31 @@ export component AppWindow inherits Window {
                                 }
                             }
                             Rectangle {
-                                height: 76px;
-                                composer := TextInput {
-                                    x: 12px; y: 10px; width: parent.width - 24px; height: parent.height - 14px;
-                                    text <=> root.draft;
-                                    enabled: root.has-chat;
-                                    wrap: word-wrap;
-                                    single-line: false;
-                                    color: Theme.on-surface;
-                                    font-size: 15px;
-                                    selection-background-color: Theme.primary.with-alpha(0.4);
-                                    key-pressed(event) => {
-                                        if (event.text == Key.Return && !event.modifiers.shift && !event.modifiers.control) {
-                                            if (root.side == 0 && !root.new-open && root.state != "running" && (root.draft != "" || Att.items.length > 0)) { root.send(root.draft); }
-                                            return accept;
+                                // Grows with the lines written, up to about eight; beyond that the field scrolls and keeps the cursor in view.
+                                height: min(max(76px, composer.preferred-height + 24px), 220px);
+                                Flickable {
+                                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                                    interactive: false;
+                                    content-height: max(self.height, composer.preferred-height + 24px);
+                                    composer := TextInput {
+                                        x: 12px; y: 10px; width: parent.width - 24px; height: max(parent.height - 14px, self.preferred-height);
+                                        text <=> root.draft;
+                                        enabled: root.has-chat;
+                                        wrap: word-wrap;
+                                        single-line: false;
+                                        color: Theme.on-surface;
+                                        font-size: 15px;
+                                        selection-background-color: Theme.primary.with-alpha(0.4);
+                                        key-pressed(event) => {
+                                            if (event.text == Key.Return && !event.modifiers.shift && !event.modifiers.control) {
+                                                if (root.side == 0 && !root.new-open && root.state != "running" && (root.draft != "" || Att.items.length > 0)) { root.send(root.draft); }
+                                                return accept;
+                                            }
+                                            if ((event.text == "v" || event.text == "V") && event.modifiers.control && !event.modifiers.alt) {
+                                                if (Att.paste-image()) { return accept; }
+                                            }
+                                            return reject;
                                         }
-                                        if ((event.text == "v" || event.text == "V") && event.modifiers.control && !event.modifiers.alt) {
-                                            if (Att.paste-image()) { return accept; }
-                                        }
-                                        return reject;
                                     }
                                 }
                                 if root.draft == "": Text {

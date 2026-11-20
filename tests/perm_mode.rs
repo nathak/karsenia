@@ -172,20 +172,19 @@ async fn a_name_the_list_does_not_know_in_a_chats_file_is_an_error_and_never_ano
 }
 
 #[test]
-fn a_mode_fits_the_kind_of_chat_it_is_made_for() {
+fn every_mode_fits_every_kind_of_chat_except_skipping_checks_as_root() {
     use tenrec::claude::perm::PermMode;
     use tenrec::registry::{check_mode, mode_refusal};
-    for m in PermMode::ALL.into_iter().filter(|m| *m != PermMode::Auto && *m != PermMode::Bypass) {
-        assert!(check_mode(m, true, false).is_ok() && check_mode(m, false, false).is_ok(), "{m:?}");
-    }
-    assert_eq!(mode_refusal(PermMode::Auto, true, false), Some("perm_err_auto_provider"));
-    assert_eq!(mode_refusal(PermMode::Auto, true, true), Some("perm_err_auto_provider"));
-    assert!(check_mode(PermMode::Auto, false, false).is_ok());
-    assert_eq!(mode_refusal(PermMode::Bypass, true, false), Some("perm_err_bypass_provider"));
     // SAFETY: geteuid only reads the process's own id.
-    if unsafe { libc::geteuid() } != 0 {
-        assert!(check_mode(PermMode::Bypass, true, true).is_ok(), "inside a container a provider chat may");
-        assert!(check_mode(PermMode::Bypass, false, false).is_ok(), "a person's own chat may, after confirming");
+    let root = unsafe { libc::geteuid() } == 0;
+    for m in PermMode::ALL {
+        for (provider, container) in [(false, false), (true, false), (true, true)] {
+            if m == PermMode::Bypass && root {
+                assert_eq!(mode_refusal(m, provider, container), Some("perm_err_bypass_root"));
+            } else {
+                assert!(check_mode(m, provider, container).is_ok(), "{m:?} provider={provider} container={container}");
+            }
+        }
     }
 }
 

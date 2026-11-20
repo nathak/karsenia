@@ -509,13 +509,10 @@ test('what waits or runs under the accounts that are not shown is counted per ac
   assert.equal(attn(null, null, null).size, 0)
 })
 
-test('the permission modes offered are the six Claude Code takes, narrowed for a provider chat, and skipping every check needs a confirmation', () => {
+test('the permission modes offered are the six Claude Code takes, for every kind of chat, and skipping every check needs a confirmation', () => {
   assert.deepEqual(PERM_MODES, ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions'])
   assert.deepEqual(permChoices(), PERM_MODES)
-  // A provider chat: no auto, and no skipping of checks unless it runs in a container.
-  assert.deepEqual(permChoices({ provider: true }), ['default', 'acceptEdits', 'plan', 'dontAsk'])
-  assert.ok(permChoices({ provider: true, container: true }).includes('bypassPermissions'))
-  assert.ok(!permChoices({ provider: true, container: true }).includes('auto'))
+  assert.deepEqual(permChoices({ provider: true }), PERM_MODES, 'a provider chat has all of them too')
   assert.ok(permNeedsConfirm('bypassPermissions') && !permNeedsConfirm('plan') && !permNeedsConfirm('default') && !permNeedsConfirm(undefined))
   assert.equal(permOf({ permission_mode: 'acceptEdits' }), 'acceptEdits')
   assert.equal(permOf({ permission_mode: 'default' }), null, 'the default is not a badge')

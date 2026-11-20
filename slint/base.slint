@@ -98,10 +98,19 @@ export component Rich inherits Rectangle {
     in property <string> plain;
     in property <length> size;
     in property <color> fg;
+    // Whether a drag selects the text (see below); false where the paragraph has a link.
+    in property <bool> selectable: false;
     callback link(string);
     height: measure.preferred-height;
     measure := Text { width: parent.width; text: root.plain; wrap: word-wrap; font-size: root.size; font-weight: 600; opacity: 0; }
     StyledText { width: parent.width; height: parent.height; text: root.rich; default-color: root.fg; default-font-size: root.size; link-color: Theme.primary-soft; link-clicked(url) => { root.link(url); } }
+    // The same words as plain, read-only, invisible text over the styled text: a drag selects them (the highlight shows through) and
+    // Ctrl+C copies them. Not over a paragraph with a link: the styled text takes every mouse event (it needs the clicks of a link), so a
+    // drag there cannot reach a field under it, and a field over it would take the link's clicks.
+    if root.selectable: TextInput {
+        width: parent.width; height: parent.height; text: root.plain; read-only: true; single-line: false; wrap: TextWrap.word-wrap; font-size: root.size;
+        color: transparent; selection-foreground-color: transparent; selection-background-color: Theme.primary.with-alpha(0.4);
+    }
 }
 
 // Selectable text whose height follows its wrapping: the layout around a read-only TextInput gave it the height of its

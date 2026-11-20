@@ -570,7 +570,7 @@ function updateNewChat() {
 function fillPerm() {
   const select = $('new-perm')
   const keep = select.value || 'default'
-  const choices = permChoices({ provider: Boolean($('new-provider').value), container: $('new-container').checked })
+  const choices = permChoices()
   select.replaceChildren(...choices.map(m => Object.assign(el('option', '', t('permM_' + m)), { value: m })))
   select.value = choices.includes(keep) ? keep : 'default'
   $('new-perm-note').textContent = t('permN_' + select.value)

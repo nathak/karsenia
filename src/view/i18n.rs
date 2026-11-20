@@ -161,8 +161,6 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("zoom", "글자 크기", "Text size"),
     // ---- importing a claude command line session ----
     ("app_running", "실행 중", "RUNNING"),
-    ("perm_err_auto_provider", "공급자 대화에서는 auto 모드를 쓸 수 없습니다.", "Auto mode is not available in a provider chat."),
-    ("perm_err_bypass_provider", "공급자 대화는 컨테이너 안에서만 모든 확인을 건너뛸 수 있습니다.", "A provider chat can skip every check only inside a container."),
     ("perm_err_bypass_root", "root로 실행 중이면 Claude Code가 모든 확인 건너뛰기를 거부합니다.", "Claude Code refuses to skip every check when it runs as root."),
     ("perm_allow_session", "이번 실행 동안 허용", "Allow for this run"),
     ("perm_allow_always", "이 프로젝트에서 항상 허용", "Always allow in this project"),
