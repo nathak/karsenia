@@ -1055,7 +1055,7 @@ fn open_chat(app: &Arc<App>, sid: String) {
         ui.set_shell_mode(false);
         team::reset(&ui);
         // The Team page shows the new chat's team settings, contract and project guard rules.
-        team::open_page(&ui, app);
+        team::load_quiet(&ui, app);
         attach::switch(&ui, left_att.as_deref(), &sid);
         files::reset(&ui);
         // The VHDB page is on screen: it reads the new chat's project.
@@ -1619,6 +1619,8 @@ async fn refresh_sessions(app: &Arc<App>) {
         let names: Vec<String> = std::iter::once(tr(lang, "gw_none")).chain(logins.iter().map(|(_, name)| name.clone())).collect();
         let index = current_gw.as_ref().and_then(|id| logins.iter().position(|(one, _)| one == id)).map_or(0, |i| i + 1);
         ui.set_gw_shown(may && !logins.is_empty());
+        // Team mode applies to a chat of an account (not one tied to a gateway or in a container): the header's team chip is for those.
+        ui.global::<Team>().set_nt_applies(may);
         if GW_NAMES.with(|n| *n.borrow() != names) {
             ui.set_gw_names(ModelRc::from(Rc::new(VecModel::from(names.iter().map(|n| n.as_str().into()).collect::<Vec<SharedString>>()))));
             GW_NAMES.with(|n| *n.borrow_mut() = names);

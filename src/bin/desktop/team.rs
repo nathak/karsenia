@@ -38,10 +38,16 @@ pub fn reset(ui: &AppWindow) {
 /// The Team page's data for the chat on screen: its workbench (with the team settings) and the project's guard rules.
 pub fn open_page(ui: &AppWindow, app: &Arc<App>) {
     gf_open(ui, app);
-    wb_open(ui, app);
+    wb_load(ui, app, false);
 }
 
-pub fn wb_open(ui: &AppWindow, app: &Arc<App>) {
+/// The data the header's team chip needs, when a chat is opened: a workbench file that cannot be read is not said at every switch (the
+/// Team page says it when it is opened).
+pub fn load_quiet(ui: &AppWindow, app: &Arc<App>) {
+    wb_load(ui, app, true);
+}
+
+fn wb_load(ui: &AppWindow, app: &Arc<App>, quiet: bool) {
     let t = ui.global::<Team>();
     let sid = app.current.lock().expect("current").sid.clone();
     match sid.as_deref().map(|sid| app.registry.workbench_get(sid)) {
@@ -49,7 +55,9 @@ pub fn wb_open(ui: &AppWindow, app: &Arc<App>) {
         Some(Err(key)) => {
             WB.with(|w| *w.borrow_mut() = None);
             t.set_wb_ready(false);
-            crate::toast(ui, tr(app.lang, key));
+            if !quiet {
+                crate::toast(ui, tr(app.lang, key));
+            }
         }
         None => {
             WB.with(|w| *w.borrow_mut() = None);

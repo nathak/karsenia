@@ -369,7 +369,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, retire_reply: None };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, retire_reply: None };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -401,6 +401,9 @@ struct Actor {
     native_spawned: bool,
     /// The team settings the running process was started with (None: team mode was off).
     team_spawned: Option<crate::workbench::team::Team>,
+    /// How many background jobs of the chat the program last said it had (ambient ones left out): they live in its process, so a
+    /// restart of the process ends them, and the chat says so.
+    bg_live: usize,
     /// Who waits for the process to end before the worktree is removed.
     retire_reply: Option<oneshot::Sender<Result<(), String>>>,
 }
@@ -590,7 +593,6 @@ impl Actor {
             match e.kind.as_str() {
                 "claude" => match e.data["subtype"].as_str() {
                     Some("background_tasks_changed") => background = e.data["tasks"].as_array().is_some_and(|t| !t.is_empty()),
-                    Some("init") => background = false,
                     _ => {}
                 },
                 "permission" => {
@@ -691,6 +693,7 @@ impl Actor {
                     self.emit("renamed", json!({"title": clean}));
                     // A running-but-idle `claude` is ended so the next message starts it with `--resume` and the new `--name`.
                     if self.state != State::Running && self.pending.is_empty() && self.process.is_some() {
+                        self.forget_background();
                         if let Some(process) = self.process.take() {
                             process.stop();
                         }
@@ -718,6 +721,7 @@ impl Actor {
                 if self.state == State::Running || !self.pending.is_empty() {
                     let _ = reply.send(Err("a turn is running or a permission waits in that chat".to_owned()));
                 } else {
+                    self.forget_background();
                     if let Some(process) = self.process.take() {
                         process.stop();
                         if let Some(gate) = &self.mcp {
@@ -1019,6 +1023,7 @@ impl Actor {
         // The switch of the built-in workbench changed since this process started: it still has the old plug-in settings and no (or a stale)
         // guard hook, so it is ended and the message starts a new one.
         if self.process.is_some() && (self.native_spawned != self.plugins_off() || self.team_spawned != self.team_now()) {
+            self.forget_background();
             if let Some(process) = self.process.take() {
                 process.stop();
             }
@@ -1287,14 +1292,31 @@ impl Actor {
         }
     }
 
+    /// The jobs the program has in the background went with their process (it was ended to be started again): said in the transcript, and
+    /// the list is cleared, so the chat does not go on waiting for them.
+    fn forget_background(&mut self) {
+        if self.bg_live > 0 {
+            let n = self.bg_live;
+            self.bg_live = 0;
+            self.emit("claude", json!({"type": "system", "subtype": "background_tasks_changed", "tasks": []}));
+            self.emit("bg_lost", json!({"n": n}));
+        }
+    }
+
     fn raw_event(&mut self, raw: Value) {
+        // A frame of a sub-agent (it names its parent call) is not the model going on by itself.
+        let main = raw.get("parent_tool_use_id").is_none_or(Value::is_null);
         match raw["type"].as_str() {
             Some("stream_event") => {
-                self.wake();
+                if main {
+                    self.wake();
+                }
                 self.emit_transient("claude", raw)
             }
             Some("assistant") => {
-                self.wake();
+                if main {
+                    self.wake();
+                }
                 self.emit("claude", raw)
             }
             Some("control_cancel_request") => {
@@ -1303,6 +1325,10 @@ impl Actor {
                         self.emit("permission_resolved", json!({"request_id": request_id, "outcome": "cancelled"}));
                     }
                 }
+                self.emit("claude", raw);
+            }
+            Some("system") if raw["subtype"] == "background_tasks_changed" => {
+                self.bg_live = raw["tasks"].as_array().map_or(0, |t| t.iter().filter(|t| t["ambient"].as_bool() != Some(true)).count());
                 self.emit("claude", raw);
             }
             _ => self.emit("claude", raw),
@@ -1356,6 +1382,7 @@ impl Actor {
         if self.state == State::Running || !self.pending.is_empty() || self.process.is_none() || self.team_spawned == self.team_now() {
             return (Ok(()), false);
         }
+        self.forget_background();
         if let Some(process) = self.process.take() {
             process.stop();
         }
@@ -1389,6 +1416,9 @@ impl Actor {
         }
         let had = self.process.take();
         let restarted = had.is_some();
+        if had.is_some() {
+            self.forget_background();
+        }
         if let Some(process) = had {
             process.stop();
             if let Some(gate) = &self.mcp {
@@ -1440,6 +1470,9 @@ impl Actor {
         }
         let had = self.process.take();
         let restarted = had.is_some();
+        if had.is_some() {
+            self.forget_background();
+        }
         if let Some(process) = had {
             process.stop();
             if let Some(gate) = &self.mcp {
@@ -1465,6 +1498,7 @@ impl Actor {
         let _ = std::fs::remove_file(self.recall_path());
         let _ = std::fs::remove_dir_all(self.skills_path());
         self.process = None;
+        self.bg_live = 0;
         self.set_state(State::Exited { code });
         if let Some(reply) = self.retire_reply.take() {
             let _ = reply.send(Ok(()));

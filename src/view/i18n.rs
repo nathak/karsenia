@@ -61,6 +61,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("bg_failed", "백그라운드 작업 실패: {what}", "Background job failed: {what}"),
     ("bg_stopped", "백그라운드 작업 중지됨: {what}", "Background job stopped: {what}"),
     ("bg_banner", "백그라운드에서 {n}개 작업이 실행 중입니다 ({what}) · 멈춘 것이 아니라 기다리는 중이며, 끝나면 자동으로 이어서 진행합니다", "{n} job(s) running in the background ({what}) · not stopped, waiting: it goes on by itself when they end"),
+    ("bg_lost", "프로세스를 다시 시작해서 백그라운드 작업 {n}개가 끝났습니다 (결과를 받지 못했을 수 있습니다)", "The process was restarted, so {n} background job(s) ended (their result may not have arrived)"),
     ("state_bg", "대기 · 백그라운드 {n}", "Idle · {n} in the background"),
     ("diff_more", "… {n}줄 더", "… {n} more lines"),
     ("preview_more", "… +{n}줄", "… +{n} lines"),

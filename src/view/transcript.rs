@@ -797,6 +797,11 @@ impl Transcript {
                 let summary: String = s(data, "summary").chars().filter(|c| !c.is_control()).take(160).collect();
                 self.note(format!("{}: {summary}", self.t("team_changed_note")), "note");
             }
+            // The program's process was ended to be started again: its background jobs went with it.
+            "bg_lost" => {
+                let n = data.get("n").and_then(Value::as_u64).unwrap_or(0);
+                self.note(fill(&self.t("bg_lost"), &[("n", n.to_string())]), "note-warn");
+            }
             "memory_used" => {
                 let n = data.get("ids").and_then(Value::as_array).map_or(0, Vec::len);
                 self.note(format!("{}: {n}", self.t("mem_used")), "note");
@@ -975,13 +980,20 @@ impl Transcript {
                     .into_iter()
                     .flatten()
                     .filter(|t| t.get("ambient").and_then(Value::as_bool) != Some(true))
-                    .map(|t| first_line(s(t, "description")).chars().filter(|c| !c.is_control()).take(80).collect::<String>())
+                    .map(|t| {
+                        // A task with no description is still one: named by its kind.
+                        let what = first_line(s(t, "description")).chars().filter(|c| !c.is_control()).take(80).collect::<String>();
+                        if what.trim().is_empty() { first_line(s(t, "task_type")).chars().filter(|c| !c.is_control()).take(40).collect::<String>() } else { what }
+                    })
+                    .filter(|w| !w.trim().is_empty())
                     .take(20)
                     .collect();
             }
             // A background job started, or ended: said in the transcript, as the person would otherwise see nothing of it.
             "system" if matches!(s(d, "subtype"), "task_started" | "task_notification") && d.get("ambient").and_then(Value::as_bool) != Some(true) => {
                 let line = |key: &str| first_line(s(d, key)).chars().filter(|c| !c.is_control()).take(160).collect::<String>();
+                // The summary says how it ended; with none, the description says which job it was.
+                let said = |key: &str| if line(key).trim().is_empty() { line("description") } else { line(key) };
                 if s(d, "subtype") == "task_started" {
                     if d.get("is_backgrounded").and_then(Value::as_bool) == Some(true) {
                         self.note(fill(&self.t("bg_started"), &[("what", line("description"))]), "note");
@@ -992,7 +1004,10 @@ impl Transcript {
                         "stopped" => "bg_stopped",
                         _ => "bg_done",
                     };
-                    self.note(fill(&self.t(key), &[("what", line("summary"))]), "note");
+                    let what = said("summary");
+                    if !what.trim().is_empty() {
+                        self.note(fill(&self.t(key), &[("what", what)]), "note");
+                    }
                 }
             }
             // The CLI is trying the endpoint again after an error: said in the transcript, as the person would otherwise see nothing happen.
@@ -1011,8 +1026,6 @@ impl Transcript {
                 self.note(text, "note-warn");
             }
             "system" if s(d, "subtype") == "init" => {
-                // A new process starts with nothing in the background.
-                self.head.bg_tasks.clear();
                 if let Some(model) = d.get("model").and_then(Value::as_str) {
                     self.head.model = Some(model.to_owned());
                 }
@@ -2252,10 +2265,15 @@ mod plain_text_tests {
         assert!(t.head.bg_tasks.is_empty());
         let texts: Vec<String> = t.rows().into_iter().filter(|r| r.kind == "note").map(|r| r.text).collect();
         assert!(texts.iter().any(|x| x.contains("make finished: 3 passed") && !x.contains("more")), "{texts:?}");
-        // A new process begins with nothing in the background.
+        // A system/init does not clear it (the program may say it every turn); the process ending, or its restart, does.
         t.apply("claude", &json!({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "b", "task_type": "local_bash", "description": "x"}]}), 5);
         t.apply("claude", &json!({"type": "system", "subtype": "init", "model": "m"}), 6);
-        assert!(t.head.bg_tasks.is_empty());
+        assert_eq!(t.head.bg_tasks.len(), 1);
+        // A job with no description is named by its kind; a notification with nothing to say says which job it was.
+        t.apply("claude", &json!({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "z", "task_type": "local_agent"}]}), 6);
+        assert_eq!(t.head.bg_tasks, ["local_agent"]);
+        t.apply("claude", &json!({"type": "system", "subtype": "task_notification", "status": "completed", "summary": "", "description": "the big build"}), 6);
+        assert!(t.rows().iter().any(|r| r.kind == "note" && r.text.contains("the big build")));
         // And when the process ends.
         t.apply("claude", &json!({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "c", "task_type": "local_bash", "description": "y"}]}), 7);
         t.apply("state", &json!({"state": "exited", "code": 0}), 8);

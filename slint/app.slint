@@ -513,11 +513,11 @@ export component AppWindow inherits Window {
                             }
                         }
                         // This chat's own team mode (see the Team page): on or off, and with it on the two helpers' models.
-                        if Team.wb-ready && root.hw >= 800px: VerticalLayout {
+                        if Team.wb-ready && Team.nt-applies && root.hw >= 1300px: VerticalLayout {
                             alignment: center;
                             Pill {
                                 clickable: true; clicked => { root.new-open = false; root.side = 6; }
-                                text: T.tr("team_chip") + " " + (Team.nt-on ? "ON" : "OFF") + (Team.nt-on && root.hw >= 1400px ? " · " + Team.nt-line : "");
+                                text: T.tr("team_chip") + " " + (Team.nt-on ? "ON" : "OFF") + (Team.nt-on && root.hw >= 1650px ? " · " + Team.nt-line : "");
                                 fg: Team.nt-on ? Theme.primary-soft : Theme.outline;
                                 fill: Team.nt-on ? Theme.primary.with-alpha(0.15) : transparent;
                             }
