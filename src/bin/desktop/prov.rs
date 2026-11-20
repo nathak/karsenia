@@ -135,7 +135,7 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         p.set_edit_id(id);
         p.set_f_name(text(&one["name"]));
         p.set_f_url(text(&one["base_url"]));
-        p.set_f_auth(if one["auth"] == "x_api_key" { 1 } else { 0 });
+        p.set_f_auth(match one["auth"].as_str() { Some("x_api_key") => 1, Some("headers") => 2, _ => 0 });
         // The key is never sent back: the field starts empty and an empty field keeps the saved key.
         p.set_f_key(SharedString::new());
         p.set_f_clear(false);

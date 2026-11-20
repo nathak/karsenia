@@ -164,6 +164,8 @@ enum Cmd {
     ProposalInput { since: u64, reply: oneshot::Sender<ProposalInput> },
     Subscribe { after: u64, reply: oneshot::Sender<(Vec<Envelope>, broadcast::Receiver<Envelope>)> },
     Info { reply: oneshot::Sender<Info> },
+    /// The end of the CLI's own debug log of this chat (see `Settings::debug_api`), with the provider key replaced.
+    DebugLog { reply: oneshot::Sender<Option<String>> },
     /// Before a chat of an extra account starts its process: what is needed to ask the program whether the account is logged in.
     Preflight { reply: oneshot::Sender<Result<Option<Login>, String>> },
     /// About to remove this chat's worktree: refused while a turn runs; otherwise the process ends and nothing more is sent.
@@ -291,6 +293,11 @@ impl SessionHandle {
 
     pub async fn info(&self) -> Option<Info> {
         ask(&self.tx, |reply| Cmd::Info { reply }).await
+    }
+
+    /// The end of the CLI's debug log of this chat, when it writes one (None: it does not, or nothing was written).
+    pub async fn debug_log(&self) -> Option<String> {
+        ask(&self.tx, |reply| Cmd::DebugLog { reply }).await.flatten()
     }
 
     /// Ends the process and stops new messages so the worktree can be removed; Err("busy") while a turn runs.
@@ -440,6 +447,34 @@ impl Actor {
             Some(secret) => redact(data, secret),
             None => data,
         }
+    }
+
+    fn debug_path(&self) -> PathBuf {
+        self.dir.join("run").join(format!("{}.debug.log", self.meta.sid))
+    }
+
+    /// The file the CLI is to write its debug log to, when the person turned that on: made empty here, so a log is always of one process.
+    /// Not for a container chat (the path is on this side of it).
+    fn debug_file(&self) -> Option<PathBuf> {
+        if self.meta.container || !self.settings.as_ref().is_some_and(|s| s.get().debug_api) {
+            return None;
+        }
+        let path = self.debug_path();
+        crate::private::create_dir(&self.dir.join("run")).ok()?;
+        crate::private::write(&path, "").ok()?;
+        Some(path)
+    }
+
+    /// The last part of the debug log (whole lines), with the provider key replaced; None when there is no log.
+    fn debug_tail(&self) -> Option<String> {
+        const KEEP: usize = 256 * 1024;
+        let bytes = std::fs::read(self.debug_path()).ok()?;
+        let cut = bytes.len().saturating_sub(KEEP);
+        let text = String::from_utf8_lossy(&bytes[cut..]).into_owned();
+        // A cut in the middle of a line leaves half of it: that line goes.
+        let text = if cut > 0 { text.split_once('\n').map(|(_, rest)| rest.to_owned()).unwrap_or_default() } else { text };
+        let scrubbed = self.scrub(Value::String(text));
+        scrubbed.as_str().map(str::to_owned).filter(|t| !t.is_empty())
     }
 
     /// The provider this chat is bound to, as it is now: Err when it was deleted or its address changed (the chat was made for
@@ -687,6 +722,9 @@ impl Actor {
             Cmd::Info { reply } => {
                 let _ = reply.send(self.info());
             }
+            Cmd::DebugLog { reply } => {
+                let _ = reply.send(self.debug_tail());
+            }
             Cmd::Preflight { reply } => {
                 let answer = if self.process.is_some() {
                     Ok(None)
@@ -824,7 +862,8 @@ impl Actor {
             };
             // The Stop hook goes where the guard hook goes (it does nothing unless the person turned the gate on in the workbench).
             let stop_hook = if guard_hook.is_some() { self.mcp.as_ref().and_then(|gate| crate::workbench::stop_command(&gate.exe, &self.dir, &self.meta.sid).ok()) } else { None };
-            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.cli_name(), plugins_off: self.workbench_native(), guard_hook, stop_hook };
+            let debug_file = self.debug_file();
+            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.cli_name(), plugins_off: self.workbench_native(), guard_hook, stop_hook, debug_file };
             match ClaudeProcess::spawn(&opts) {
                 Ok((process, rx)) => {
                     self.process = Some(process);

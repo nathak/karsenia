@@ -57,6 +57,10 @@ pub struct Settings {
     /// The app's own workbench (contract, pins, guard) does the SmartWorkbench plug-in's work: the plug-in is switched off in the app's chats.
     #[serde(default)]
     pub workbench_native: bool,
+    /// Chats started from now on write the CLI's own debug log (`--debug-file`, in the run folder, `0600`), which the debug view shows the end of.
+    /// Off by default: it holds what the CLI says about every call, and grows while the chat runs.
+    #[serde(default)]
+    pub debug_api: bool,
 }
 
 pub struct SettingsStore {

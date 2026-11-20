@@ -3,6 +3,7 @@
 pub mod i18n;
 pub mod markdown;
 pub mod attach;
+pub mod debug;
 pub mod files;
 pub mod git;
 pub mod highlight;

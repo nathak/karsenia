@@ -330,7 +330,7 @@ export global Prov {
     in-out property <string> edit-id;
     in-out property <string> f-name;
     in-out property <string> f-url;
-    // 0 bearer, 1 x-api-key.
+    // 0 bearer, 1 x-api-key, 2 headers only (the key goes only where the header lines say {key}).
     in-out property <int> f-auth;
     in-out property <string> f-key;
     in-out property <bool> f-clear;
@@ -648,7 +648,7 @@ export component ProvidersCard inherits Card {
                 Field { label: T.tr("pv_url"); LineEdit { text <=> Prov.f-url; placeholder-text: "https://"; } }
                 Field {
                     label: T.tr("pv_auth");
-                    HorizontalLayout { alignment: start; Segment { items: ["Bearer", "x-api-key"]; current: Prov.f-auth; chosen(i) => { Prov.f-auth = i; } } }
+                    HorizontalLayout { alignment: start; Segment { items: ["Bearer", "x-api-key", T.tr("pv_auth_headers")]; current: Prov.f-auth; chosen(i) => { Prov.f-auth = i; } } }
                 }
                 Field { label: T.tr("pv_key"); LineEdit { text <=> Prov.f-key; input-type: InputType.password; } }
                 WText { text: Prov.f-has-key ? T.tr("pv_key_keep") : T.tr("pv_key_none"); fg: Theme.outline; size: 11px; }

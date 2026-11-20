@@ -352,7 +352,7 @@ pub struct ProvForm<'a> {
     pub id: Option<&'a str>,
     pub name: &'a str,
     pub url: &'a str,
-    /// 0 bearer, 1 x-api-key.
+    /// 0 bearer, 1 x-api-key, 2 headers only.
     pub auth: i32,
     pub key: &'a str,
     pub clear: bool,
@@ -366,7 +366,7 @@ pub struct ProvForm<'a> {
 /// provider.
 pub fn prov_op(f: &ProvForm) -> Value {
     let mut op = json!({
-        "op": "provider_save", "name": f.name.trim(), "base_url": f.url.trim(), "auth": if f.auth == 1 { "x_api_key" } else { "bearer" },
+        "op": "provider_save", "name": f.name.trim(), "base_url": f.url.trim(), "auth": match f.auth { 1 => "x_api_key", 2 => "headers", _ => "bearer" },
         "model": f.model.trim(), "models": {"opus": f.aliases[0].trim(), "sonnet": f.aliases[1].trim(), "haiku": f.aliases[2].trim()},
         "headers": f.headers.trim(),
     });

@@ -710,6 +710,47 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
             show_plain(&ui, &a, on);
         }
     });
+    // The debug view: how the chat's claude was last started and what happened since.
+    let (a, weak) = (app.clone(), ui.as_weak());
+    ui.on_debug_view_set(move |on| {
+        if let Some(ui) = weak.upgrade() {
+            if on {
+                ui.set_debug_api(a.registry.settings().get().debug_api);
+                show_debug(&a);
+            } else {
+                ui.set_debug_text(SharedString::new());
+            }
+        }
+    });
+    let a = app.clone();
+    ui.on_debug_refresh(move || show_debug(&a));
+    let (a, weak) = (app.clone(), ui.as_weak());
+    ui.on_debug_copy(move || {
+        if let Some(ui) = weak.upgrade() {
+            copy_text(&a, ui.get_debug_text().to_string());
+        }
+    });
+    let (a, weak) = (app.clone(), ui.as_weak());
+    ui.on_debug_api_set(move |on| {
+        a.registry.settings().update(|s| s.debug_api = on);
+        if let Some(ui) = weak.upgrade() {
+            ui.set_debug_api(on);
+        }
+        show_debug(&a);
+    });
+    let (a, weak) = (app.clone(), ui.as_weak());
+    ui.on_debug_restart(move || {
+        let (a, weak) = (a.clone(), weak.clone());
+        tokio::spawn(async move {
+            let sid = a.current.lock().expect("current").sid.clone();
+            let Some(handle) = sid.and_then(|sid| a.registry.get(&sid)) else { return };
+            let message = match handle.prepare().await {
+                Ok(()) => tr(a.lang, "dbg_restart_ok"),
+                Err(why) => why,
+            };
+            let _ = weak.upgrade_in_event_loop(move |ui| toast(&ui, message));
+        });
+    });
     let (a, weak) = (app.clone(), ui.as_weak());
     ui.on_refresh_plain(move || {
         if let Some(ui) = weak.upgrade() {
@@ -1080,6 +1121,45 @@ async fn follow(app: Arc<App>, sid: String, epoch: u64) {
 }
 
 /// Puts the chat as text on the text view (or takes it off): a snapshot, taken now, of the chat's text as it is copied.
+/// Makes the debug text of the open chat (its events, how its claude was started, the end of the CLI's own log) and puts it on screen.
+fn show_debug(app: &Arc<App>) {
+    let app = app.clone();
+    tokio::spawn(async move {
+        let sid = app.current.lock().expect("current").sid.clone();
+        let Some(sid) = sid else { return };
+        let Some(handle) = app.registry.get(&sid) else { return };
+        let Some((events, _)) = handle.subscribe(0).await else { return };
+        let log = handle.debug_log().await;
+        let info = handle.info().await;
+        let head = tenrec::view::debug::DebugHead {
+            sid: sid.clone(),
+            state: info
+                .as_ref()
+                .map(|i| match i.state {
+                    tenrec::session::State::Idle => "idle".to_owned(),
+                    tenrec::session::State::Running => "running".to_owned(),
+                    tenrec::session::State::Exited { code } => format!("exited (code {})", code.map_or("none".to_owned(), |c| c.to_string())),
+                })
+                .unwrap_or_default(),
+            model: info.as_ref().and_then(|i| i.meta.model.clone()),
+            endpoint: info.as_ref().map(|i| match (&i.meta.provider, &i.meta.account) {
+                (Some(p), _) => format!("→ {}", p.host),
+                (None, Some(a)) => a.name.clone(),
+                _ => String::new(),
+            }).unwrap_or_default(),
+            api_log: app.registry.settings().get().debug_api,
+        };
+        let text = tenrec::view::debug::debug_text(&head, &events, log.as_deref(), app.lang);
+        let _ = app.weak.upgrade_in_event_loop(move |ui| {
+            // Only while the view is open, and for the chat it was made for.
+            if ui.get_debug_view() {
+                ui.set_debug_text(text.into());
+                ui.set_debug_gen(ui.get_debug_gen().wrapping_add(1));
+            }
+        });
+    });
+}
+
 fn show_plain(ui: &AppWindow, app: &Arc<App>, on: bool) {
     if !on {
         PLAIN.with(|p| p.borrow_mut().clear());

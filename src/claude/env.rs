@@ -62,6 +62,8 @@ pub fn plan(inherited: &[String], provider: Option<&Provider>, config_dir: &Path
     match provider.auth {
         Auth::Bearer => set.push(("ANTHROPIC_AUTH_TOKEN".into(), provider.token.clone().unwrap_or_else(|| PLACEHOLDER_TOKEN.into()))),
         Auth::XApiKey => set.push(("ANTHROPIC_API_KEY".into(), provider.token.clone().unwrap_or_else(|| PLACEHOLDER_TOKEN.into()))),
+        // The key goes in the header lines only; the CLI still needs some credential of its own, so it gets the placeholder.
+        Auth::Headers => set.push(("ANTHROPIC_AUTH_TOKEN".into(), PLACEHOLDER_TOKEN.into())),
     }
     // A gateway that wants its key in a header of its own: the lines of the provider, with the key where it says `{key}`.
     if let Some(headers) = provider.custom_headers() {
@@ -254,5 +256,17 @@ mod tests {
         assert_eq!(get("ANTHROPIC_AUTH_TOKEN"), Some("(set, 13 characters)"));
         assert_eq!(get("ANTHROPIC_CUSTOM_HEADERS"), Some("(set: AIR-Api-Key: ***, AIR-Coding-Agent-Mode: ***)"));
         assert_eq!(get("CLAUDE_CONFIG_DIR"), Some("/cfg"));
+    }
+
+    #[test]
+    fn in_headers_only_mode_the_key_is_in_the_header_lines_and_authorization_gets_the_placeholder() {
+        let mut p = provider(Auth::Headers, Some("airkey-123456"));
+        p.headers = Some("AIR-Api-Key: {key}".into());
+        let plan = plan(&[], Some(&p), Path::new("/cfg"));
+        assert_eq!(value(&plan, "ANTHROPIC_CUSTOM_HEADERS"), Some("AIR-Api-Key: airkey-123456"));
+        assert_eq!(value(&plan, "ANTHROPIC_AUTH_TOKEN"), Some(PLACEHOLDER_TOKEN), "not the key");
+        assert_eq!(value(&plan, "ANTHROPIC_API_KEY"), None);
+        let all = format!("{:?}", plan.set.iter().filter(|(k, _)| k != "ANTHROPIC_CUSTOM_HEADERS").collect::<Vec<_>>());
+        assert!(!all.contains("airkey-123456"), "the key is in no other variable: {all}");
     }
 }

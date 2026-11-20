@@ -21,6 +21,9 @@ pub enum Auth {
     Bearer,
     /// `x-api-key: <token>` (ANTHROPIC_API_KEY): an Anthropic-style API key.
     XApiKey,
+    /// The key is sent only where the provider's header lines say `{key}`: `Authorization` carries a placeholder, not the key (a gateway
+    /// that takes its key in a header of its own and may refuse an `Authorization` it does not know).
+    Headers,
 }
 
 impl Auth {
@@ -28,6 +31,7 @@ impl Auth {
         match text {
             "bearer" => Some(Self::Bearer),
             "x_api_key" => Some(Self::XApiKey),
+            "headers" => Some(Self::Headers),
             _ => None,
         }
     }

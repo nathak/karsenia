@@ -192,6 +192,18 @@ export component AppWindow inherits Window {
     // Bumped when the snapshot is made again: the view goes to its end.
     in property <int> plain-gen: 0;
     callback text-view-set(bool);
+    // The debug view (the header's "Debug"): how the chat's claude was started and what happened since, as one selectable text.
+    in-out property <bool> debug-view: false;
+    in property <string> debug-text;
+    // Whether chats started from now on write the CLI's own debug log.
+    in property <bool> debug-api;
+    // Bumped when the text is made again: the view goes to its end.
+    in property <int> debug-gen: 0;
+    callback debug-view-set(bool);
+    callback debug-refresh();
+    callback debug-copy();
+    callback debug-api-set(bool);
+    callback debug-restart();
     callback copy-all();
     callback refresh-plain();
     callback copy-msg(string);
@@ -217,9 +229,10 @@ export component AppWindow inherits Window {
     // The composer only while it is on screen: a panel or the new-chat page covers it, and typing there must not send.
     public function focus-composer() { Pal.open = false; if (root.side == 0 && !root.new-open) { composer.focus(); } else { keys.focus(); } }
     // Gives the zoom keys a focused element again after something that held focus went away.
-    public function refocus() { Pal.open = false; if (root.has-chat && root.side == 0 && !root.new-open && !root.text-view) { composer.focus(); } else { keys.focus(); } }
+    public function refocus() { Pal.open = false; if (root.has-chat && root.side == 0 && !root.new-open && !root.text-view && !root.debug-view) { composer.focus(); } else { keys.focus(); } }
     // The text view's field held the keyboard focus and is gone when it closes: the composer (or the key scope) takes it back.
     changed text-view => { if (!root.text-view && !root.perm.visible && !Dialog.visible) { root.refocus(); } }
+    changed debug-view => { if (!root.debug-view && !root.perm.visible && !Dialog.visible) { root.refocus(); } }
     changed new-open => { if (root.new-open) { root.panel-open(100); } else { root.new-perm = 0; root.new-name = ""; root.refocus(); } }
     // A panel that goes away takes focus with it.
     changed side => { Team.open = false; Usage.open = false; Know.adding = false; root.panel-open(root.side); root.refocus(); }
@@ -231,6 +244,7 @@ export component AppWindow inherits Window {
         focus-on-tab-navigation: false;
         init => { self.focus(); }
         capture-key-pressed(event) => {
+            if (event.text == Key.Escape && root.debug-view && root.side == 0 && !root.new-open && !root.zoom-open && !root.perm.visible && !Dialog.visible && !Pal.open && !(Team.open || Usage.open || root.cont-open)) { root.debug-view = false; root.debug-view-set(false); return accept; }
             if (event.text == Key.Escape && root.text-view && root.side == 0 && !root.new-open && !root.zoom-open && !root.perm.visible && !Dialog.visible && !Pal.open && !(Team.open || Usage.open || root.cont-open)) { root.text-view = false; root.text-view-set(false); return accept; }
             if (event.text == Key.Escape && root.zoom-open && !root.perm.visible && !Dialog.visible) { root.zoom-close(); return accept; }
             if (event.text == Key.Escape && root.swb-shown && !root.swb-docked && !(Team.open || Usage.open) && !root.perm.visible && !Dialog.visible && !Pal.open) { Team.panel = false; return accept; }
@@ -468,7 +482,8 @@ export component AppWindow inherits Window {
                         if root.renaming: VerticalLayout { horizontal-stretch: 1; alignment: center; LineEdit { text <=> root.rename-text; font-size: 14px; accepted(t) => { root.renaming = false; root.rename-chat(t); } } }
                         if root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename_ok"); height: 28px; primary: true; clicked => { root.renaming = false; root.rename-chat(root.rename-text); } } }
                         if !root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename"); height: 28px; clicked => { root.rename-text = root.chat-title; root.renaming = true; } } }
-                        VerticalLayout { alignment: center; Btn { text: T.tr("text_view"); height: 28px; primary: root.text-view; clicked => { root.text-view = !root.text-view; root.text-view-set(root.text-view); } } }
+                        VerticalLayout { alignment: center; Btn { text: T.tr("text_view"); height: 28px; primary: root.text-view; clicked => { root.text-view = !root.text-view; if (root.text-view && root.debug-view) { root.debug-view = false; root.debug-view-set(false); } root.text-view-set(root.text-view); } } }
+                        if root.hw >= 1100px: VerticalLayout { alignment: center; Btn { text: T.tr("dbg_btn"); height: 28px; primary: root.debug-view; clicked => { root.debug-view = !root.debug-view; if (root.debug-view && root.text-view) { root.text-view = false; root.text-view-set(false); } root.debug-view-set(root.debug-view); } } }
                         if root.hw >= 900px: VerticalLayout { alignment: center; Btn { text: T.tr("copy_all"); height: 28px; clicked => { root.copy-all(); } } }
                         if root.hw >= 1000px && Acct.names.length > 1: VerticalLayout { alignment: center; Btn { text: T.tr("cont_btn"); height: 28px; enabled: root.state != "running"; clicked => { root.cont-open = !root.cont-open; } } }
                         VerticalLayout { alignment: center; Btn { text: T.tr("chat_delete"); height: 28px; danger: true; enabled: root.state != "running"; clicked => { root.renaming = false; root.delete-chat(); } } }
@@ -549,8 +564,36 @@ export component AppWindow inherits Window {
                             st := SelText { x: root.gutter; y: 12px; width: parent.width - 2 * root.gutter; text: root.chat-plain; size: 14px; init => { self.grab(); } }
                         }
                     }
+                    // The debug view: how the chat's claude was last started and what happened since (a snapshot, made when it is opened or refreshed).
+                    if root.has-chat && root.debug-view: VerticalLayout {
+                        Rectangle {
+                            height: dstrip.preferred-height + 8px;
+                            dstrip := VerticalLayout {
+                                padding-left: root.gutter; padding-right: root.gutter; padding-top: 6px; spacing: 6px;
+                                WText { text: T.tr("dbg_hint"); size: 12px; fg: Theme.outline; }
+                                HorizontalLayout {
+                                    spacing: 8px; alignment: start;
+                                    Btn { text: T.tr("dbg_refresh"); height: 26px; clicked => { root.debug-refresh(); } }
+                                    Btn { text: T.tr("dbg_copy"); height: 26px; clicked => { root.debug-copy(); } }
+                                    Btn { text: (root.debug-api ? "☑ " : "☐ ") + T.tr("dbg_api_toggle"); height: 26px; clicked => { root.debug-api-set(!root.debug-api); } }
+                                    Btn { text: T.tr("dbg_restart"); height: 26px; enabled: root.state != "running"; clicked => { root.debug-restart(); } }
+                                }
+                            }
+                        }
+                        Timer {
+                            interval: 1ms;
+                            running: dpf.seen-gen != root.debug-gen;
+                            triggered => { dpf.content-y = min(0px, dpf.height - dpf.content-height); dpf.seen-gen = root.debug-gen; }
+                        }
+                        dpf := Flickable {
+                            vertical-stretch: 1;
+                            property <int> seen-gen: -1;
+                            content-height: max(self.height, dst.height + 24px);
+                            dst := SelText { x: root.gutter; y: 12px; width: parent.width - 2 * root.gutter; text: root.debug-text; size: 12px; mono: true; init => { self.grab(); } }
+                        }
+                    }
                     list := ListView {
-                        visible: root.has-chat && !root.text-view;
+                        visible: root.has-chat && !root.text-view && !root.debug-view;
                         for row in root.rows: Rectangle {
                             height: rv.preferred-height + (row.kind == "day" ? 18px : 0px);
                             rv := RowView {
