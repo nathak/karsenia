@@ -584,8 +584,15 @@ impl Actor {
     fn settle_restored(&mut self) {
         let mut open: Vec<String> = Vec::new();
         let mut last_state: Option<String> = None;
+        // Whether the program last said something was running in the background.
+        let mut background = false;
         for e in &self.log {
             match e.kind.as_str() {
+                "claude" => match e.data["subtype"].as_str() {
+                    Some("background_tasks_changed") => background = e.data["tasks"].as_array().is_some_and(|t| !t.is_empty()),
+                    Some("init") => background = false,
+                    _ => {}
+                },
                 "permission" => {
                     if let Some(id) = e.data["request_id"].as_str() {
                         open.push(id.to_owned());
@@ -605,6 +612,10 @@ impl Actor {
         }
         if last_state.as_deref() == Some("running") {
             self.set_state(State::Idle);
+        }
+        // The process that ran those jobs is gone with the app: the chat must not show that it waits for them.
+        if background {
+            self.emit("claude", json!({"type": "system", "subtype": "background_tasks_changed", "tasks": []}));
         }
     }
 

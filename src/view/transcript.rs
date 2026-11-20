@@ -777,7 +777,13 @@ impl Transcript {
                     self.note(text, "note");
                 }
             }
-            "state" => self.head.state = s(data, "state").to_owned(),
+            "state" => {
+                self.head.state = s(data, "state").to_owned();
+                // The process ended: what it ran in the background went with it.
+                if self.head.state == "exited" {
+                    self.head.bg_tasks.clear();
+                }
+            }
             // The chat's gateway was switched on (a provider that uses an account's login) or off, between turns.
             "provider" => {
                 let text = match data["provider"]["name"].as_str() {
@@ -2249,6 +2255,10 @@ mod plain_text_tests {
         // A new process begins with nothing in the background.
         t.apply("claude", &json!({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "b", "task_type": "local_bash", "description": "x"}]}), 5);
         t.apply("claude", &json!({"type": "system", "subtype": "init", "model": "m"}), 6);
+        assert!(t.head.bg_tasks.is_empty());
+        // And when the process ends.
+        t.apply("claude", &json!({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "c", "task_type": "local_bash", "description": "y"}]}), 7);
+        t.apply("state", &json!({"state": "exited", "code": 0}), 8);
         assert!(t.head.bg_tasks.is_empty());
     }
 
