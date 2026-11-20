@@ -601,10 +601,13 @@ export component AppWindow inherits Window {
                     }
                     list := ListView {
                         visible: root.has-chat && !root.text-view && !root.debug-view;
+                        // The rows are laid out in the width of the window, never wider: a row whose content wants more (an unbroken line) must not make
+                        // the whole list wider than the window, which shifts the column away from the middle.
+                        content-width: self.visible-width;
                         for row in root.rows: Rectangle {
                             height: rv.preferred-height + (row.kind == "day" ? 18px : 0px);
                             rv := RowView {
-                                x: root.gutter; y: row.kind == "day" ? 18px : 0px; width: parent.width - 2 * root.gutter;
+                                x: root.gutter; y: row.kind == "day" ? 18px : 0px; width: list.visible-width - 2 * root.gutter;
                                 r: row; copy-msg(k) => { root.copy-msg(k); } toggle(k) => { root.toggle(k); } copy(t) => { root.copy(t); } link(u) => { root.link(u); } open-image(id, i) => { root.open-image(id, i); }
                             }
                         }
