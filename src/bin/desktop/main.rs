@@ -1530,7 +1530,21 @@ type Listed = (SessionItem, Option<(String, String, String, String)>, Mark);
 async fn refresh_sessions(app: &Arc<App>) {
     let list = app.registry.list().await;
     let current = app.current.lock().expect("current").sid.clone();
-    notify::check(&app.data, app.lang, &list.iter().map(|i| (i.meta.sid.clone(), i.pending as u32)).collect::<Vec<_>>(), current.as_deref());
+    let watched: Vec<tenrec::view::notify::Chat> = list
+        .iter()
+        .map(|i| tenrec::view::notify::Chat {
+            sid: i.meta.sid.clone(),
+            pending: i.pending as u32,
+            phase: match &i.state {
+                tenrec::session::State::Running => tenrec::view::notify::Phase::Running,
+                tenrec::session::State::Idle => tenrec::view::notify::Phase::Idle,
+                // A program that ended with a code other than 0 stopped on its own; no code is a signal (the app ending it).
+                tenrec::session::State::Exited { code: Some(c) } if *c != 0 => tenrec::view::notify::Phase::Crashed,
+                tenrec::session::State::Exited { .. } => tenrec::view::notify::Phase::Other,
+            },
+        })
+        .collect();
+    notify::check(&app.data, app.lang, &watched, current.as_deref());
     let active = list.iter().find(|i| current.as_deref() == Some(i.meta.sid.as_str()));
     *app.cwd.lock().expect("cwd") = active.map(|i| i.meta.cwd.to_string_lossy().into_owned());
     let chat_acct = active.and_then(|i| i.meta.account.as_ref().map(|a| a.id.clone()));

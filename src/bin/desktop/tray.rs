@@ -44,8 +44,8 @@ enum Ev {
 #[cfg_attr(not(windows), allow(dead_code))]
 fn event(lparam: isize) -> Option<Ev> {
     match (lparam & 0xFFFF) as u32 {
-        // NIN_SELECT, NIN_KEYSELECT, WM_LBUTTONDBLCLK
-        0x400 | 0x401 | 0x203 => Some(Ev::Select),
+        // NIN_SELECT, NIN_KEYSELECT, WM_LBUTTONDBLCLK, and a click on a notice (NIN_BALLOONUSERCLICK)
+        0x400 | 0x401 | 0x203 | 0x405 => Some(Ev::Select),
         // WM_CONTEXTMENU
         0x7B => Some(Ev::Menu),
         _ => None,
@@ -76,6 +76,17 @@ pub fn signal_running(_data: &Path) -> bool {
     false
 }
 
+/// A notice from the notification area (Windows), with a fixed text: not on other systems (they have their own way, see `notify`).
+#[cfg(not(windows))]
+#[allow(dead_code)]
+pub fn notify(_title: &str, _body: &str) {}
+
+/// Whether one of this app's windows is the one in front (always true where it cannot be told: a chat on screen is then taken as seen).
+#[cfg(not(windows))]
+pub fn app_in_front() -> bool {
+    true
+}
+
 #[cfg(not(windows))]
 pub fn raise(ui: &AppWindow) {
     let _ = slint::ComponentHandle::show(ui);
@@ -83,7 +94,7 @@ pub fn raise(ui: &AppWindow) {
 
 #[cfg(windows)]
 #[allow(unused_imports)] // `Tray` is only held, never named
-pub use imp::{present, raise, signal_running, start, Tray};
+pub use imp::{app_in_front, notify, present, raise, signal_running, start, Tray};
 
 #[cfg(windows)]
 mod imp {
@@ -91,15 +102,16 @@ mod imp {
     use std::ffi::c_void;
     use std::path::Path;
     use std::ptr::{null, null_mut};
-    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
+    use std::sync::{mpsc, Mutex};
     use std::time::Duration;
 
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows_sys::Win32::UI::Shell::{Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICON_VERSION_4};
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::Shell::{Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIIF_INFO, NIF_INFO, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICON_VERSION_4};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        AllowSetForegroundWindow, AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW, GetMessageW, GetSystemMetrics, GetWindowThreadProcessId, IsIconic,
+        AllowSetForegroundWindow, AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW, GetForegroundWindow, GetMessageW, GetSystemMetrics, GetWindowThreadProcessId, IsIconic,
         LoadIconW, LoadImageW, PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SetForegroundWindow, SetMenuDefaultItem, ShowWindow, TrackPopupMenuEx, TranslateMessage, HICON, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR, MF_SEPARATOR,
         MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON, SM_MENUDROPALIGNMENT, SW_RESTORE, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_DESTROY, WM_ENDSESSION, WM_NULL, WM_QUERYENDSESSION, WNDCLASSEXW,
         WS_EX_TOOLWINDOW, WS_OVERLAPPED,
@@ -112,6 +124,7 @@ mod imp {
     const WM_TRAY: u32 = WM_APP + 1;
     const WM_TRAY_SHOW: u32 = WM_APP + 2;
     const WM_TRAY_EXIT: u32 = WM_APP + 3;
+    const WM_TRAY_NOTIFY: u32 = WM_APP + 4;
     const CLASS: &str = "TenrecTray";
     const ICON_ID: u32 = 1;
     const MENU_OPEN: usize = 1;
@@ -123,6 +136,9 @@ mod imp {
     static PRESENT: AtomicBool = AtomicBool::new(false);
     /// The message Explorer sends when its taskbar is made again (it was restarted): the icon is added again.
     static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+    /// The icon's window (0 when there is none), and the notice waiting to be shown on its thread.
+    static ICON_WINDOW: AtomicIsize = AtomicIsize::new(0);
+    static NOTICE: Mutex<Option<(String, String)>> = Mutex::new(None);
 
     struct State {
         on_cmd: Box<dyn Fn(TrayCmd) + Send>,
@@ -152,6 +168,7 @@ mod imp {
     impl Drop for Tray {
         fn drop(&mut self) {
             PRESENT.store(false, Ordering::SeqCst);
+            ICON_WINDOW.store(0, Ordering::SeqCst);
             let hwnd = self.hwnd as HWND;
             delete_icon(hwnd);
             // The thread ends on its own; it is not waited for (it may be inside a menu).
@@ -162,6 +179,48 @@ mod imp {
 
     pub fn present() -> bool {
         PRESENT.load(Ordering::SeqCst)
+    }
+
+    /// Whether a window of this process is the one in front.
+    pub fn app_in_front() -> bool {
+        // SAFETY: plain queries; the handle is checked before it is used.
+        unsafe {
+            let front = GetForegroundWindow();
+            if front.is_null() {
+                return false;
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(front, &mut pid);
+            pid == GetCurrentProcessId()
+        }
+    }
+
+    /// A notice from the icon (a balloon, which Windows shows as a toast), with the text it is given. Nothing when there is no icon.
+    /// It is made on the icon's thread (the message is posted to its window), so any thread may ask.
+    pub fn notify(title: &str, body: &str) {
+        let hwnd = ICON_WINDOW.load(Ordering::SeqCst);
+        if hwnd == 0 || !present() {
+            return;
+        }
+        *NOTICE.lock().unwrap_or_else(|e| e.into_inner()) = Some((title.to_owned(), body.to_owned()));
+        // SAFETY: a message may be posted to the window of another thread.
+        unsafe { PostMessageW(hwnd as HWND, WM_TRAY_NOTIFY, 0, 0) };
+    }
+
+    /// Shows the notice that waits: the icon's own balloon (title up to 63 and text up to 255 UTF-16 units).
+    fn show_notice(hwnd: HWND) {
+        let Some((title, body)) = NOTICE.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+        let mut data = base(hwnd);
+        data.uFlags = NIF_INFO;
+        data.dwInfoFlags = NIIF_INFO;
+        for (slot, unit) in data.szInfoTitle.iter_mut().zip(title.encode_utf16().take(63)) {
+            *slot = unit;
+        }
+        for (slot, unit) in data.szInfo.iter_mut().zip(body.encode_utf16().take(255)) {
+            *slot = unit;
+        }
+        // SAFETY: `data` is a filled structure of the size it says; the icon belongs to this thread's window.
+        unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
     }
 
     /// Starts the icon. `None` when its window could not be made in time: the app then closes as it did before.
@@ -264,6 +323,7 @@ mod imp {
                 DestroyWindow(hwnd);
                 return;
             }
+            ICON_WINDOW.store(hwnd as isize, Ordering::SeqCst);
             // Until the icon is on the screen a close ends the app (`present` is false).
             PRESENT.store(add_icon(hwnd), Ordering::SeqCst);
             let mut msg: MSG = std::mem::zeroed();
@@ -311,6 +371,10 @@ mod imp {
                 if wparam != 0 {
                     send(TrayCmd::EndSession);
                 }
+                0
+            }
+            WM_TRAY_NOTIFY => {
+                show_notice(hwnd);
                 0
             }
             m if m != 0 && m == TASKBAR_CREATED.load(Ordering::SeqCst) => {

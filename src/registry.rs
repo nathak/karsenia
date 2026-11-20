@@ -29,6 +29,7 @@ pub fn clean_model(name: &str) -> Option<String> {
 /// What a permission mode may be combined with, as the key of the sentence that says why not (None: allowed). Every mode may be used
 /// in every kind of chat, a provider chat included (the person chose that provider, and skipping the checks is asked about first).
 /// Only Claude Code's own refusal is repeated here: it will not skip permission checks as root, so it is refused before a chat is made.
+#[cfg_attr(not(unix), allow(unused_variables))]
 pub fn mode_refusal(mode: PermMode, _provider: bool, _container: bool) -> Option<&'static str> {
     #[cfg(unix)]
     {
