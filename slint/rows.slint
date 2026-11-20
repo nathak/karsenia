@@ -2,11 +2,15 @@
 import { Theme, T, Pill, Rich, SelText, WText, IconBtn } from "base.slint";
 
 export struct TRow { cells: [string], head: bool }
+// One line of an edit's diff: kind is " " (context), "+", "-", "@" (a gap between hunks) or "…" (lines left out); no is the line number (0: none).
+export struct DLine { kind: string, no: int, text: string }
 export struct ChatImg { thumb: image, label: string, has-thumb: bool }
 export struct ChatRow {
     kind: string, depth: int, key: string, text: string, rich: styled-text, plain: string, label: string, extra: string, status: string,
     state: string, detail: string, open: bool, badge: string, add: int, del: int, indent: int,
     img-id: int, imgs: [ChatImg], trows: [TRow],
+    // An opened edit card's diff, line by line; the text it would copy; and the first lines of a closed command card's output.
+    diff: [DLine], copy-text: string, preview: string,
     // The rich text is styled or has a link (it is then not selectable by a drag: see Rich).
     no-select: bool,
     // A table's column weights (the widest cell of each column, in characters): every row of the table splits its width by them, so the columns line up.
@@ -239,7 +243,26 @@ export component RowView inherits Rectangle {
                         }
                         tool-area := TouchArea { mouse-cursor: pointer; clicked => { root.toggle(r.key); } }
                     }
-                    if r.open: VerticalLayout {
+                    if !r.open && r.preview != "": VerticalLayout {
+                        padding-left: 14px; padding-right: 12px; padding-top: 6px; padding-bottom: 8px;
+                        WText { text: r.preview; size: 12px; mono: true; fg: Theme.on-var; }
+                    }
+                    if r.open && r.diff.length > 0: VerticalLayout {
+                        padding-top: 2px; padding-bottom: 6px;
+                        HorizontalLayout { alignment: end; padding-right: 8px; IconBtn { width: 24px; height: 20px; icon: @image-url("icons/copy.svg"); clicked => { root.copy(r.copy-text); } } }
+                        for l in r.diff: Rectangle {
+                            height: l.kind == "@" ? 10px : 18px;
+                            background: l.kind == "+" ? Theme.ok.with-alpha(0.14) : l.kind == "-" ? Theme.error.with-alpha(0.14) : transparent;
+                            if l.kind == "@": Text { x: 56px; text: "⋯"; color: Theme.outline; font-family: Theme.mono; font-size: 11px; vertical-alignment: center; }
+                            if l.kind != "@": HorizontalLayout {
+                                padding-left: 8px; padding-right: 10px; spacing: 8px;
+                                Text { width: 44px; text: l.no > 0 ? "" + l.no : ""; horizontal-alignment: right; color: Theme.outline; font-family: Theme.mono; font-size: 11px; vertical-alignment: center; }
+                                Text { width: 8px; text: l.kind == "+" ? "+" : l.kind == "-" ? "-" : ""; color: l.kind == "+" ? Theme.ok : Theme.error; font-family: Theme.mono; font-size: 12px; font-weight: 700; vertical-alignment: center; }
+                                Text { horizontal-stretch: 1; text: l.text; color: l.kind == " " ? Theme.on-var : l.kind == "…" ? Theme.outline : Theme.on-surface; font-family: Theme.mono; font-size: 12px; overflow: elide; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                    if r.open && r.detail != "": VerticalLayout {
                         padding: 12px;
                         SelText { text: r.detail; size: 12px; mono: true; chars: true; fg: Theme.on-var; }
                     }

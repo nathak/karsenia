@@ -37,6 +37,19 @@ impl std::fmt::Debug for Shots {
     }
 }
 
+/// One line of an edit's diff as it is drawn: `kind` is ' ' (context), '+' (added), '-' (removed), '@' (a gap between two hunks) or
+/// '…' (lines left out; `no` is how many). `no` is the line number (the new file's for context and added lines, the old file's for removed
+/// ones), 0 when it is not known.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiffLine {
+    pub kind: char,
+    pub no: u32,
+    pub text: String,
+}
+
+/// Most diff lines drawn for one tool call.
+const MAX_DIFF_ROWS: usize = 120;
+
 /// One row of the transcript list.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Row {
@@ -68,6 +81,10 @@ pub struct Row {
     pub images: Option<Shots>,
     /// A table's cells by row (the first row is the header).
     pub grid: Vec<Vec<String>>,
+    /// The diff of an opened edit card, drawn line by line (cheap to clone: the rows are rebuilt at every event).
+    pub diff: Arc<[DiffLine]>,
+    /// The first lines of a command's output, shown under the header while the card is closed.
+    pub preview: String,
 }
 
 /// The row of a block as it is drawn when nothing folds (a code block is shown whole).
@@ -159,6 +176,10 @@ struct Tool {
     badge: String,
     input: String,
     diff: Vec<(char, String)>,
+    /// The diff from the tool's structured result (with context and line numbers), when Claude Code sent one.
+    patch: Vec<DiffLine>,
+    /// The person opened or closed the card: it is then no longer opened by itself when the result arrives.
+    touched: bool,
     /// A TodoWrite's list as lines ("[x] done", "[~] doing", "[ ] to do"); empty for any other tool.
     checklist: String,
     add: i32,
@@ -362,6 +383,67 @@ fn edit_diff(name: &str, input: &Value) -> (Vec<(char, String)>, i32, i32) {
     }
     lines.truncate(400);
     (lines, add, del)
+}
+
+/// The lines of an edit from Claude Code's structured result: its hunks (context, removed, added, with the line numbers they start at),
+/// or for a file that was created its content as added lines. The counts are of everything kept; at most `MAX_DIFF_ROWS` lines are
+/// drawn, the rest is one marker line. None when the result has neither (the diff then comes from the call's input).
+fn patch_lines(result: &Value) -> Option<(Vec<DiffLine>, i32, i32)> {
+    let mut lines: Vec<DiffLine> = Vec::new();
+    let (mut add, mut del) = (0, 0);
+    let hunks = result.get("structuredPatch").and_then(Value::as_array).filter(|h| !h.is_empty());
+    if let Some(hunks) = hunks {
+        for (n, hunk) in hunks.iter().enumerate() {
+            if n > 0 {
+                lines.push(DiffLine { kind: '@', no: 0, text: String::new() });
+            }
+            let start = |key: &str| hunk.get(key).and_then(Value::as_u64).unwrap_or(1).min(u32::MAX as u64) as u32;
+            let (mut old_no, mut new_no) = (start("oldStart"), start("newStart"));
+            for line in hunk.get("lines").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+                let mut chars = line.chars();
+                match chars.next() {
+                    Some('+') => {
+                        add += 1;
+                        lines.push(DiffLine { kind: '+', no: new_no, text: chars.as_str().to_owned() });
+                        new_no += 1;
+                    }
+                    Some('-') => {
+                        del += 1;
+                        lines.push(DiffLine { kind: '-', no: old_no, text: chars.as_str().to_owned() });
+                        old_no += 1;
+                    }
+                    // "\ No newline at end of file" is a note about the line before it, not a line.
+                    Some('\\') => {}
+                    Some(_) => {
+                        lines.push(DiffLine { kind: ' ', no: new_no, text: chars.as_str().to_owned() });
+                        old_no += 1;
+                        new_no += 1;
+                    }
+                    None => {
+                        lines.push(DiffLine { kind: ' ', no: new_no, text: String::new() });
+                        old_no += 1;
+                        new_no += 1;
+                    }
+                }
+            }
+        }
+    } else if s(result, "type") == "create" {
+        for (i, line) in s(result, "content").lines().enumerate() {
+            add += 1;
+            lines.push(DiffLine { kind: '+', no: i as u32 + 1, text: line.to_owned() });
+        }
+        if lines.is_empty() {
+            return None;
+        }
+    } else {
+        return None;
+    }
+    if lines.len() > MAX_DIFF_ROWS {
+        let hidden = lines.len() - MAX_DIFF_ROWS;
+        lines.truncate(MAX_DIFF_ROWS);
+        lines.push(DiffLine { kind: '…', no: hidden as u32, text: String::new() });
+    }
+    Some((lines, add, del))
 }
 
 /// The text of a tool result: a string, or the text blocks of a list.
@@ -806,9 +888,11 @@ impl Transcript {
                 }
             }
             "user" => {
+                // Claude Code's structured form of the result (the patch of an edit, the numbers of a read) rides on the event itself.
+                let structured = d.get("tool_use_result").or_else(|| d.get("toolUseResult"));
                 for block in d.pointer("/message/content").and_then(Value::as_array).into_iter().flatten() {
                     if s(block, "type") == "tool_result" {
-                        self.tool_result(block);
+                        self.tool_result(block, structured);
                     }
                 }
             }
@@ -922,6 +1006,8 @@ impl Transcript {
             head,
             extra,
             diff,
+            patch: Vec::new(),
+            touched: false,
             checklist,
             add,
             del,
@@ -936,6 +1022,8 @@ impl Transcript {
             if let Item::Tool(old) = &self.nodes[i].item {
                 let mut fresh = tool;
                 fresh.open = old.open;
+                fresh.touched = old.touched;
+                fresh.patch = old.patch.clone();
                 fresh.started = old.started;
                 self.nodes[i].item = Item::Tool(fresh);
             }
@@ -952,7 +1040,7 @@ impl Transcript {
         }
     }
 
-    fn tool_result(&mut self, block: &Value) {
+    fn tool_result(&mut self, block: &Value, structured: Option<&Value>) {
         let Some(&i) = self.tools.get(s(block, "tool_use_id")) else { return };
         let text = result_text(block.get("content").unwrap_or(&Value::Null));
         let is_error = block.get("is_error").and_then(Value::as_bool) == Some(true);
@@ -980,6 +1068,25 @@ impl Transcript {
             t.state = state;
             t.status = status;
             t.result = cut(&text, MAX_RESULT, lang);
+            if let Some(res) = structured.filter(|_| !is_error) {
+                // The real diff of an edit (context and line numbers), shown at once as Claude Code shows it, unless the person has
+                // opened or closed the card already.
+                if let Some((lines, add, del)) = patch_lines(res) {
+                    t.patch = lines;
+                    t.add = add;
+                    t.del = del;
+                    if !t.touched {
+                        t.open = true;
+                    }
+                }
+                // A read says how many lines it gave.
+                if t.name == "Read" {
+                    if let Some(n) = res.pointer("/file/numLines").and_then(Value::as_u64) {
+                        let count = tr(lang, "lines").replace("{n}", &n.to_string());
+                        t.extra = if t.extra.is_empty() { count } else { format!("{} · {count}", t.extra) };
+                    }
+                }
+            }
         }
     }
 
@@ -1001,6 +1108,7 @@ impl Transcript {
         if let Some(&i) = self.tools.get(key) {
             if let Item::Tool(t) = &mut self.nodes[i].item {
                 t.open = !t.open;
+                t.touched = true;
             }
             return;
         }
@@ -1104,7 +1212,13 @@ impl Transcript {
     /// A node that may be folded into a run of steps: a tool, or a thought that is finished (a thought being streamed stays on its own so
     /// its text can be read as it comes), at the top level (a sub-agent's work stays under its card).
     fn groupable(&self, i: usize) -> bool {
-        self.nodes[i].parent.is_none() && matches!(self.nodes[i].item, Item::Tool(_) | Item::Think { live: false, .. })
+        // A file edit stays a card of its own: its diff is what the person came to see.
+        self.nodes[i].parent.is_none()
+            && match &self.nodes[i].item {
+                Item::Tool(t) => !matches!(t.name.as_str(), "Edit" | "MultiEdit" | "Write" | "NotebookEdit"),
+                Item::Think { live, .. } => !*live,
+                _ => false,
+            }
     }
 
     /// One row for a run of steps: how many, of what, and whether any is running, failed or held; the steps themselves follow it when it
@@ -1213,18 +1327,44 @@ impl Transcript {
             Item::Tool(t) => {
                 let kids = children.get(t.id.as_str());
                 let mut detail = String::new();
+                let mut diff: Vec<DiffLine> = Vec::new();
                 if t.open {
+                    // An edit is drawn as its diff: the real one when Claude Code sent it, else the one made of the call's own input.
+                    if !t.patch.is_empty() {
+                        diff = t.patch.clone();
+                    } else if !t.diff.is_empty() && t.checklist.is_empty() {
+                        diff = t.diff.iter().map(|(m, l)| DiffLine { kind: *m, no: 0, text: l.clone() }).collect();
+                    }
+                    for line in diff.iter_mut().filter(|l| l.kind == '…') {
+                        line.text = fill(&self.t("diff_more"), &[("n", line.no.to_string())]);
+                    }
                     if !t.checklist.is_empty() {
                         detail.push_str(&t.checklist);
-                    } else if t.diff.is_empty() {
+                    } else if diff.is_empty() {
                         detail.push_str(&format!("── {} ──\n{}", self.t("input"), t.input));
-                    } else {
-                        detail.push_str(&t.diff.iter().map(|(m, l)| format!("{m} {l}")).collect::<Vec<_>>().join("\n"));
                     }
-                    if !t.result.is_empty() {
-                        detail.push_str(&format!("\n\n── {} ──\n{}", self.t("result"), t.result));
+                    // What the tool answered: shown under a command or a read, and under an edit only when it failed or was held (its
+                    // "updated successfully" says nothing the diff does not).
+                    if !t.result.is_empty() && (diff.is_empty() || t.state == "err" || t.state == "guard") {
+                        if detail.is_empty() {
+                            detail.push_str(&t.result);
+                        } else {
+                            detail.push_str(&format!("\n\n── {} ──\n{}", self.t("result"), t.result));
+                        }
                     }
                 }
+                // The first lines of a command's answer, under its header while the card is closed (as the CLI prints them).
+                let preview = if !t.open && t.name == "Bash" && !t.result.trim().is_empty() {
+                    let lines: Vec<&str> = t.result.lines().collect();
+                    let mut text = lines.iter().take(3).map(|l| l.chars().take(200).collect::<String>()).collect::<Vec<_>>().join("\n");
+                    if lines.len() > 3 {
+                        text.push('\n');
+                        text.push_str(&fill(&self.t("preview_more"), &[("n", (lines.len() - 3).to_string())]));
+                    }
+                    text
+                } else {
+                    String::new()
+                };
                 let extra = match kids {
                     Some(k) if !k.is_empty() => {
                         let n = k.iter().filter(|&&c| matches!(self.nodes[c].item, Item::Tool(_))).count();
@@ -1232,7 +1372,7 @@ impl Transcript {
                     }
                     _ => t.extra.clone(),
                 };
-                out.push(Row { key: t.id.clone(), label: t.name.clone(), text: t.head.clone(), extra, badge: t.badge.clone(), status: t.status.clone(), state: t.state, detail, open: t.open, add: t.add, del: t.del, ..row("tool") });
+                out.push(Row { key: t.id.clone(), label: t.name.clone(), text: t.head.clone(), extra, badge: t.badge.clone(), status: t.status.clone(), state: t.state, detail, open: t.open, add: t.add, del: t.del, diff: diff.into(), preview, ..row("tool") });
                 for &c in kids.into_iter().flatten() {
                     self.emit(c, depth + 1, children, out);
                 }
@@ -1918,6 +2058,97 @@ mod plain_text_tests {
         let rows = t.rows();
         let user = rows.iter().find(|r| r.kind == "user").expect("a user row");
         assert!(user.text.contains("a.pdf") && user.text.contains("2.0 KB") && user.text.contains("z.bin") && user.text.ends_with("봐 주세요"), "{}", user.text);
+    }
+
+    fn edit_event(t: &mut Transcript, id: &str, name: &str, input: Value) {
+        t.apply("claude", &json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": id, "name": name, "input": input}]}}), 1);
+    }
+    fn result_event(t: &mut Transcript, id: &str, text: &str, structured: Value) {
+        t.apply("claude", &json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": id, "content": text}]}, "tool_use_result": structured}), 2);
+    }
+    fn tool_row(t: &Transcript, label: &str) -> Row {
+        t.rows().into_iter().find(|r| r.kind == "tool" && r.label == label).expect("a tool row")
+    }
+
+    #[test]
+    fn an_edit_is_drawn_from_its_structured_patch_with_context_and_line_numbers_and_opens_by_itself() {
+        let mut t = Transcript::new(Lang::Ko);
+        edit_event(&mut t, "e1", "Edit", json!({"file_path": "/p/a.rs", "old_string": "b", "new_string": "c"}));
+        assert!(!tool_row(&t, "Edit").open, "closed while it runs");
+        let patch = json!({"filePath": "/p/a.rs", "structuredPatch": [
+            {"oldStart": 10, "oldLines": 3, "newStart": 10, "newLines": 3, "lines": [" keep", "-old", "+new", " tail"]},
+            {"oldStart": 40, "oldLines": 1, "newStart": 40, "newLines": 2, "lines": ["-x", "+y", "+z", "\\ No newline at end of file"]}]});
+        result_event(&mut t, "e1", "The file /p/a.rs has been updated successfully.", patch);
+        let row = tool_row(&t, "Edit");
+        assert!(row.open);
+        let shown: Vec<(char, u32, &str)> = row.diff.iter().map(|l| (l.kind, l.no, l.text.as_str())).collect();
+        assert_eq!(shown, [(' ', 10, "keep"), ('-', 11, "old"), ('+', 11, "new"), (' ', 12, "tail"), ('@', 0, ""), ('-', 40, "x"), ('+', 40, "y"), ('+', 41, "z")]);
+        assert_eq!((row.add, row.del), (3, 2));
+        assert!(!row.detail.contains("successfully"), "the 'updated' sentence adds nothing to a diff: {}", row.detail);
+    }
+
+    #[test]
+    fn a_card_the_person_closed_stays_closed_when_its_result_comes_and_a_failure_shows_its_text() {
+        let mut t = Transcript::new(Lang::Ko);
+        edit_event(&mut t, "e1", "Edit", json!({"file_path": "/p/a.rs", "old_string": "b", "new_string": "c"}));
+        t.toggle("e1");
+        t.toggle("e1");
+        result_event(&mut t, "e1", "ok", json!({"structuredPatch": [{"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["-a", "+b"]}]}));
+        assert!(!tool_row(&t, "Edit").open, "the person had touched it");
+        // An edit that failed has no diff of the result's; its text is what is shown when it is opened.
+        edit_event(&mut t, "e2", "Edit", json!({"file_path": "/p/b.rs", "old_string": "b", "new_string": "c"}));
+        t.apply("claude", &json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "e2", "is_error": true, "content": "String to replace not found"}]}}), 3);
+        t.toggle("e2");
+        let row = t.rows().into_iter().find(|r| r.key == "e2").expect("the failed edit");
+        assert_eq!(row.state, "err");
+        assert!(row.detail.contains("String to replace not found"), "{}", row.detail);
+    }
+
+    #[test]
+    fn a_created_file_shows_its_content_as_added_lines_and_a_long_diff_is_cut_with_a_count() {
+        let mut t = Transcript::new(Lang::Ko);
+        edit_event(&mut t, "w1", "Write", json!({"file_path": "/p/n.txt", "content": "ignored"}));
+        let content = (1..=150).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        result_event(&mut t, "w1", "created", json!({"type": "create", "filePath": "/p/n.txt", "content": content, "structuredPatch": []}));
+        let row = tool_row(&t, "Write");
+        assert_eq!((row.add, row.del), (150, 0));
+        assert_eq!(row.diff.len(), MAX_DIFF_ROWS + 1);
+        assert_eq!((row.diff[0].kind, row.diff[0].no, row.diff[0].text.as_str()), ('+', 1, "line 1"));
+        let last = row.diff.last().unwrap();
+        assert_eq!(last.kind, '…');
+        assert!(last.text.contains("30"), "{}", last.text);
+    }
+
+    #[test]
+    fn edits_are_never_folded_into_steps_and_a_command_shows_its_first_lines_while_closed() {
+        let mut t = Transcript::new(Lang::Ko);
+        for i in 0..4 {
+            edit_event(&mut t, &format!("b{i}"), "Bash", json!({"command": format!("ls {i}")}));
+            result_event(&mut t, &format!("b{i}"), "one\ntwo\nthree\nfour\nfive", json!({"stdout": "x"}));
+        }
+        edit_event(&mut t, "e1", "Edit", json!({"file_path": "/p/a.rs", "old_string": "b", "new_string": "c"}));
+        result_event(&mut t, "e1", "ok", json!({"structuredPatch": [{"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["-a", "+b"]}]}));
+        let rows = t.rows();
+        assert!(rows.iter().any(|r| r.kind == "steps"), "the commands are folded");
+        let edit = rows.iter().find(|r| r.kind == "tool" && r.label == "Edit").expect("the edit is its own card");
+        assert!(edit.open && edit.diff.len() == 2);
+        // Opened, the folded commands show a preview of their output.
+        let mut t = Transcript::new(Lang::Ko);
+        edit_event(&mut t, "b", "Bash", json!({"command": "ls"}));
+        result_event(&mut t, "b", "one\ntwo\nthree\nfour\nfive", Value::Null);
+        let preview = tool_row(&t, "Bash").preview;
+        assert!(preview.starts_with("one\ntwo\nthree\n") && preview.contains("+2"), "{preview}");
+        t.toggle("b");
+        assert_eq!(tool_row(&t, "Bash").preview, "", "no preview once it is open");
+    }
+
+    #[test]
+    fn a_read_says_how_many_lines_it_gave() {
+        let mut t = Transcript::new(Lang::Ko);
+        edit_event(&mut t, "r1", "Read", json!({"file_path": "/p/a.rs", "offset": 10, "limit": 50}));
+        result_event(&mut t, "r1", "…", json!({"type": "text", "file": {"filePath": "/p/a.rs", "numLines": 50, "startLine": 10, "totalLines": 99}}));
+        let row = tool_row(&t, "Read");
+        assert!(row.extra.contains("L10-60") && row.extra.contains("50"), "{}", row.extra);
     }
 
     #[test]

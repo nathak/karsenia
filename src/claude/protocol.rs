@@ -125,6 +125,81 @@ fn one_line(value: &Value) -> String {
 
 /// One user turn: the images first, then the text, then `context` (blocks the model is told besides what the person wrote; the
 /// transcript shows only the text).
+/// The most lines of a patch or of a created file's content that are kept of a tool result.
+pub const MAX_RESULT_LINES: usize = 400;
+const MAX_RESULT_CONTENT: usize = 32 * 1024;
+
+/// What a `user` event keeps of its `tool_use_result` (Claude Code's own structured form of a tool's result) before it is logged,
+/// indexed and sent on: only what the transcript draws (the patch of an edit, the numbers of a read, the content of a created file),
+/// cut to a size. Everything else is dropped, `originalFile` (a whole file, for every edit) above all. A list, not a blacklist, so a
+/// big field the CLI adds later is not carried either.
+pub fn slim_tool_result(event: &mut Value) {
+    if event.get("type").and_then(Value::as_str) != Some("user") {
+        return;
+    }
+    let Some(map) = event.as_object_mut() else { return };
+    for key in ["tool_use_result", "toolUseResult"] {
+        let Some(result) = map.get_mut(key) else { continue };
+        let Some(old) = result.as_object() else {
+            // Not a structure (a string, a list): small ones stay, others go.
+            if !matches!(result, Value::String(t) if t.len() <= 2048) {
+                *result = Value::Null;
+            }
+            continue;
+        };
+        let mut keep = serde_json::Map::new();
+        for name in ["type", "filePath", "userModified", "replaceAll", "interrupted"] {
+            if let Some(v) = old.get(name).filter(|v| v.is_boolean() || matches!(v, Value::String(t) if t.len() <= 2048)) {
+                keep.insert(name.into(), v.clone());
+            }
+        }
+        if let Some(hunks) = old.get("structuredPatch").and_then(Value::as_array) {
+            let mut left = MAX_RESULT_LINES;
+            let mut out = Vec::new();
+            for hunk in hunks {
+                if left == 0 {
+                    break;
+                }
+                let mut h = serde_json::Map::new();
+                for n in ["oldStart", "oldLines", "newStart", "newLines"] {
+                    if let Some(v) = hunk.get(n).filter(|v| v.is_number()) {
+                        h.insert(n.into(), v.clone());
+                    }
+                }
+                let lines: Vec<Value> = hunk.get("lines").and_then(Value::as_array).into_iter().flatten().filter(|l| l.is_string()).take(left).cloned().collect();
+                left -= lines.len();
+                h.insert("lines".into(), Value::Array(lines));
+                out.push(Value::Object(h));
+            }
+            keep.insert("structuredPatch".into(), Value::Array(out));
+        }
+        if let Some(file) = old.get("file").and_then(Value::as_object) {
+            let mut f = serde_json::Map::new();
+            for n in ["filePath", "numLines", "startLine", "totalLines"] {
+                if let Some(v) = file.get(n).filter(|v| v.is_number() || matches!(v, Value::String(t) if t.len() <= 2048)) {
+                    f.insert(n.into(), v.clone());
+                }
+            }
+            keep.insert("file".into(), Value::Object(f));
+        }
+        // The content of a file that was created is what the card shows of it.
+        if old.get("type").and_then(Value::as_str) == Some("create") {
+            if let Some(content) = old.get("content").and_then(Value::as_str) {
+                let mut cut: String = content.lines().take(MAX_RESULT_LINES).collect::<Vec<_>>().join("\n");
+                if cut.len() > MAX_RESULT_CONTENT {
+                    let mut end = MAX_RESULT_CONTENT;
+                    while !cut.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    cut.truncate(end);
+                }
+                keep.insert("content".into(), Value::String(cut));
+            }
+        }
+        *result = Value::Object(keep);
+    }
+}
+
 /// `</attached_file` in a file's text, in any letter case, made harmless; the rest of the file stays as it is.
 fn neutralise_closing_tag(body: &str) -> String {
     const TAG: &str = "</attached_file";
@@ -280,6 +355,43 @@ mod tests {
         assert!(matches!(parse_line(r#"{"type":"system","subtype":"init"}"#), Event::Raw(_)));
         assert!(matches!(parse_line(r#"{"type":"control_request","request_id":"r","request":{"subtype":"can_use_tool"}}"#), Event::Raw(_)));
         assert!(matches!(parse_line("[1,2]"), Event::Raw(_)));
+    }
+
+    #[test]
+    fn a_tool_result_keeps_what_the_card_draws_and_drops_the_files() {
+        let mut e = json!({"type": "user", "message": {"content": []}, "tool_use_result": {
+            "filePath": "/p/a.rs", "oldString": "o", "newString": "n", "originalFile": "WHOLE FILE", "userModified": false, "replaceAll": false,
+            "gitDiff": {"patch": "big"}, "structuredPatch": [{"oldStart": 3, "oldLines": 1, "newStart": 3, "newLines": 1, "lines": [" a", "-b", "+c"]}]}});
+        slim_tool_result(&mut e);
+        let r = &e["tool_use_result"];
+        assert_eq!(r["filePath"], "/p/a.rs");
+        assert_eq!(r["structuredPatch"][0]["lines"][1], "-b");
+        assert_eq!(r["structuredPatch"][0]["newStart"], 3);
+        for gone in ["originalFile", "oldString", "newString", "gitDiff"] {
+            assert!(r.get(gone).is_none(), "{gone}");
+        }
+        assert!(!e.to_string().contains("WHOLE FILE"));
+        // A read keeps its numbers, not its content; a created file keeps (cut) content; a Bash result keeps nothing of its output.
+        let mut e = json!({"type": "user", "toolUseResult": {"type": "text", "file": {"filePath": "/p/b", "content": "SECRET BODY", "numLines": 50, "startLine": 10, "totalLines": 99}}});
+        slim_tool_result(&mut e);
+        assert_eq!(e["toolUseResult"]["file"]["numLines"], 50);
+        assert!(!e.to_string().contains("SECRET BODY"));
+        let mut e = json!({"type": "user", "tool_use_result": {"type": "create", "filePath": "/p/n", "content": (0..500).map(|i| format!("l{i}")).collect::<Vec<_>>().join("\n"), "originalFile": null}});
+        slim_tool_result(&mut e);
+        assert_eq!(e["tool_use_result"]["content"].as_str().unwrap().lines().count(), MAX_RESULT_LINES);
+        let mut e = json!({"type": "user", "tool_use_result": {"stdout": "out", "stderr": "", "interrupted": false}});
+        slim_tool_result(&mut e);
+        assert!(e["tool_use_result"].get("stdout").is_none() && e["tool_use_result"]["interrupted"] == false);
+        // A long patch is cut to the limit across hunks; a long string value goes; other events are not touched.
+        let hunk = json!({"oldStart": 1, "oldLines": 300, "newStart": 1, "newLines": 300, "lines": vec!["+x"; 300]});
+        let mut e = json!({"type": "user", "tool_use_result": {"structuredPatch": [hunk.clone(), hunk.clone()], "filePath": "x".repeat(5000)}});
+        slim_tool_result(&mut e);
+        let total: usize = e["tool_use_result"]["structuredPatch"].as_array().unwrap().iter().map(|h| h["lines"].as_array().unwrap().len()).sum();
+        assert_eq!(total, MAX_RESULT_LINES);
+        assert!(e["tool_use_result"].get("filePath").is_none());
+        let mut other = json!({"type": "assistant", "tool_use_result": {"originalFile": "x"}});
+        slim_tool_result(&mut other);
+        assert_eq!(other["tool_use_result"]["originalFile"], "x");
     }
 
     #[test]

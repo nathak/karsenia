@@ -56,6 +56,8 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("exited", "종료됨", "ended"),
     ("copy", "복사", "Copy"),
     ("lines", "{n}줄", "{n} lines"),
+    ("diff_more", "… {n}줄 더", "… {n} more lines"),
+    ("preview_more", "… +{n}줄", "… +{n} lines"),
     ("show_all", "전체 보기 ({n}줄)", "Show all ({n} lines)"),
     ("fold", "접기", "Fold"),
     ("copied", "복사했습니다", "Copied"),

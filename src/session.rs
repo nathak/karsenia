@@ -449,6 +449,10 @@ impl Actor {
                 map.insert("via_gateway".into(), Value::Bool(true));
             }
         }
+        // The big parts of a tool's structured result (a whole file for every edit) are not logged, indexed or sent on.
+        if kind == "claude" {
+            protocol::slim_tool_result(&mut data);
+        }
         let data = self.scrub(data);
         self.seq += 1;
         let envelope = Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, ts, kind: kind.to_owned(), data };
