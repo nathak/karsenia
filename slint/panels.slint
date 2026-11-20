@@ -16,7 +16,8 @@ export struct TeamRole { role: string, model: string, effort: string }
 export struct WbItem { id: int, text: string, tag: string, on: bool }
 export struct GfRule { policy: string, tool: string, command: string, path: string, reason: string }
 export struct PlugRow { id: string, busy: bool }
-export struct AcctRow { id: string, name: string, sub: string, state: string, chats: int, open: bool, is-default: bool, usage: string, usage-level: string, kind: string, login: string, dir: string, plug-open: bool, plug-note: string, plugs: [PlugRow] }
+export struct GwRow { id: string, name: string, host: string }
+export struct AcctRow { gws: [GwRow], id: string, name: string, sub: string, state: string, chats: int, open: bool, is-default: bool, usage: string, usage-level: string, kind: string, login: string, dir: string, plug-open: bool, plug-note: string, plugs: [PlugRow] }
 export struct UsageWin { label: string, pct: string, frac: float, level: string, reset: string }
 
 // The Claude logins (personal, work...). Each has its own notes, skills and history; the panels show one of them.
@@ -349,7 +350,12 @@ export global Prov {
     in-out property <string> f-headers;
     in-out property <string> ctr-runtime;
     in-out property <string> ctr-image;
+    // Where the open form was opened from: "settings" (the providers card) or "acct:<account id>" (an account's card on the accounts page, where the
+    // form is for a gateway that uses that account's login: no way of sending to pick).
+    in-out property <string> form-from: "settings";
     callback new();
+    callback new-for-account(string);
+    callback edit-for-account(string, string);
     callback edit(string);
     callback save();
     callback cancel();
@@ -634,32 +640,24 @@ component ProvRowView inherits Rectangle {
     Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
 }
 
-export component ProvidersCard inherits Card {
-    VerticalLayout {
-        padding: 18px; spacing: 8px;
-        Text { text: T.tr("pv_title"); color: Theme.outline; font-size: 12px; font-weight: 600; }
-        WText { text: T.tr("pv_intro"); fg: Theme.on-var; size: 13px; }
-        if Prov.notice != "": WText { text: Prov.notice; fg: Theme.primary-soft; size: 12px; }
-        VerticalLayout {
-            for r in Prov.rows: ProvRowView { r: r; }
-        }
-        if Prov.rows.length == 0: Text { text: T.tr("pv_none"); color: Theme.outline; font-size: 12px; }
-        if !Prov.editing: HorizontalLayout { alignment: start; padding-top: 4px; Btn { text: T.tr("pv_new"); height: 30px; clicked => { Prov.new(); } } }
-        if Prov.editing: Rectangle {
+export component ProvForm inherits Rectangle {
+    // Opened from an account's card: that account's login is the way of sending, so the way and the account are not asked again.
+    property <bool> in-account: Prov.form-from != "settings";
+
             height: pf.preferred-height;
             background: Theme.lowest; border-radius: 8px; border-width: 1px; border-color: Theme.primary.with-alpha(0.5);
             pf := VerticalLayout {
                 padding: 14px; spacing: 8px;
                 Field { label: T.tr("pv_name"); LineEdit { text <=> Prov.f-name; } }
                 Field { label: T.tr("pv_url"); LineEdit { text <=> Prov.f-url; placeholder-text: "https://"; } }
-                Field {
+                if !root.in-account: Field {
                     label: T.tr("pv_auth");
                     HorizontalLayout { alignment: start; Segment { items: ["Bearer", "x-api-key", T.tr("pv_auth_headers"), T.tr("pv_auth_oauth"), T.tr("pv_auth_login")]; current: Prov.f-auth; chosen(i) => { Prov.f-auth = i; } } }
                 }
                 Field { label: T.tr("pv_key"); LineEdit { text <=> Prov.f-key; input-type: InputType.password; } }
                 WText { text: Prov.f-has-key ? T.tr("pv_key_keep") : T.tr("pv_key_none"); fg: Theme.outline; size: 11px; }
                 if Prov.f-has-key: CheckBox { text: T.tr("pv_key_clear"); checked <=> Prov.f-clear; }
-                if Prov.f-auth == 4: Field { label: T.tr("pv_login_acct"); ComboBox { model: Acct.names; current-index <=> Prov.f-login-acct; } }
+                if Prov.f-auth == 4 && !root.in-account: Field { label: T.tr("pv_login_acct"); ComboBox { model: Acct.names; current-index <=> Prov.f-login-acct; } }
                 if Prov.f-auth == 4: WText { text: T.tr("pv_login_note"); fg: Theme.primary-soft; size: 11px; }
                 if Prov.f-auth == 3: Field { label: T.tr("pv_oauth"); LineEdit { text <=> Prov.f-oauth; input-type: InputType.password; } }
                 if Prov.f-auth == 3: WText { text: Prov.f-has-oauth ? T.tr("pv_oauth_keep") : T.tr("pv_oauth_note"); fg: Theme.primary-soft; size: 11px; }
@@ -683,7 +681,20 @@ export component ProvidersCard inherits Card {
                     Btn { text: T.tr("pv_save"); primary: true; enabled: Prov.f-name != "" && Prov.f-url != ""; clicked => { Prov.save(); } }
                 }
             }
+}
+
+export component ProvidersCard inherits Card {
+    VerticalLayout {
+        padding: 18px; spacing: 8px;
+        Text { text: T.tr("pv_title"); color: Theme.outline; font-size: 12px; font-weight: 600; }
+        WText { text: T.tr("pv_intro"); fg: Theme.on-var; size: 13px; }
+        if Prov.notice != "": WText { text: Prov.notice; fg: Theme.primary-soft; size: 12px; }
+        VerticalLayout {
+            for r in Prov.rows: ProvRowView { r: r; }
         }
+        if Prov.rows.length == 0: Text { text: T.tr("pv_none"); color: Theme.outline; font-size: 12px; }
+        if !Prov.editing: HorizontalLayout { alignment: start; padding-top: 4px; Btn { text: T.tr("pv_new"); height: 30px; clicked => { Prov.new(); } } }
+        if Prov.editing && Prov.form-from == "settings": ProvForm { }
         Text { text: T.tr("pv_ctr") + "   ·   " + (Prov.ctr-ready ? T.tr("pv_ctr_ready") : T.tr("pv_ctr_not")); color: Theme.outline; font-size: 12px; font-weight: 600; }
         HorizontalLayout {
             spacing: 8px;

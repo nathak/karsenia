@@ -1,7 +1,7 @@
 // The new-chat page with the accounts beside it (Stitch "새 대화 · 계정 관리"): the left card starts a chat, the right one manages the logins.
 import { ComboBox, CheckBox, LineEdit } from "std-widgets.slint";
 import { Theme, T, Btn, Label, Badge, WText, SelText, IconBtn, Pill } from "base.slint";
-import { Acct, AcctRow, PlugRow, Prov, Usage } from "panels.slint";
+import { Acct, AcctRow, PlugRow, Prov, ProvForm, Usage } from "panels.slint";
 
 // The left card: folder, model, provider, account, options, start.
 export component NewChatCard inherits Rectangle {
@@ -156,6 +156,23 @@ component AccountCard inherits Rectangle {
             if !root.editing && !r.is-default: Btn { text: T.tr("acct_delete"); height: 30px; danger: true; clicked => { Acct.delete(r.id); } }
             if root.editing: Btn { text: T.cancel; height: 30px; clicked => { Acct.editing = ""; } }
             if root.editing: Btn { text: T.tr("acct_save"); height: 30px; primary: true; clicked => { Acct.rename(r.id, root.draft); } }
+        }
+        // The gateways of this account: providers that use its login (the account's chats can go through them); added, edited and removed here.
+        if r.kind != "codex": VerticalLayout {
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: T.tr("acct_gw_title"); color: Theme.outline; font-size: 11px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                Btn { text: T.tr("acct_gw_add"); height: 26px; clicked => { Prov.new-for-account(r.id); } }
+            }
+            for g in r.gws: HorizontalLayout {
+                spacing: 8px;
+                Text { text: g.name + "   → " + g.host; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                Btn { text: T.tr("acct_gw_edit"); height: 24px; clicked => { Prov.edit-for-account(g.id, r.id); } }
+                Btn { text: "×"; height: 24px; danger: true; clicked => { Prov.delete(g.id); } }
+            }
+            if r.gws.length == 0 && !(Prov.editing && Prov.form-from == "acct:" + r.id): Text { text: T.tr("acct_gw_none"); color: Theme.outline; font-size: 11px; }
+            if Prov.editing && Prov.form-from == "acct:" + r.id: ProvForm { }
         }
         if r.state != "in" && r.open: Rectangle {
             height: gd.preferred-height;

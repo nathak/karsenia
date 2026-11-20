@@ -37,6 +37,16 @@ thread_local! {
     static PLUG_BUSY: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
+/// The gateways of an account: the providers that use its login (the default account is the id ""), for its card.
+fn gateways_of(account: &str) -> ModelRc<crate::GwRow> {
+    let rows: Vec<crate::GwRow> = crate::prov::login_rows()
+        .into_iter()
+        .filter(|(_, _, _, login_account)| login_account.as_deref().unwrap_or_default() == account)
+        .map(|(id, name, host, _)| crate::GwRow { id: id.into(), name: name.into(), host: host.into() })
+        .collect();
+    ModelRc::from(std::rc::Rc::new(VecModel::from(rows)))
+}
+
 /// What an account card shows of its plug-ins section: whether it is open, a line of text (checking, nothing, an error) and the offer.
 fn plug_view(id: &str, lang: tenrec::view::i18n::Lang) -> (bool, String, Vec<PlugRow>) {
     let open = PLUG_OPEN.with(|o| o.borrow().contains(id));
@@ -66,7 +76,7 @@ pub fn render(ui: &AppWindow, app: &App) {
         .map(|r| {
             let (usage, usage_level) = crate::usage::compact(&r.id, app);
             let (plug_open, plug_note, plugs) = plug_view(&r.id, app.lang);
-            AcctRow { id: r.id.into(), name: r.name.into(), sub: r.sub.into(), state: r.state.into(), chats: r.chats as i32, open: r.open, is_default: r.is_default, usage: usage.into(), usage_level: usage_level.into(), kind: r.kind.into(), login: r.login.into(), dir: r.dir.into(), plug_open, plug_note: plug_note.into(), plugs: ModelRc::from(std::rc::Rc::new(VecModel::from(plugs))) }
+            AcctRow { gws: gateways_of(&r.id), id: r.id.into(), name: r.name.into(), sub: r.sub.into(), state: r.state.into(), chats: r.chats as i32, open: r.open, is_default: r.is_default, usage: usage.into(), usage_level: usage_level.into(), kind: r.kind.into(), login: r.login.into(), dir: r.dir.into(), plug_open, plug_note: plug_note.into(), plugs: ModelRc::from(std::rc::Rc::new(VecModel::from(plugs))) }
         })
         .collect();
     crate::panels::set_rows(acct.get_rows(), slint_rows, |m| acct.set_rows(m));

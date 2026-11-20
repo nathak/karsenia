@@ -44,6 +44,8 @@ fn render(ui: &AppWindow, app: &App) {
     }
     // A provider is a tab of the header: the tabs follow the list (a new one, a new name, one that is gone).
     crate::accounts::refresh_tabs(ui, app);
+    // The accounts' cards list their gateways from the same list.
+    crate::accounts::render(ui, app);
     if !CTR_FILLED.with(Cell::get) {
         prov.set_ctr_runtime(head.ctr_runtime.into());
         prov.set_ctr_image(head.ctr_image.into());
@@ -55,6 +57,24 @@ fn render(ui: &AppWindow, app: &App) {
 pub fn tabs() -> Option<Vec<(String, String)>> {
     LIST.with(|l| {
         l.borrow().as_ref().map(|d| d["providers"].as_array().into_iter().flatten().filter_map(|p| Some((p["id"].as_str()?.to_owned(), p["name"].as_str()?.to_owned()))).collect())
+    })
+}
+
+/// The providers that use an account's login: `(id, name, host, account id)` (None is the default account), for the accounts' cards.
+pub fn login_rows() -> Vec<(String, String, String, Option<String>)> {
+    LIST.with(|l| {
+        l.borrow()
+            .as_ref()
+            .map(|d| {
+                d["providers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|p| p["auth"] == "account_login")
+                    .filter_map(|p| Some((p["id"].as_str()?.to_owned(), p["name"].as_str()?.to_owned(), p["host"].as_str().unwrap_or_default().to_owned(), p["login_account"].as_str().map(str::to_owned))))
+                    .collect()
+            })
+            .unwrap_or_default()
     })
 }
 
@@ -81,6 +101,52 @@ pub fn chosen(index: i32, name: &str) -> Result<Option<String>, ()> {
 }
 
 /// The key field is emptied and the form closes.
+/// The form for a new provider: empty, with the way of sending (0 bearer .. 4 an account's login) and, for a login, the account (None is the
+/// default one); `from` says where it was opened ("settings" or "acct:<account id>").
+fn open_new(ui: &AppWindow, auth: i32, account: Option<&str>, from: &str) {
+    let p = ui.global::<Prov>();
+    p.set_edit_id(SharedString::new());
+    for set in [Prov::set_f_name, Prov::set_f_url, Prov::set_f_key, Prov::set_f_model, Prov::set_f_opus, Prov::set_f_sonnet, Prov::set_f_haiku, Prov::set_f_headers, Prov::set_f_oauth] {
+        set(&p, SharedString::new());
+    }
+    p.set_f_auth(auth);
+    p.set_f_clear(false);
+    p.set_f_has_key(false);
+    p.set_f_clear_oauth(false);
+    p.set_f_has_oauth(false);
+    p.set_f_login_acct(crate::accounts::index_of(account));
+    p.set_form_from(from.into());
+    p.set_editing(true);
+}
+
+/// The form of an existing provider (what the page may know of it: never its key or token).
+fn open_edit(ui: &AppWindow, id: &str, from: &str) {
+    let one = LIST.with(|l| l.borrow().as_ref().and_then(|d| d["providers"].as_array().and_then(|list| list.iter().find(|p| p["id"] == id).cloned())));
+    let Some(one) = one else { return };
+    let text = |v: &Value| SharedString::from(v.as_str().unwrap_or_default());
+    let p = ui.global::<Prov>();
+    p.set_edit_id(id.into());
+    p.set_f_name(text(&one["name"]));
+    p.set_f_url(text(&one["base_url"]));
+    p.set_f_auth(match one["auth"].as_str() { Some("x_api_key") => 1, Some("headers") => 2, Some("oauth_token") => 3, Some("account_login") => 4, _ => 0 });
+    // The key is never sent back: the field starts empty and an empty field keeps the saved key.
+    p.set_f_key(SharedString::new());
+    p.set_f_clear(false);
+    p.set_f_has_key(one["has_token"] == true);
+    // The subscription token is never sent back either.
+    p.set_f_oauth(SharedString::new());
+    p.set_f_clear_oauth(false);
+    p.set_f_has_oauth(one["has_oauth"] == true);
+    p.set_f_login_acct(crate::accounts::index_of(one["login_account"].as_str()));
+    p.set_f_model(text(&one["model"]));
+    p.set_f_opus(text(&one["models"]["opus"]));
+    p.set_f_sonnet(text(&one["models"]["sonnet"]));
+    p.set_f_haiku(text(&one["models"]["haiku"]));
+    p.set_f_headers(text(&one["headers"]));
+    p.set_form_from(from.into());
+    p.set_editing(true);
+}
+
 pub fn leave(ui: &AppWindow) {
     let prov = ui.global::<Prov>();
     prov.set_f_key(SharedString::new());
@@ -124,46 +190,29 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
     app.bus.post_quiet(json!({"op": "provider_list"}));
     let weak = ui.as_weak();
     prov.on_new(move || {
-        let Some(ui) = weak.upgrade() else { return };
-        let p = ui.global::<Prov>();
-        p.set_edit_id(SharedString::new());
-        for set in [Prov::set_f_name, Prov::set_f_url, Prov::set_f_key, Prov::set_f_model, Prov::set_f_opus, Prov::set_f_sonnet, Prov::set_f_haiku, Prov::set_f_headers, Prov::set_f_oauth] {
-            set(&p, SharedString::new());
+        if let Some(ui) = weak.upgrade() {
+            open_new(&ui, 0, None, "settings");
         }
-        p.set_f_auth(0);
-        p.set_f_clear(false);
-        p.set_f_has_key(false);
-        p.set_f_clear_oauth(false);
-        p.set_f_has_oauth(false);
-        p.set_f_login_acct(0);
-        p.set_editing(true);
+    });
+    let weak = ui.as_weak();
+    // From an account's card: a gateway that uses that account's login (the default account is the id "").
+    prov.on_new_for_account(move |account| {
+        if let Some(ui) = weak.upgrade() {
+            let id = (!account.is_empty()).then(|| account.to_string());
+            open_new(&ui, 4, id.as_deref(), &format!("acct:{account}"));
+        }
     });
     let weak = ui.as_weak();
     prov.on_edit(move |id| {
-        let Some(ui) = weak.upgrade() else { return };
-        let one = LIST.with(|l| l.borrow().as_ref().and_then(|d| d["providers"].as_array().and_then(|list| list.iter().find(|p| p["id"] == id.as_str()).cloned())));
-        let Some(one) = one else { return };
-        let text = |v: &Value| SharedString::from(v.as_str().unwrap_or_default());
-        let p = ui.global::<Prov>();
-        p.set_edit_id(id);
-        p.set_f_name(text(&one["name"]));
-        p.set_f_url(text(&one["base_url"]));
-        p.set_f_auth(match one["auth"].as_str() { Some("x_api_key") => 1, Some("headers") => 2, Some("oauth_token") => 3, Some("account_login") => 4, _ => 0 });
-        // The key is never sent back: the field starts empty and an empty field keeps the saved key.
-        p.set_f_key(SharedString::new());
-        p.set_f_clear(false);
-        p.set_f_has_key(one["has_token"] == true);
-        // The subscription token is never sent back either.
-        p.set_f_oauth(SharedString::new());
-        p.set_f_clear_oauth(false);
-        p.set_f_has_oauth(one["has_oauth"] == true);
-        p.set_f_login_acct(crate::accounts::index_of(one["login_account"].as_str()));
-        p.set_f_model(text(&one["model"]));
-        p.set_f_opus(text(&one["models"]["opus"]));
-        p.set_f_sonnet(text(&one["models"]["sonnet"]));
-        p.set_f_haiku(text(&one["models"]["haiku"]));
-        p.set_f_headers(text(&one["headers"]));
-        p.set_editing(true);
+        if let Some(ui) = weak.upgrade() {
+            open_edit(&ui, &id, "settings");
+        }
+    });
+    let weak = ui.as_weak();
+    prov.on_edit_for_account(move |id, account| {
+        if let Some(ui) = weak.upgrade() {
+            open_edit(&ui, &id, &format!("acct:{account}"));
+        }
     });
     let (a, weak) = (app.clone(), ui.as_weak());
     prov.on_save(move || {
