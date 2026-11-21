@@ -4,7 +4,7 @@
 //! started for it); on other systems nothing is shown. The text is fixed: no title, command, file or answer of a chat goes out (a title
 //! is the first words of the first message). It can be turned off from the palette.
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use tenrec::view::i18n::{tr, Lang};
@@ -74,3 +74,38 @@ fn send(title: &str, body: &str) {
 
 #[cfg(not(any(target_os = "linux", windows)))]
 fn send(_title: &str, _body: &str) {}
+
+/// The first look at the budgets is the start of the app: what is already used up is written down and not announced.
+static BUDGET_SEEN: AtomicBool = AtomicBool::new(false);
+
+/// A notice when a cost budget (the day's or the month's) is first used up in its period. Told once per period: the day and the month
+/// that were told are kept in `desktop.json`, so a restart does not tell it again.
+pub fn check_budget(data: &Path, lang: Lang, days: &tenrec::costs::Days, daily: Option<f64>, monthly: Option<f64>) {
+    let started = BUDGET_SEEN.swap(true, Ordering::Relaxed);
+    if daily.is_none() && monthly.is_none() {
+        return;
+    }
+    let today = tenrec::costs::local_day();
+    let crossed = tenrec::view::cost::crossed(days, &today, daily, monthly);
+    let told = crate::desktop_settings(data).get("budget_told").cloned().unwrap_or_default();
+    let (told_day, told_month) = (told.get("d").and_then(|v| v.as_str()).map(str::to_owned), told.get("m").and_then(|v| v.as_str()).map(str::to_owned));
+    let fresh = tenrec::view::cost::untold(&crossed, told_day.as_deref(), told_month.as_deref());
+    if fresh.is_empty() {
+        return;
+    }
+    let now = tenrec::now_ms();
+    // At the start, or with notices turned off, it is only written down; within the gap of the last notice it waits for the next look.
+    let say = started && on(data);
+    if say && now.saturating_sub(LAST.load(Ordering::Relaxed)) < GAP_MS {
+        return;
+    }
+    let mut record = serde_json::json!({"d": told_day, "m": told_month});
+    for (month, id) in &fresh {
+        record[if *month { "m" } else { "d" }] = serde_json::json!(id);
+    }
+    crate::remember(data, "budget_told", record);
+    if say {
+        LAST.store(now, Ordering::Relaxed);
+        send(&tr(lang, "notify_budget_title"), &tr(lang, "notify_budget_body"));
+    }
+}

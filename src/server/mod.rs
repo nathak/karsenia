@@ -1,6 +1,7 @@
 //! The HTTP and WebSocket server: static UI files, one WebSocket for everything a conversation needs, a path-checked image endpoint.
 //! It binds 127.0.0.1 only and every request must carry the run's token (see `auth`).
 pub mod account_ops;
+pub mod cost_ops;
 pub mod auth;
 pub mod files;
 pub mod mcp_host;
@@ -549,6 +550,7 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
         other if other.starts_with("sched_") => sched_ops::handle(state, other, op, out),
         other if other.starts_with("provider_") => provider_ops::handle(state, other, op, out),
         other if other.starts_with("account_") => account_ops::handle(state, other, op, out),
+        other if other.starts_with("cost_") => cost_ops::handle(state, other, op, out),
         _ => fail("unknown op"),
     }
 }

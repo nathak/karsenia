@@ -3,6 +3,7 @@
 pub mod i18n;
 pub mod markdown;
 pub mod attach;
+pub mod cost;
 pub mod debug;
 pub mod files;
 pub mod git;

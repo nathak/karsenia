@@ -3,7 +3,7 @@
 // never wipes what is being typed.
 import { ScrollView, LineEdit, TextEdit, CheckBox, ComboBox, AboutSlint } from "std-widgets.slint";
 import { Theme, T, Pill, Btn, SelText, WText, Label, Badge, Toggle, SegTabs, IconBtn } from "base.slint";
-import { Card, PageTitle, Segment, Field, Prefs, Mem, Sk, About, ProvidersCard } from "panels.slint";
+import { Card, PageTitle, Segment, Field, Prefs, Mem, Sk, About, ProvidersCard, Usage } from "panels.slint";
 
 export struct SchedHeadV { available: bool, on: bool, notice: string, unseen: int, count: int, full: bool }
 export struct SchedTask { id: int, name: string, profile: string, summary: string, state: string, detail: string, tools: string, next: string, enabled: bool, running: bool, paused-note: string }
@@ -234,6 +234,18 @@ component SchedRight inherits VerticalLayout {
                 Btn { text: "+"; width: 34px; height: 30px; enabled: root.zoom-pct < 160; clicked => { root.zoom(1); } }
                 Rectangle { horizontal-stretch: 1; }
             }
+            Rectangle { height: 1px; background: Theme.hairline; }
+            Text { text: T.tr("cost_budget_title"); color: Theme.on-var; font-size: 14px; font-weight: 600; }
+            WText { text: T.tr("cost_budget_hint"); fg: Theme.outline; size: 11px; }
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: T.tr("cost_budget_daily"); color: Theme.outline; font-size: 13px; vertical-alignment: center; }
+                LineEdit { horizontal-stretch: 1; text <=> Usage.budget-day; input-type: InputType.decimal; placeholder-text: "—"; }
+                Text { text: T.tr("cost_budget_monthly"); color: Theme.outline; font-size: 13px; vertical-alignment: center; }
+                LineEdit { horizontal-stretch: 1; text <=> Usage.budget-month; input-type: InputType.decimal; placeholder-text: "—"; }
+                Btn { text: T.tr("cost_budget_save"); height: 34px; primary: true; clicked => { Usage.budget-save(Usage.budget-day, Usage.budget-month); } }
+            }
+            if Usage.budget-note != "": WText { text: Usage.budget-note; fg: Theme.primary-soft; size: 11px; }
             Rectangle { height: 1px; background: Theme.hairline; }
             ProvidersCard { }
             Rectangle { height: 1px; background: Theme.hairline; }

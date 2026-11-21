@@ -75,6 +75,19 @@ export global Usage {
     // The per-model weekly window is named by a guess: the card says so.
     in property <bool> assume;
     in-out property <bool> open;
+    // The cost block (src/view/cost.rs): what the account shown cost today, in 7 days and this month (estimates), how near the budgets
+    // are (level: ok, warn, limit, or "" without a budget), and the budget fields of Settings.
+    in property <string> cost-today;
+    in property <string> cost-week;
+    in property <string> cost-month;
+    in property <string> cost-line;
+    in property <string> cost-level;
+    in property <bool> cost-empty;
+    in-out property <string> budget-day;
+    in-out property <string> budget-month;
+    in property <string> budget-note;
+    // The two budgets as typed ("" for none).
+    callback budget-save(string, string);
     // The card asked the program for the numbers now: running, and a word about how it ended ("" when well).
     in property <bool> busy;
     in property <string> note;
@@ -598,6 +611,18 @@ export component UsageCard inherits Card {
             }
             Text { text: w.reset; color: Theme.outline; font-size: 11px; }
         }
+        Rectangle { height: 1px; background: Theme.hairline; }
+        Text { text: T.tr("cost_title"); color: Theme.on-surface; font-size: 12px; font-weight: 600; }
+        if Usage.cost-empty: Text { text: T.tr("cost_none"); color: Theme.outline; font-size: 11px; }
+        if !Usage.cost-empty: HorizontalLayout {
+            spacing: 18px;
+            VerticalLayout { spacing: 2px; Text { text: T.tr("cost_today"); color: Theme.outline; font-size: 11px; } Text { text: Usage.cost-today; color: Theme.on-surface; font-size: 14px; font-family: Theme.mono; font-weight: 600; } }
+            VerticalLayout { spacing: 2px; Text { text: T.tr("cost_week"); color: Theme.outline; font-size: 11px; } Text { text: Usage.cost-week; color: Theme.on-surface; font-size: 14px; font-family: Theme.mono; font-weight: 600; } }
+            VerticalLayout { spacing: 2px; Text { text: T.tr("cost_month"); color: Theme.outline; font-size: 11px; } Text { text: Usage.cost-month; color: Theme.on-surface; font-size: 14px; font-family: Theme.mono; font-weight: 600; } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if Usage.cost-line != "": Text { text: Usage.cost-line; color: Usage.tone(Usage.cost-level); font-size: 11px; font-weight: 600; wrap: word-wrap; }
+        WText { text: T.tr("cost_note"); size: 10px; fg: Theme.outline; }
         HorizontalLayout {
             spacing: 8px;
             Text { horizontal-stretch: 1; text: Usage.empty ? "" : Usage.seen; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; }

@@ -19,6 +19,9 @@ use crate::{Acct, App, AppWindow, Usage, UsageWin};
 thread_local! {
     static DATA: RefCell<HashMap<String, AccountUsage>> = RefCell::new(HashMap::new());
     static TIMER: RefCell<Option<slint::Timer>> = const { RefCell::new(None) };
+    // The cost ledger and the two budgets as the core last said them, and what Settings last showed in the budget fields.
+    static LEDGER: RefCell<(tenrec::costs::Days, Option<f64>, Option<f64>)> = RefCell::new((tenrec::costs::Days::new(), None, None));
+    static BUDGET_NOTE: RefCell<String> = const { RefCell::new(String::new()) };
     // An ask for the usage is on its way (the button waits), and the word about how the last one ended.
     static BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     // The word about how the last ask ended, and for which account (it shows only on that account's card).
@@ -42,6 +45,28 @@ pub fn on_reply(ui: &AppWindow, app: &Arc<App>, kind: &str, data: Value) {
             render(ui, app);
         }
         "usage_changed" => app.bus.post_quiet(json!({"op": "account_usage"})),
+        "cost_changed" => app.bus.post_quiet(json!({"op": "cost_ledger"})),
+        "cost_ledger" => {
+            let Ok(days) = serde_json::from_value::<tenrec::costs::Days>(data["days"].clone()) else { return };
+            let (daily, monthly) = (data["daily"].as_f64(), data["monthly"].as_f64());
+            // The budget fields show what is stored, but only when that changed (a number being typed is not overwritten by a new cost).
+            let changed = LEDGER.with(|l| {
+                let l = l.borrow();
+                l.1 != daily || l.2 != monthly
+            });
+            LEDGER.with(|l| *l.borrow_mut() = (days, daily, monthly));
+            if changed {
+                let u = ui.global::<Usage>();
+                u.set_budget_day(daily.map(|v| v.to_string()).unwrap_or_default().into());
+                u.set_budget_month(monthly.map(|v| v.to_string()).unwrap_or_default().into());
+            }
+            render(ui, app);
+        }
+        "cost_result" => {
+            let note = if data["ok"] == true { tr(app.lang, "cost_budget_saved") } else { tr(app.lang, "cost_budget_bad") };
+            BUDGET_NOTE.with(|n| *n.borrow_mut() = note);
+            render(ui, app);
+        }
         "usage_refresh" => {
             BUSY.with(|b| b.set(false));
             BUSY_TIMER.with(|t| *t.borrow_mut() = None);
@@ -83,6 +108,18 @@ pub fn render(ui: &AppWindow, app: &App) {
     u.set_level(view.chip_level.into());
     u.set_seen(view.seen.into());
     u.set_empty(!view.has_data);
+    // The cost block, for the account the window shows.
+    let cost = LEDGER.with(|l| {
+        let l = l.borrow();
+        tenrec::view::cost::cost_view(&l.0, &key, &tenrec::costs::local_day(), l.1, l.2, app.lang)
+    });
+    u.set_cost_today(cost.today.into());
+    u.set_cost_week(cost.week.into());
+    u.set_cost_month(cost.month.into());
+    u.set_cost_line(cost.budget_line.into());
+    u.set_cost_level(cost.level.into());
+    u.set_cost_empty(!cost.has_data);
+    u.set_budget_note(BUDGET_NOTE.with(|n| n.borrow().clone()).into());
     u.set_busy(BUSY.with(|b| b.get()));
     let key = app.bus.account().unwrap_or_default();
     u.set_note(NOTE.with(|n| { let n = n.borrow(); if n.0 == key { n.1.clone() } else { String::new() } }).into());
@@ -128,7 +165,28 @@ fn refresh(ui: &AppWindow, app: &Arc<App>, auto: bool) {
     render(ui, app);
 }
 
+/// A budget as typed: empty is none (null); a number is sent as it is (the core checks the range). None when it is not a number.
+fn typed_budget(text: &str) -> Option<serde_json::Value> {
+    let t = text.trim().replace(',', ".");
+    if t.is_empty() {
+        return Some(serde_json::Value::Null);
+    }
+    t.parse::<f64>().ok().filter(|v| v.is_finite()).map(|v| json!(v))
+}
+
 pub fn wire(ui: &AppWindow, app: &Arc<App>) {
+    app.bus.post_quiet(json!({"op": "cost_ledger"}));
+    let (a, weak) = (app.clone(), ui.as_weak());
+    ui.global::<Usage>().on_budget_save(move |daily, monthly| {
+        let Some(ui) = weak.upgrade() else { return };
+        match (typed_budget(daily.as_str()), typed_budget(monthly.as_str())) {
+            (Some(d), Some(m)) => a.bus.post_quiet(json!({"op": "cost_budget_set", "daily": d, "monthly": m})),
+            _ => {
+                BUDGET_NOTE.with(|n| *n.borrow_mut() = tr(a.lang, "cost_budget_bad"));
+                render(&ui, &a);
+            }
+        }
+    });
     let (a, weak) = (app.clone(), ui.as_weak());
     ui.global::<Usage>().on_refresh(move || {
         if let Some(ui) = weak.upgrade() {
@@ -152,4 +210,19 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         }
     });
     TIMER.with(|t| *t.borrow_mut() = Some(timer));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_typed_budget_is_none_a_number_or_refused() {
+        assert_eq!(typed_budget("  "), Some(serde_json::Value::Null));
+        assert_eq!(typed_budget("12,5"), Some(json!(12.5)));
+        assert_eq!(typed_budget("20"), Some(json!(20.0)));
+        for bad in ["abc", "1e999", "NaN", "$5"] {
+            assert_eq!(typed_budget(bad), None, "{bad}");
+        }
+    }
 }

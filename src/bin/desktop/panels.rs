@@ -256,7 +256,7 @@ fn skill_result(ui: &AppWindow, app: &Arc<App>, data: &Value) {
 pub async fn read(app: Arc<App>, mut rx: UnboundedReceiver<String>) {
     const USED: &[&str] = &[
         "memory", "memory_result", "memory_changed", "memory_auto", "memory_notice", "skills", "skill_result", "skills_changed", "skill_notice", "skill_proposed", "search_results",
-        "accounts", "account_result", "account_status", "account_plugins", "accounts_changed", "account_usage", "usage_changed", "usage_refresh",
+        "accounts", "account_result", "account_status", "account_plugins", "accounts_changed", "account_usage", "usage_changed", "usage_refresh", "cost_ledger", "cost_changed", "cost_result",
         "sched", "sched_result", "sched_changed", "sched_run", "sched_run_detail",
         "providers", "provider_result", "providers_changed", "skill_versions",
         "fs_listing", "fs_text", "fs_saved", "fs_conflict", "fs_needs_confirm", "fs_error", "fs_checked", "fs_created", "fs_renamed", "fs_deleted", "fs_restored", "fs_purge_summary", "fs_purged",
@@ -310,7 +310,7 @@ fn on_reply(ui: &AppWindow, app: &Arc<App>, kind: &str, data: Value) {
     let panel = ui.get_side();
     match kind {
         "accounts" | "account_result" | "account_status" | "account_plugins" | "accounts_changed" => crate::accounts::on_reply(ui, app, kind, data),
-        "account_usage" | "usage_changed" | "usage_refresh" => crate::usage::on_reply(ui, app, kind, data),
+        "account_usage" | "usage_changed" | "usage_refresh" | "cost_ledger" | "cost_changed" | "cost_result" => crate::usage::on_reply(ui, app, kind, data),
         "sched" | "sched_result" | "sched_changed" | "sched_run" | "sched_run_detail" => crate::sched::on_reply(ui, app, kind, data),
         "providers" | "provider_result" | "providers_changed" => crate::prov::on_reply(ui, app, kind, data),
         "fs_listing" | "fs_text" | "fs_saved" | "fs_conflict" | "fs_needs_confirm" | "fs_error" | "fs_checked" | "fs_created" | "fs_renamed" | "fs_deleted" | "fs_restored" | "fs_purge_summary" | "fs_purged" => crate::files::on_reply(ui, app, kind, data),

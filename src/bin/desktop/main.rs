@@ -1539,6 +1539,8 @@ async fn refresh_sessions(app: &Arc<App>) {
         })
         .collect();
     notify::check(&app.data, app.lang, &watched, current.as_deref());
+    let budgets = app.registry.settings().get();
+    notify::check_budget(&app.data, app.lang, &app.registry.costs().snapshot(), budgets.budget_daily_usd, budgets.budget_monthly_usd);
     let active = list.iter().find(|i| current.as_deref() == Some(i.meta.sid.as_str()));
     *app.cwd.lock().expect("cwd") = active.map(|i| i.meta.cwd.to_string_lossy().into_owned());
     let chat_acct = active.and_then(|i| i.meta.account.as_ref().map(|a| a.id.clone()));

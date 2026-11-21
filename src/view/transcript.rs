@@ -251,6 +251,8 @@ pub struct Transcript {
     ctx_warned: Pressure,
     /// Signs that the chat has lost its way (the same call again and again, a wide spread of edits), from its own tool calls.
     watch: Watch,
+    /// This turn's cost and the chat's sum, from the `cost` event that comes just before the result (taken by it).
+    cost_turn: Option<(f64, f64)>,
 }
 
 const MAX_RESULT: usize = 20_000;
@@ -498,11 +500,16 @@ pub fn guard_kind(text: &str) -> Option<&'static str> {
 
 /// `2.4s · $0.0123` from a result.
 pub fn fmt_turn(result: &Value) -> String {
+    fmt_turn_with(result, None)
+}
+
+/// As `fmt_turn`, with the cost of this turn when it is known (the result's own `total_cost_usd` is a running total of the program).
+pub fn fmt_turn_with(result: &Value, cost: Option<f64>) -> String {
     let mut bits = Vec::new();
     if let Some(ms) = result.get("duration_ms").and_then(Value::as_f64) {
         bits.push(format!("{:.1}s", ms / 1000.0));
     }
-    if let Some(cost) = result.get("total_cost_usd").and_then(Value::as_f64) {
+    if let Some(cost) = cost.or_else(|| result.get("total_cost_usd").and_then(Value::as_f64)) {
         bits.push(format!("${cost:.4}"));
     }
     bits.join(" · ")
@@ -510,7 +517,12 @@ pub fn fmt_turn(result: &Value) -> String {
 
 /// The header's cost and tokens of the last result.
 pub fn turn_line(result: &Value) -> Option<(Option<String>, Option<String>)> {
-    let cost = result.get("total_cost_usd").and_then(Value::as_f64).map(|c| format!("${c:.3}"));
+    turn_line_with(result, None)
+}
+
+/// As `turn_line`, with what the chat has cost so far when it is known (else the result's own total).
+pub fn turn_line_with(result: &Value, chat_cost: Option<f64>) -> Option<(Option<String>, Option<String>)> {
+    let cost = chat_cost.or_else(|| result.get("total_cost_usd").and_then(Value::as_f64)).map(|c| format!("${c:.3}"));
     let tokens = result.get("usage").map(|u| ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"].iter().map(|k| u.get(*k).and_then(Value::as_u64).unwrap_or(0)).sum::<u64>()).filter(|n| *n > 0).map(|n| if n >= 1000 { format!("{:.1}k", n as f64 / 1000.0) } else { n.to_string() });
     (cost.is_some() || tokens.is_some()).then_some((cost, tokens))
 }
@@ -606,7 +618,7 @@ fn local(ms: u64) -> Option<(String, String)> {
 
 impl Transcript {
     pub fn new(lang: Lang) -> Self {
-        Self { lang, nodes: Vec::new(), tools: HashMap::new(), live_text: None, live_think: None, think_ms: None, asst_meta: false, day: String::new(), ts: 0, team_cmd: false, cmd_status: false, team_cand: None, head: Head::default(), pending: Vec::new(), replaying: true, first_text: None, expanded: Default::default(), ctx_warned: Pressure::Ok, watch: Watch::new() }
+        Self { cost_turn: None, lang, nodes: Vec::new(), tools: HashMap::new(), live_text: None, live_think: None, think_ms: None, asst_meta: false, day: String::new(), ts: 0, team_cmd: false, cmd_status: false, team_cand: None, head: Head::default(), pending: Vec::new(), replaying: true, first_text: None, expanded: Default::default(), ctx_warned: Pressure::Ok, watch: Watch::new() }
     }
 
     fn t(&self, key: &str) -> String {
@@ -797,6 +809,12 @@ impl Transcript {
                 let summary: String = s(data, "summary").chars().filter(|c| !c.is_control()).take(160).collect();
                 self.note(format!("{}: {summary}", self.t("team_changed_note")), "note");
             }
+            // What the turn about to end cost, and what the chat has cost (numbers the session worked out; see `costs`).
+            "cost" => {
+                if let (Some(turn), Some(chat)) = (data.get("turn").and_then(Value::as_f64), data.get("chat").and_then(Value::as_f64)) {
+                    self.cost_turn = Some((turn, chat));
+                }
+            }
             // The program's process was ended to be started again: its background jobs went with it.
             "bg_lost" => {
                 let n = data.get("n").and_then(Value::as_u64).unwrap_or(0);
@@ -953,7 +971,10 @@ impl Transcript {
                 if zero {
                     return;
                 }
-                if let Some(turn) = turn_line(d) {
+                // The cost event the session wrote just before this result: this turn's cost and the chat's sum (an older log has none:
+                // the result's own total is then shown, as it was).
+                let cost = self.cost_turn.take();
+                if let Some(turn) = turn_line_with(d, cost.map(|(_, chat)| chat)) {
                     self.head.turn = Some(turn);
                 }
                 if let Some(max) = context_window(d, self.head.model.as_deref()) {
@@ -961,7 +982,7 @@ impl Transcript {
                 }
                 self.head.cache_pct = d.get("usage").and_then(cache_hit);
                 self.context_notice();
-                let line = fmt_turn(d);
+                let line = fmt_turn_with(d, cost.map(|(turn, _)| turn));
                 if s(d, "subtype") == "error_during_execution" {
                     let text = if line.is_empty() { self.t("interrupted") } else { format!("{} · {line}", self.t("interrupted")) };
                     self.note(text, "note");
@@ -2278,6 +2299,24 @@ mod plain_text_tests {
         t.apply("claude", &json!({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "c", "task_type": "local_bash", "description": "y"}]}), 7);
         t.apply("state", &json!({"state": "exited", "code": 0}), 8);
         assert!(t.head.bg_tasks.is_empty());
+    }
+
+    #[test]
+    fn the_turn_line_and_the_header_use_the_cost_event_and_an_old_log_keeps_the_results_own_total() {
+        let mut t = Transcript::new(Lang::Ko);
+        // The session's cost event (this turn 0.2 of a chat that has cost 0.6) comes just before a result whose own total is 0.9.
+        t.apply("cost", &json!({"turn": 0.2, "total": 0.9, "chat": 0.6}), 1);
+        t.apply("claude", &json!({"type": "result", "subtype": "success", "is_error": false, "duration_ms": 2000, "total_cost_usd": 0.9, "usage": {"input_tokens": 10, "output_tokens": 5}}), 2);
+        assert_eq!(t.head.turn.as_ref().and_then(|(c, _)| c.clone()).as_deref(), Some("$0.600"));
+        let line = t.rows().into_iter().rev().find(|r| r.kind == "note").map(|r| r.text).unwrap_or_default();
+        assert!(line.contains("$0.2000") && !line.contains("0.9"), "{line}");
+        // A result with no cost event before it (a log from before costs were kept) shows its own total, as it did.
+        let mut old = Transcript::new(Lang::Ko);
+        old.apply("claude", &json!({"type": "result", "subtype": "success", "is_error": false, "duration_ms": 2000, "total_cost_usd": 0.9}), 1);
+        assert_eq!(old.head.turn.as_ref().and_then(|(c, _)| c.clone()).as_deref(), Some("$0.900"));
+        // The cost event is used by one result only.
+        t.apply("claude", &json!({"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 1.0}), 3);
+        assert_eq!(t.head.turn.as_ref().and_then(|(c, _)| c.clone()).as_deref(), Some("$1.000"));
     }
 
     #[test]
