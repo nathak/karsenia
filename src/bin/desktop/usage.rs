@@ -27,7 +27,7 @@ thread_local! {
     // How many accounts' answers are still to come for the ask that is on its way (the button waits for all of them).
     static PENDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     // The word about how the last ask ended, and for which account (it shows only on that account's card).
-    static NOTE: RefCell<(String, String)> = const { RefCell::new((String::new(), String::new())) };
+    static NOTE: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
     // Lets the button go if no answer ever comes (the link was cut): longer than the ask itself may take.
     // The ask on its way was started by the button (not by the card opening).
     static MANUAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -93,13 +93,13 @@ pub fn on_reply(ui: &AppWindow, app: &Arc<App>, kind: &str, data: Value) {
                 Some("unreadable") => tr(app.lang, "us_ref_unreadable"),
                 Some(_) => tr(app.lang, "us_ref_failed"),
             };
-            // A failure is kept (the card says which account's); a success of that account takes it away.
+            // Each account keeps its own note: another account's answer must not hide this one's failure. A success takes it away.
             NOTE.with(|n| {
                 let mut n = n.borrow_mut();
-                if !note.is_empty() {
-                    *n = (account, note);
-                } else if n.0 == account {
-                    *n = (String::new(), String::new());
+                if note.is_empty() {
+                    n.remove(&account);
+                } else {
+                    n.insert(account, note);
                 }
             });
             render(ui, app);
@@ -153,7 +153,7 @@ pub fn render(ui: &AppWindow, app: &App) {
     u.set_budget_note(BUDGET_NOTE.with(|n| n.borrow().clone()).into());
     u.set_busy(BUSY.with(|b| b.get()));
     let key = app.bus.account().unwrap_or_default();
-    u.set_note(NOTE.with(|n| { let n = n.borrow(); if n.0 == key { n.1.clone() } else { String::new() } }).into());
+    u.set_note(NOTE.with(|n| n.borrow().get(&key).cloned().unwrap_or_default()).into());
     u.set_assume(view.wins.iter().any(|w| w.key == "seven_day_overage_included"));
     let wins: Vec<UsageWin> = view.wins.into_iter().map(|w| UsageWin { label: w.label.into(), pct: w.pct.into(), frac: w.frac, level: w.level.into(), reset: w.reset.into() }).collect();
     u.set_wins(ModelRc::from(Rc::new(VecModel::from(wins))));
@@ -189,7 +189,7 @@ fn refresh(ui: &AppWindow, app: &Arc<App>, auto: bool) {
     BUSY.with(|b| b.set(true));
     PENDING.with(|p| p.set(keys.len()));
     MANUAL.with(|m| m.set(!auto));
-    NOTE.with(|n| *n.borrow_mut() = (String::new(), String::new()));
+    NOTE.with(|n| n.borrow_mut().clear());
     let weak = ui.as_weak();
     let timer = slint::Timer::default();
     // The longer ask of several accounts (each one runs the program's start-up hooks): let the button go if some answer never comes.
