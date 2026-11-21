@@ -91,3 +91,28 @@ async fn a_turns_cost_is_the_difference_of_running_totals_and_a_restart_does_not
     idle(&mut rx).await;
     assert!((today(&server) - 1.1).abs() < 1e-9, "{}", today(&server));
 }
+
+/// A session handed to another account and fast-forwarded back brings that account's spend with it (the running total of the program
+/// then includes it): the baseline moves there, so the next turn is only its own cost and the ledger does not count the spend twice.
+#[tokio::test]
+async fn a_session_that_comes_back_from_another_account_does_not_count_that_spend_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let project = root.join("p");
+    std::fs::create_dir_all(&project).unwrap();
+    let bin = wrapper(&root, "absorb", &[0.1, 5.3]);
+    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(bin), mcp_bin: None, extract: Default::default(), propose: Default::default(), sched: Default::default() }).await.unwrap();
+    let chat = server.registry.create_in(project.to_str().unwrap(), None, None, false, None).unwrap();
+    let (_, mut rx) = chat.subscribe(0).await.unwrap();
+    chat.send("a".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+    assert!((today(&server) - 0.1).abs() < 1e-9);
+    // The other account's turns, taken in: its results end at a running total of 5.0 (already counted there).
+    let events = vec![(1u64, "claude".to_owned(), serde_json::json!({"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 5.0}))];
+    chat.absorb(events, tenrec::session::Handed { parent: "other".into(), parent_hash: 1 }).await.unwrap();
+    assert!((today(&server) - 0.1).abs() < 1e-9, "taking events in adds nothing to the ledger");
+    chat.send("b".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+    // The program reports 5.3: the turn is 0.3.
+    assert!((today(&server) - 0.4).abs() < 1e-9, "{}", today(&server));
+}

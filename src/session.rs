@@ -766,9 +766,25 @@ impl Actor {
                 }
             }
             Cmd::Absorb { events, handed, reply } => {
+                // The session that comes back has been used elsewhere: its running total includes that spend, which was counted under the
+                // other account when it happened. The baseline moves to where that session stands now, so the next turn costs only itself.
+                let mut stands: Option<f64> = None;
+                for (_, kind, data) in &events {
+                    let total = match kind.as_str() {
+                        "cost" => data["total"].as_f64(),
+                        "claude" if data["type"] == "result" => data["total_cost_usd"].as_f64(),
+                        _ => None,
+                    };
+                    stands = total.filter(|t| t.is_finite() && *t >= 0.0).or(stands);
+                }
                 for (ts, kind, mut data) in events {
                     data["imported"] = Value::Bool(true);
                     self.emit_at(&kind, data, ts);
+                }
+                if let Some(total) = stands {
+                    self.cost_base = Some(total);
+                    // Written down as the chat's own (not imported) so a restart restores the same baseline; nothing is added to the ledger.
+                    self.emit("cost", json!({"turn": 0.0, "total": total, "chat": self.cost_chat}));
                 }
                 self.meta.handed = Some(handed);
                 self.save_meta();
