@@ -3,6 +3,7 @@ pub mod accounts;
 pub mod attachments;
 pub mod cli_sessions;
 pub mod claude;
+pub mod costs;
 pub mod codex;
 pub mod extract;
 pub mod handover;

@@ -33,6 +33,8 @@ pub struct Shared {
     pub propose: ProposeConfig,
     /// The limits `claude` reports, kept per account.
     pub usage: Arc<UsageStore>,
+    /// What the chats cost, by day, account and provider.
+    pub costs: Arc<crate::costs::CostStore>,
 }
 
 pub struct Realm {

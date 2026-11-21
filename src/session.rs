@@ -333,6 +333,8 @@ impl SessionHandle {
 }
 
 pub struct Setup {
+    /// Where the cost of each turn is added (see `costs`).
+    pub costs: Option<Arc<crate::costs::CostStore>>,
     pub meta: Meta,
     pub bin: String,
     pub dir: PathBuf,
@@ -369,7 +371,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, retire_reply: None };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_chat: 0.0, retire_reply: None };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -404,6 +406,13 @@ struct Actor {
     /// How many background jobs of the chat the program last said it had (ambient ones left out): they live in its process, so a
     /// restart of the process ends them, and the chat says so.
     bg_live: usize,
+    /// Where the cost of each turn is added.
+    costs: Option<Arc<crate::costs::CostStore>>,
+    /// The running total of the program's last result (the baseline the next turn's cost is the difference from); None for a chat that
+    /// came from a session whose spend we never saw.
+    cost_base: Option<f64>,
+    /// What this chat has cost so far.
+    cost_chat: f64,
     /// Who waits for the process to end before the worktree is removed.
     retire_reply: Option<oneshot::Sender<Result<(), String>>>,
 }
@@ -609,6 +618,8 @@ impl Actor {
                 _ => {}
             }
         }
+        // The baseline of the cost: the last number this chat's own log holds (events imported from another chat are not its own).
+        self.restore_cost();
         for request_id in open {
             self.emit("permission_resolved", json!({"request_id": request_id, "outcome": "cancelled"}));
         }
@@ -619,6 +630,26 @@ impl Actor {
         if background {
             self.emit("claude", json!({"type": "system", "subtype": "background_tasks_changed", "tasks": []}));
         }
+    }
+
+    /// Sets where the cost counts from, out of the log: the last `cost` event (the program's running total and the chat's sum); with none
+    /// (a log from before costs were kept) the last result's total, with the chat's sum unknown (0); with neither, a chat that came from
+    /// a session we never saw has no baseline (its first result sets it, counting nothing) and any other starts from nothing.
+    fn restore_cost(&mut self) {
+        let own = |e: &&Envelope| e.data["imported"] != true;
+        let last_cost = self.log.iter().filter(own).rev().find(|e| e.kind == "cost");
+        if let Some(e) = last_cost {
+            self.cost_base = e.data["total"].as_f64();
+            self.cost_chat = e.data["chat"].as_f64().unwrap_or(0.0);
+            return;
+        }
+        let last_result = self.log.iter().filter(own).rev().find(|e| e.kind == "claude" && e.data["type"] == "result" && e.data["total_cost_usd"].is_number());
+        self.cost_base = match last_result {
+            Some(e) => e.data["total_cost_usd"].as_f64(),
+            None if self.meta.imported_from.is_some() => None,
+            None => Some(0.0),
+        };
+        self.cost_chat = 0.0;
     }
 
     /// Every request still waiting is dead (the turn ended or the process went).
@@ -975,6 +1006,10 @@ impl Actor {
                     self.process = Some(process);
                     self.native_spawned = opts.plugins_off;
                     self.team_spawned = team;
+                    // A process that does not resume a session counts its cost from nothing.
+                    if opts.resume.is_none() {
+                        self.cost_base = Some(0.0);
+                    }
                     // What was started, for the debug view: the argument list (no key is ever in it), the environment with every credential
                     // hidden, and what was taken away. The key replacement of `emit` is a second guard.
                     let env: Vec<Value> = opts.env.describe().into_iter().map(|(name, shown)| json!([name, shown])).collect();
@@ -1157,6 +1192,8 @@ impl Actor {
             }
             ProcEvent::Line(Event::Result { raw, subtype, .. }) => {
                 self.cancel_pending();
+                // The cost of the turn first: the transcript reads it when it meets the result.
+                self.note_cost(&raw);
                 self.emit("claude", raw);
                 self.set_state(State::Idle);
                 // A provider chat is never read by auto-save or skill proposals: their runs go to the account.
@@ -1190,6 +1227,26 @@ impl Actor {
 
     /// The limits a `rate_limit_event` of this chat's `claude` reports are kept for its account. A provider chat has no Anthropic
     /// limits, and a live line is the only way in (a replayed log or an imported session never reaches this).
+    /// The cost of the turn a live result ends: the difference from the result before (see `costs::turn_cost`), told in the chat's log as
+    /// numbers (`cost`: the turn, the running total of the program, what the chat has cost) and added to the day's sum of the account (or,
+    /// for a chat of a provider, of the provider: its cost is not the account's). Only live results come here: a replay never counts twice.
+    fn note_cost(&mut self, raw: &Value) {
+        let crate::costs::Step::Count { delta, total } = crate::costs::turn_cost(self.cost_base, raw) else { return };
+        self.cost_base = Some(total);
+        self.cost_chat += delta;
+        self.emit("cost", json!({"turn": delta, "total": total, "chat": self.cost_chat}));
+        if delta <= 0.0 || self.realm.as_ref().is_some_and(|r| r.is_retired()) {
+            return;
+        }
+        let key = match &self.meta.provider {
+            Some(p) => format!("p:{}", p.id),
+            None => self.meta.account.as_ref().map(|a| a.id.clone()).unwrap_or_default(),
+        };
+        if let Some(costs) = &self.costs {
+            costs.add(&key, &crate::costs::local_day(), delta);
+        }
+    }
+
     fn note_usage(&self, raw: &Value) {
         if raw["type"] != "rate_limit_event" || self.meta.provider.is_some() {
             return;

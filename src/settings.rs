@@ -61,6 +61,11 @@ pub struct Settings {
     /// Off by default: it holds what the CLI says about every call, and grows while the chat runs.
     #[serde(default)]
     pub debug_api: bool,
+    /// The most the person wants the chats to cost (estimated, USD) in a day and in a month; None: no budget. See `costs`.
+    #[serde(default)]
+    pub budget_daily_usd: Option<f64>,
+    #[serde(default)]
+    pub budget_monthly_usd: Option<f64>,
 }
 
 /// Set once, first thing, by the desktop app: in this process the built-in workbench is the only one, whatever the settings file says (the

@@ -178,7 +178,8 @@ impl Registry {
             anyhow::bail!("the claude program must be a .exe on Windows: {bin}");
         }
         let usage = Arc::new(crate::usage::UsageStore::open(&dir.join("usage.json"), events.clone()));
-        let shared = Shared { bin: bin.clone(), settings: settings.clone(), sessions: sessions.clone(), events: events.clone(), extract, propose, usage };
+        let costs = Arc::new(crate::costs::CostStore::open(&dir.join("costs.json"), events.clone()));
+        let shared = Shared { bin: bin.clone(), settings: settings.clone(), sessions: sessions.clone(), events: events.clone(), extract, propose, usage, costs };
         // The default account's files are the ones the app always had, in the data folder itself.
         let default_realm = Realm::open(None, &dir, EnvPlan::default(), &shared);
         let (accounts, mut accounts_notice) = AccountStore::open(&dir);
@@ -237,7 +238,7 @@ impl Registry {
             if let Some(index) = realm.as_ref().and_then(|r| r.index.as_ref()) {
                 index.catch_up(sid, &meta.cwd.to_string_lossy(), meta.created, log.clone());
             }
-            let handle = session::spawn(Setup { meta, bin: registry.bin.clone(), dir: dir.clone(), log, realm, mcp: registry.gate.clone(), providers: Some(registry.providers.clone()), settings: Some(registry.settings.clone()), instance: registry.instance.clone() });
+            let handle = session::spawn(Setup { costs: Some(registry.shared.costs.clone()), meta, bin: registry.bin.clone(), dir: dir.clone(), log, realm, mcp: registry.gate.clone(), providers: Some(registry.providers.clone()), settings: Some(registry.settings.clone()), instance: registry.instance.clone() });
             registry.sessions.lock().expect("registry lock").insert(sid.to_owned(), handle);
         }
         // Each realm's index keeps only its own account's chats: an entry of another account that got there is removed.
@@ -362,7 +363,7 @@ impl Registry {
         let realm = self.realm_of_meta(&meta);
         let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
         crate::private::write(&session::meta_path(&self.dir, &meta.sid), &text).map_err(|e| e.to_string())?;
-        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), instance: self.instance.clone() });
+        let handle = session::spawn(Setup { costs: Some(self.shared.costs.clone()), meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), instance: self.instance.clone() });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok(handle)
     }
@@ -419,7 +420,7 @@ impl Registry {
         if let Some(index) = realm.as_ref().and_then(|r| r.index.as_ref()) {
             index.catch_up(&meta.sid, &meta.cwd.to_string_lossy(), meta.created, log.clone());
         }
-        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log, realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), instance: self.instance.clone() });
+        let handle = session::spawn(Setup { costs: Some(self.shared.costs.clone()), meta, bin: self.bin.clone(), dir: self.dir.clone(), log, realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), instance: self.instance.clone() });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok(handle)
     }
@@ -586,7 +587,7 @@ impl Registry {
             return Err(error);
         }
         let realm = self.realm_of_meta(&meta);
-        let handle = session::spawn(Setup { meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), instance: self.instance.clone() });
+        let handle = session::spawn(Setup { costs: Some(self.shared.costs.clone()), meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), instance: self.instance.clone() });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok((handle, source.below_top.then_some("below_top")))
     }
@@ -687,6 +688,11 @@ impl Registry {
         &self.shared.usage
     }
 
+    /// What the chats cost, by day, account and provider.
+    pub fn costs(&self) -> &crate::costs::CostStore {
+        &self.shared.costs
+    }
+
     /// Asks the program for the account's usage now (`/usage`, which it answers itself; see `usage_cli`) and keeps what it says as the
     /// stream's events are kept. `account` None (or empty) is the default login. Ok(changed); the Err is a word for the page: `busy` (one
     /// is running), `soon` (one ran a minute ago), `failed` (the program did not answer, or the account has no Claude login),
@@ -785,6 +791,7 @@ impl Registry {
         }
         self.accounts.remove_entry(id)?;
         self.shared.usage.forget(id);
+        self.shared.costs.forget(id);
         let default = crate::accounts::default_home_of(crate::accounts::AccountKind::Codex);
         // Looked at again: only the real, private folder this app made is removed, never what a link points to.
         match crate::accounts::check_dir(&crate::accounts::config_dir(&self.dir, id), &self.dir.join("accounts"), default.as_deref()) {
@@ -862,6 +869,7 @@ impl Registry {
         }
         drop(realm);
         self.shared.usage.forget(id);
+        self.shared.costs.forget(id);
         let home = crate::platform::home_dir();
         let default = crate::accounts::default_config_dir(std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).as_deref(), home.as_deref());
         for (parent, leaf) in [("accounts", crate::accounts::config_dir(&self.dir, id)), ("stores", crate::accounts::stores_dir(&self.dir, id))] {
