@@ -709,6 +709,10 @@ impl Registry {
             crate::usage::Skip::Busy => "busy",
             crate::usage::Skip::Soon => "soon",
         })?;
+        // One program at a time for the whole app: each run starts the program's own start-up hooks, and several accounts asked together
+        // would be several of those at once (the person's security software may take notice of the burst).
+        static ONE_AT_A_TIME: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        let _turn = ONE_AT_A_TIME.acquire().await.map_err(|_| "failed")?;
         let text = crate::usage_cli::ask(&self.bin, &dir, &env).await.map_err(|error| {
             tracing::warn!("the usage could not be asked: {error}");
             "failed"

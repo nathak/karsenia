@@ -514,6 +514,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("cost_budget_saved", "예산을 저장했습니다.", "Budget saved."),
     ("notify_budget_title", "비용 예산 도달", "Cost budget reached"),
     ("notify_budget_body", "설정한 비용 예산에 도달했습니다. (추정치)", "The cost budget you set has been reached (an estimate)."),
+    ("us_ended_short", "초기화", "reset"),
     ("us_accounts", "계정별", "By account"),
     ("us_title", "사용 한도", "Usage limits"),
     ("us_5h", "5시간", "5 hours"),

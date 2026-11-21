@@ -5,6 +5,9 @@ use super::i18n::{fill, tr, Lang};
 use super::panels::ago;
 use crate::usage::{AccountUsage, Win};
 
+/// A figure last seen longer ago than this is shown as old in a table of accounts (30 minutes).
+pub const STALE_MS: u64 = 30 * 60 * 1000;
+
 /// How long after its reset time a window is still believed to be over (clock differences).
 const SLACK_S: u64 = 60;
 
@@ -36,6 +39,8 @@ pub struct UsageView {
     pub week: (String, &'static str),
     /// "2m 기준": when the newest of these was seen.
     pub seen: String,
+    /// The newest of these was seen long ago (`STALE_MS`): a table of accounts shows such a row dimmed.
+    pub stale: bool,
 }
 
 fn order(key: &str) -> (u8, String) {
@@ -123,7 +128,8 @@ pub fn usage_view(usage: Option<&AccountUsage>, now_ms: u64, lang: Lang) -> Usag
     // The two windows people watch, each by itself: one that has ended shows no number (the one after it is not known) and is not coloured.
     let of = |key: &str| -> (String, &'static str) {
         match wins.iter().find(|w| w.key == key) {
-            Some(w) if w.level == "reset" => ("—".to_owned(), "unknown"),
+            // An ended window is told as ended (the one after it is not known), not as if nothing had ever been reported.
+            Some(w) if w.level == "reset" => (tr(lang, "us_ended_short"), "unknown"),
             Some(w) => (w.pct.clone(), w.level),
             None => ("—".to_owned(), "unknown"),
         }
@@ -134,7 +140,8 @@ pub fn usage_view(usage: Option<&AccountUsage>, now_ms: u64, lang: Lang) -> Usag
     let compact_level = ["limit", "warn", "ok"].into_iter().find(|l| five.1 == *l || week.1 == *l).unwrap_or("unknown");
     let newest = usage.and_then(|u| u.values().map(|w| w.seen_at).max());
     let seen = newest.map(|t| fill(&tr(lang, "us_seen"), &[("t", ago(t, now_ms, lang))])).unwrap_or_default();
-    UsageView { has_data: !wins.is_empty(), wins, chip, chip_level, compact, compact_level, five, week, seen }
+    let stale = newest.is_some_and(|t| now_ms.saturating_sub(t) > STALE_MS);
+    UsageView { has_data: !wins.is_empty(), wins, chip, chip_level, compact, compact_level, five, week, seen, stale }
 }
 
 #[cfg(test)]
@@ -190,7 +197,10 @@ mod tests {
         // Only the week was reported: the 5-hour one reads as not known.
         let mut w: AccountUsage = BTreeMap::new();
         w.insert("seven_day".into(), win(Some(0.5), 86400, "allowed"));
-        assert_eq!(usage_view(Some(&w), NOW, Lang::Ko).compact, "5시간 — · 주간 50%");
+        assert_eq!(usage_view(Some(&w), NOW, Lang::Ko).compact, "5시간 — · 주간 50%", "never reported is not the same as ended");
+        // Old figures are marked: seen two minutes ago is fresh, an hour ago is not.
+        assert!(!usage_view(Some(&w), NOW, Lang::Ko).stale);
+        assert!(usage_view(Some(&w), NOW + 3_600_000, Lang::Ko).stale);
     }
 
     #[test]
@@ -202,8 +212,8 @@ mod tests {
         assert_eq!((v.wins[0].level, v.wins[0].pct.as_str(), v.wins[0].reset.as_str()), ("reset", "—", "초기화 시각 지남 · 현재 사용량 모름"));
         assert_eq!((v.chip.as_str(), v.chip_level), ("주간 30%", "ok"));
         // The row says both: the ended 5-hour window with no number, the week with its own.
-        assert_eq!(v.compact, "5시간 — · 주간 30%");
-        assert_eq!((v.five.clone(), v.week.clone()), (("—".to_owned(), "unknown"), ("30%".to_owned(), "ok")));
+        assert_eq!(v.compact, "5시간 초기화 · 주간 30%");
+        assert_eq!((v.five.clone(), v.week.clone()), (("초기화".to_owned(), "unknown"), ("30%".to_owned(), "ok")));
         let none = usage_view(None, NOW, Lang::Ko);
         assert!(!none.has_data && none.wins.is_empty());
         assert_eq!((none.chip.as_str(), none.chip_level, none.compact.as_str(), none.seen.as_str()), ("한도 —", "unknown", "", ""));

@@ -19,7 +19,7 @@ export struct PlugRow { id: string, busy: bool }
 export struct GwRow { id: string, name: string, host: string }
 export struct AcctRow { gws: [GwRow], id: string, name: string, sub: string, state: string, chats: int, open: bool, is-default: bool, usage: string, usage-level: string, kind: string, login: string, dir: string, plug-open: bool, plug-note: string, plugs: [PlugRow] }
 // One account's row in the card's table: its name and its 5-hour and weekly windows (percent and level each); shown: the account the card is on.
-export struct UsageAcct { name: string, five: string, five-level: string, week: string, week-level: string, shown: bool }
+export struct UsageAcct { name: string, five: string, five-level: string, week: string, week-level: string, shown: bool, stale: bool }
 export struct UsageWin { label: string, pct: string, frac: float, level: string, reset: string }
 
 // The Claude logins (personal, work...). Each has its own notes, skills and history; the panels show one of them.
@@ -626,6 +626,8 @@ export component UsageCard inherits Card {
             }
             for a in Usage.accounts: HorizontalLayout {
                 spacing: 8px;
+                // Figures last seen long ago are dimmed (the refresh button makes them current).
+                opacity: a.stale ? 0.5 : 1.0;
                 Text { horizontal-stretch: 1; text: a.name; color: a.shown ? Theme.on-surface : Theme.on-var; font-size: 12px; font-weight: a.shown ? 600 : 400; overflow: elide; }
                 Text { width: 52px; text: a.five; color: Usage.tone(a.five-level); font-size: 12px; font-family: Theme.mono; font-weight: 600; horizontal-alignment: right; }
                 Text { width: 52px; text: a.week; color: Usage.tone(a.week-level); font-size: 12px; font-family: Theme.mono; font-weight: 600; horizontal-alignment: right; }

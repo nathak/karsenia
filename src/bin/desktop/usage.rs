@@ -24,8 +24,9 @@ thread_local! {
     static BUDGET_NOTE: RefCell<String> = const { RefCell::new(String::new()) };
     // An ask for the usage is on its way (the button waits), and the word about how the last one ended.
     static BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    // How many accounts' answers are still to come for the ask that is on its way (the button waits for all of them).
-    static PENDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    // The accounts whose answers are still to come for the ask that is on its way (the button waits for all of them; an answer of an
+    // earlier ask that comes late finds its account gone from here and changes nothing).
+    static PENDING: RefCell<std::collections::HashSet<String>> = RefCell::new(std::collections::HashSet::new());
     // The word about how the last ask ended, and for which account (it shows only on that account's card).
     static NOTE: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
     // Lets the button go if no answer ever comes (the link was cut): longer than the ask itself may take.
@@ -71,9 +72,10 @@ pub fn on_reply(ui: &AppWindow, app: &Arc<App>, kind: &str, data: Value) {
         }
         "usage_refresh" => {
             // The button waits for every account asked.
+            let account = data["account"].as_str().unwrap_or_default().to_owned();
             let left = PENDING.with(|p| {
-                p.set(p.get().saturating_sub(1));
-                p.get()
+                p.borrow_mut().remove(&account);
+                p.borrow().len()
             });
             if left == 0 {
                 BUSY.with(|b| b.set(false));
@@ -85,7 +87,6 @@ pub fn on_reply(ui: &AppWindow, app: &Arc<App>, kind: &str, data: Value) {
             if left == 0 {
                 MANUAL.with(|m| m.set(false));
             }
-            let account = data["account"].as_str().unwrap_or_default().to_owned();
             let note = match data["error"].as_str() {
                 None => String::new(),
                 Some("busy") => String::new(),
@@ -135,7 +136,7 @@ pub fn render(ui: &AppWindow, app: &App) {
         .into_iter()
         .map(|(id, name)| {
             let v = DATA.with(|d| usage_view(d.borrow().get(&id), now, app.lang));
-            UsageAcct { name: name.into(), five: v.five.0.into(), five_level: v.five.1.into(), week: v.week.0.into(), week_level: v.week.1.into(), shown: id == key }
+            UsageAcct { name: name.into(), five: v.five.0.into(), five_level: v.five.1.into(), week: v.week.0.into(), week_level: v.week.1.into(), shown: id == key, stale: v.stale }
         })
         .collect();
     u.set_accounts(ModelRc::from(Rc::new(VecModel::from(table))));
@@ -187,15 +188,16 @@ fn refresh(ui: &AppWindow, app: &Arc<App>, auto: bool) {
         }
     }
     BUSY.with(|b| b.set(true));
-    PENDING.with(|p| p.set(keys.len()));
+    PENDING.with(|p| *p.borrow_mut() = keys.iter().cloned().collect());
     MANUAL.with(|m| m.set(!auto));
-    NOTE.with(|n| n.borrow_mut().clear());
+    // The notes of the accounts asked now go; another account's failure stays.
+    NOTE.with(|n| n.borrow_mut().retain(|account, _| !keys.contains(account)));
     let weak = ui.as_weak();
     let timer = slint::Timer::default();
     // The longer ask of several accounts (each one runs the program's start-up hooks): let the button go if some answer never comes.
-    timer.start(slint::TimerMode::SingleShot, Duration::from_secs(45 + 15 * keys.len() as u64), move || {
+    timer.start(slint::TimerMode::SingleShot, Duration::from_secs(15 + 30 * keys.len() as u64), move || {
         BUSY.with(|b| b.set(false));
-        PENDING.with(|p| p.set(0));
+        PENDING.with(|p| p.borrow_mut().clear());
         if let Some(ui) = weak.upgrade() {
             ui.global::<Usage>().set_busy(false);
         }
