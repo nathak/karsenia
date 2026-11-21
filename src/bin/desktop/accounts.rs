@@ -37,6 +37,13 @@ thread_local! {
     static PLUG_BUSY: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
+/// The Claude accounts of the picker, in its order: the id ("" for the default one) and the name. For the usage card's table.
+pub fn picker() -> Vec<(String, String)> {
+    let ids = IDS.with(|i| i.borrow().clone());
+    let names = NAMES.with(|n| n.borrow().clone());
+    ids.into_iter().zip(names).map(|(id, name)| (id.unwrap_or_default(), name)).collect()
+}
+
 /// The gateways of an account: the providers that use its login (the default account is the id ""), for its card.
 fn gateways_of(account: &str) -> ModelRc<crate::GwRow> {
     let rows: Vec<crate::GwRow> = crate::prov::login_rows()

@@ -14,7 +14,7 @@ use tenrec::usage::AccountUsage;
 use tenrec::view::i18n::tr;
 use tenrec::view::usage::usage_view;
 
-use crate::{Acct, App, AppWindow, Usage, UsageWin};
+use crate::{Acct, App, AppWindow, Usage, UsageAcct, UsageWin};
 
 thread_local! {
     static DATA: RefCell<HashMap<String, AccountUsage>> = RefCell::new(HashMap::new());
@@ -24,6 +24,8 @@ thread_local! {
     static BUDGET_NOTE: RefCell<String> = const { RefCell::new(String::new()) };
     // An ask for the usage is on its way (the button waits), and the word about how the last one ended.
     static BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    // How many accounts' answers are still to come for the ask that is on its way (the button waits for all of them).
+    static PENDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     // The word about how the last ask ended, and for which account (it shows only on that account's card).
     static NOTE: RefCell<(String, String)> = const { RefCell::new((String::new(), String::new())) };
     // Lets the button go if no answer ever comes (the link was cut): longer than the ask itself may take.
@@ -68,11 +70,22 @@ pub fn on_reply(ui: &AppWindow, app: &Arc<App>, kind: &str, data: Value) {
             render(ui, app);
         }
         "usage_refresh" => {
-            BUSY.with(|b| b.set(false));
-            BUSY_TIMER.with(|t| *t.borrow_mut() = None);
-            // Said in words, once. A "soon" is said only to a press of the button (the person is waiting for something to happen);
-            // the automatic ask that is too soon, or that meets one running, says nothing. What was learned arrives as `usage_changed`.
-            let by_hand = MANUAL.with(|m| m.replace(false));
+            // The button waits for every account asked.
+            let left = PENDING.with(|p| {
+                p.set(p.get().saturating_sub(1));
+                p.get()
+            });
+            if left == 0 {
+                BUSY.with(|b| b.set(false));
+                BUSY_TIMER.with(|t| *t.borrow_mut() = None);
+            }
+            // Said in words. A "soon" is said only to a press of the button (the person is waiting for something to happen); the
+            // automatic ask that is too soon, or that meets one running, says nothing. What was learned arrives as `usage_changed`.
+            let by_hand = MANUAL.with(|m| m.get());
+            if left == 0 {
+                MANUAL.with(|m| m.set(false));
+            }
+            let account = data["account"].as_str().unwrap_or_default().to_owned();
             let note = match data["error"].as_str() {
                 None => String::new(),
                 Some("busy") => String::new(),
@@ -80,7 +93,15 @@ pub fn on_reply(ui: &AppWindow, app: &Arc<App>, kind: &str, data: Value) {
                 Some("unreadable") => tr(app.lang, "us_ref_unreadable"),
                 Some(_) => tr(app.lang, "us_ref_failed"),
             };
-            NOTE.with(|n| *n.borrow_mut() = (data["account"].as_str().unwrap_or_default().to_owned(), note));
+            // A failure is kept (the card says which account's); a success of that account takes it away.
+            NOTE.with(|n| {
+                let mut n = n.borrow_mut();
+                if !note.is_empty() {
+                    *n = (account, note);
+                } else if n.0 == account {
+                    *n = (String::new(), String::new());
+                }
+            });
             render(ui, app);
         }
         _ => {}
@@ -108,6 +129,16 @@ pub fn render(ui: &AppWindow, app: &App) {
     u.set_level(view.chip_level.into());
     u.set_seen(view.seen.into());
     u.set_empty(!view.has_data);
+    // Every account side by side: its 5-hour and weekly windows.
+    let now = tenrec::now_ms();
+    let table: Vec<UsageAcct> = crate::accounts::picker()
+        .into_iter()
+        .map(|(id, name)| {
+            let v = DATA.with(|d| usage_view(d.borrow().get(&id), now, app.lang));
+            UsageAcct { name: name.into(), five: v.five.0.into(), five_level: v.five.1.into(), week: v.week.0.into(), week_level: v.week.1.into(), shown: id == key }
+        })
+        .collect();
+    u.set_accounts(ModelRc::from(Rc::new(VecModel::from(table))));
     // The cost block, for the account the window shows.
     let cost = LEDGER.with(|l| {
         let l = l.borrow();
@@ -133,35 +164,46 @@ fn refresh(ui: &AppWindow, app: &Arc<App>, auto: bool) {
     if BUSY.with(|b| b.get()) {
         return;
     }
-    let key = app.bus.account().unwrap_or_default();
+    // Every Claude account (the card's table has them all); with none known yet, the one the window shows.
+    let mut keys: Vec<String> = crate::accounts::picker().into_iter().map(|(id, _)| id).collect();
+    if keys.is_empty() {
+        keys.push(app.bus.account().unwrap_or_default());
+    }
     if auto {
         let now = tenrec::now_ms();
         // What the program's `/usage` can tell: the 5-hour window and the week (other windows come only from a stream and are not
-        // refreshed by it, so their age says nothing).
-        let worth = DATA.with(|d| match d.borrow().get(&key) {
-            None => true,
-            Some(wins) => {
-                let asked: Vec<_> = wins.iter().filter(|(k, _)| matches!(k.as_str(), "five_hour" | "seven_day")).map(|(_, w)| w).collect();
-                asked.is_empty() || asked.iter().any(|w| w.resets_at + 60 < now / 1000) || asked.iter().map(|w| w.seen_at).max().is_some_and(|seen| now.saturating_sub(seen) > STALE_MS)
-            }
+        // refreshed by it, so their age says nothing). Only an account whose numbers are worth asking about is asked.
+        keys.retain(|key| {
+            DATA.with(|d| match d.borrow().get(key) {
+                None => true,
+                Some(wins) => {
+                    let asked: Vec<_> = wins.iter().filter(|(k, _)| matches!(k.as_str(), "five_hour" | "seven_day")).map(|(_, w)| w).collect();
+                    asked.is_empty() || asked.iter().any(|w| w.resets_at + 60 < now / 1000) || asked.iter().map(|w| w.seen_at).max().is_some_and(|seen| now.saturating_sub(seen) > STALE_MS)
+                }
+            })
         });
-        if !worth {
+        if keys.is_empty() {
             return;
         }
     }
     BUSY.with(|b| b.set(true));
+    PENDING.with(|p| p.set(keys.len()));
     MANUAL.with(|m| m.set(!auto));
     NOTE.with(|n| *n.borrow_mut() = (String::new(), String::new()));
     let weak = ui.as_weak();
     let timer = slint::Timer::default();
-    timer.start(slint::TimerMode::SingleShot, Duration::from_secs(45), move || {
+    // The longer ask of several accounts (each one runs the program's start-up hooks): let the button go if some answer never comes.
+    timer.start(slint::TimerMode::SingleShot, Duration::from_secs(45 + 15 * keys.len() as u64), move || {
         BUSY.with(|b| b.set(false));
+        PENDING.with(|p| p.set(0));
         if let Some(ui) = weak.upgrade() {
             ui.global::<Usage>().set_busy(false);
         }
     });
     BUSY_TIMER.with(|t| *t.borrow_mut() = Some(timer));
-    app.bus.post_quiet(json!({"op": "account_usage_refresh", "account": key}));
+    for key in keys {
+        app.bus.post_quiet(json!({"op": "account_usage_refresh", "account": key}));
+    }
     render(ui, app);
 }
 

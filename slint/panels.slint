@@ -18,6 +18,8 @@ export struct GfRule { policy: string, tool: string, command: string, path: stri
 export struct PlugRow { id: string, busy: bool }
 export struct GwRow { id: string, name: string, host: string }
 export struct AcctRow { gws: [GwRow], id: string, name: string, sub: string, state: string, chats: int, open: bool, is-default: bool, usage: string, usage-level: string, kind: string, login: string, dir: string, plug-open: bool, plug-note: string, plugs: [PlugRow] }
+// One account's row in the card's table: its name and its 5-hour and weekly windows (percent and level each); shown: the account the card is on.
+export struct UsageAcct { name: string, five: string, five-level: string, week: string, week-level: string, shown: bool }
 export struct UsageWin { label: string, pct: string, frac: float, level: string, reset: string }
 
 // The Claude logins (personal, work...). Each has its own notes, skills and history; the panels show one of them.
@@ -66,6 +68,8 @@ export global Prefs {
 // The limits Claude reported for the account the window shows (src/view/usage.rs makes the rows).
 export global Usage {
     in property <[UsageWin]> wins;
+    // Every Claude account with its 5-hour and weekly windows, side by side.
+    in property <[UsageAcct]> accounts;
     // The header chip: the window to watch, and how worrying it is (ok, warn, limit, unknown).
     in property <string> chip;
     in property <string> level;
@@ -610,6 +614,22 @@ export component UsageCard inherits Card {
                 Rectangle { x: 0px; width: parent.width * clamp(w.frac, 0, 1); height: parent.height; border-radius: 3px; background: Usage.tone(w.level); }
             }
             Text { text: w.reset; color: Theme.outline; font-size: 11px; }
+        }
+        if Usage.accounts.length > 1: VerticalLayout {
+            spacing: 4px;
+            Rectangle { height: 1px; background: Theme.hairline; }
+            HorizontalLayout {
+                spacing: 8px;
+                Text { horizontal-stretch: 1; text: T.tr("us_accounts"); color: Theme.on-surface; font-size: 12px; font-weight: 600; }
+                Text { width: 52px; text: T.tr("us_5h"); color: Theme.outline; font-size: 11px; horizontal-alignment: right; }
+                Text { width: 52px; text: T.tr("us_week"); color: Theme.outline; font-size: 11px; horizontal-alignment: right; }
+            }
+            for a in Usage.accounts: HorizontalLayout {
+                spacing: 8px;
+                Text { horizontal-stretch: 1; text: a.name; color: a.shown ? Theme.on-surface : Theme.on-var; font-size: 12px; font-weight: a.shown ? 600 : 400; overflow: elide; }
+                Text { width: 52px; text: a.five; color: Usage.tone(a.five-level); font-size: 12px; font-family: Theme.mono; font-weight: 600; horizontal-alignment: right; }
+                Text { width: 52px; text: a.week; color: Usage.tone(a.week-level); font-size: 12px; font-family: Theme.mono; font-weight: 600; horizontal-alignment: right; }
+            }
         }
         Rectangle { height: 1px; background: Theme.hairline; }
         Text { text: T.tr("cost_title"); color: Theme.on-surface; font-size: 12px; font-weight: 600; }

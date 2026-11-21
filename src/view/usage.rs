@@ -28,9 +28,12 @@ pub struct UsageView {
     /// The header chip: the most used window that has not reset, "5시간 85%".
     pub chip: String,
     pub chip_level: &'static str,
-    /// The two first windows on one line, for the account's row.
+    /// The 5-hour and the weekly window on one line ("5시간 68% · 주간 81%"), for the account's row; "" with no data.
     pub compact: String,
     pub compact_level: &'static str,
+    /// Each of the two alone, for a table of accounts: the percent ("—" when it has ended or no number came) and its level.
+    pub five: (String, &'static str),
+    pub week: (String, &'static str),
     /// "2m 기준": when the newest of these was seen.
     pub seen: String,
 }
@@ -117,13 +120,21 @@ pub fn usage_view(usage: Option<&AccountUsage>, now_ms: u64, lang: Lang) -> Usag
         Some(w) => (format!("{} {}", w.label, w.pct), w.level),
         None => (tr(lang, "us_chip_none"), "unknown"),
     };
-    let shown: Vec<&&WinView> = live.iter().take(2).collect();
-    let compact = shown.iter().map(|w| format!("{} {}", w.label, w.pct)).collect::<Vec<_>>().join(" · ");
-    // The colour is that of what the line says, not of a window it leaves out.
-    let compact_level = ["limit", "warn", "ok"].into_iter().find(|l| shown.iter().any(|w| w.level == *l)).unwrap_or("unknown");
+    // The two windows people watch, each by itself: one that has ended shows no number (the one after it is not known) and is not coloured.
+    let of = |key: &str| -> (String, &'static str) {
+        match wins.iter().find(|w| w.key == key) {
+            Some(w) if w.level == "reset" => ("—".to_owned(), "unknown"),
+            Some(w) => (w.pct.clone(), w.level),
+            None => ("—".to_owned(), "unknown"),
+        }
+    };
+    let (five, week) = (of("five_hour"), of("seven_day"));
+    let compact = if wins.is_empty() { String::new() } else { format!("{} {} · {} {}", tr(lang, "us_5h"), five.0, tr(lang, "us_week"), week.0) };
+    // The colour is that of what the line says.
+    let compact_level = ["limit", "warn", "ok"].into_iter().find(|l| five.1 == *l || week.1 == *l).unwrap_or("unknown");
     let newest = usage.and_then(|u| u.values().map(|w| w.seen_at).max());
     let seen = newest.map(|t| fill(&tr(lang, "us_seen"), &[("t", ago(t, now_ms, lang))])).unwrap_or_default();
-    UsageView { has_data: !wins.is_empty(), wins, chip, chip_level, compact, compact_level, seen }
+    UsageView { has_data: !wins.is_empty(), wins, chip, chip_level, compact, compact_level, five, week, seen }
 }
 
 #[cfg(test)]
@@ -161,6 +172,28 @@ mod tests {
     }
 
     #[test]
+    fn an_accounts_row_and_table_say_the_5_hour_and_the_weekly_window_each_with_its_own_level() {
+        let mut u: AccountUsage = BTreeMap::new();
+        u.insert("five_hour".into(), win(Some(1.0), 3600, "rejected"));
+        u.insert("seven_day".into(), win(Some(0.32), 86400, "allowed"));
+        u.insert("seven_day_opus".into(), win(Some(0.9), 86400, "allowed_warning"));
+        let v = usage_view(Some(&u), NOW, Lang::Ko);
+        assert_eq!(v.compact, "5시간 100% · 주간 32%");
+        assert_eq!(v.compact_level, "limit", "the worse of the two");
+        assert_eq!((v.five.clone(), v.week.clone()), (("100%".to_owned(), "limit"), ("32%".to_owned(), "ok")));
+        // A model's week is not one of the two.
+        assert!(!v.compact.contains("Opus"));
+        // An account that never ran a turn has nothing to say.
+        let none = usage_view(None, NOW, Lang::Ko);
+        assert_eq!((none.compact.as_str(), none.compact_level), ("", "unknown"));
+        assert_eq!((none.five, none.week), (("—".to_owned(), "unknown"), ("—".to_owned(), "unknown")));
+        // Only the week was reported: the 5-hour one reads as not known.
+        let mut w: AccountUsage = BTreeMap::new();
+        w.insert("seven_day".into(), win(Some(0.5), 86400, "allowed"));
+        assert_eq!(usage_view(Some(&w), NOW, Lang::Ko).compact, "5시간 — · 주간 50%");
+    }
+
+    #[test]
     fn a_window_that_has_reset_is_not_shown_as_its_old_percentage_and_no_data_says_so() {
         let mut u: AccountUsage = BTreeMap::new();
         u.insert("five_hour".into(), win(Some(0.9), -3600, "allowed_warning"));
@@ -168,7 +201,9 @@ mod tests {
         let v = usage_view(Some(&u), NOW, Lang::Ko);
         assert_eq!((v.wins[0].level, v.wins[0].pct.as_str(), v.wins[0].reset.as_str()), ("reset", "—", "초기화 시각 지남 · 현재 사용량 모름"));
         assert_eq!((v.chip.as_str(), v.chip_level), ("주간 30%", "ok"));
-        assert_eq!(v.compact, "주간 30%");
+        // The row says both: the ended 5-hour window with no number, the week with its own.
+        assert_eq!(v.compact, "5시간 — · 주간 30%");
+        assert_eq!((v.five.clone(), v.week.clone()), (("—".to_owned(), "unknown"), ("30%".to_owned(), "ok")));
         let none = usage_view(None, NOW, Lang::Ko);
         assert!(!none.has_data && none.wins.is_empty());
         assert_eq!((none.chip.as_str(), none.chip_level, none.compact.as_str(), none.seen.as_str()), ("한도 —", "unknown", "", ""));
