@@ -167,10 +167,16 @@ fn refresh(ui: &AppWindow, app: &Arc<App>, auto: bool) {
 
 /// A budget as typed: empty is none (null); a number is sent as it is (the core checks the range). None when it is not a number.
 fn typed_budget(text: &str) -> Option<serde_json::Value> {
-    let t = text.trim().replace(',', ".");
+    let t = text.trim();
     if t.is_empty() {
         return Some(serde_json::Value::Null);
     }
+    // A comma is a decimal comma (`12,5`). A comma with three digits after it (`1,000`) is a thousands mark in some places and a
+    // decimal comma in others: it is not guessed, and one beside a point is refused too.
+    if t.contains(',') && (t.contains('.') || t.rsplit(',').next().is_some_and(|after| after.len() == 3 && after.bytes().all(|c| c.is_ascii_digit()))) {
+        return None;
+    }
+    let t = t.replace(',', ".");
     t.parse::<f64>().ok().filter(|v| v.is_finite()).map(|v| json!(v))
 }
 
@@ -221,7 +227,7 @@ mod tests {
         assert_eq!(typed_budget("  "), Some(serde_json::Value::Null));
         assert_eq!(typed_budget("12,5"), Some(json!(12.5)));
         assert_eq!(typed_budget("20"), Some(json!(20.0)));
-        for bad in ["abc", "1e999", "NaN", "$5"] {
+        for bad in ["abc", "1e999", "NaN", "$5", "1,000", "1.000,5", "1,000.5"] {
             assert_eq!(typed_budget(bad), None, "{bad}");
         }
     }

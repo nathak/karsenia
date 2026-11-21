@@ -86,7 +86,14 @@ pub fn check_budget(data: &Path, lang: Lang, days: &tenrec::costs::Days, daily: 
         return;
     }
     let today = tenrec::costs::local_day();
-    let crossed = tenrec::view::cost::crossed(days, &today, daily, monthly);
+    // A period is told with the budget it was told for: raising the budget and using that up too is news again.
+    let crossed: Vec<(bool, String)> = tenrec::view::cost::crossed(days, &today, daily, monthly)
+        .into_iter()
+        .map(|(month, id)| {
+            let budget = if month { monthly } else { daily }.unwrap_or(0.0);
+            (month, format!("{id}@{budget}"))
+        })
+        .collect();
     let told = crate::desktop_settings(data).get("budget_told").cloned().unwrap_or_default();
     let (told_day, told_month) = (told.get("d").and_then(|v| v.as_str()).map(str::to_owned), told.get("m").and_then(|v| v.as_str()).map(str::to_owned));
     let fresh = tenrec::view::cost::untold(&crossed, told_day.as_deref(), told_month.as_deref());

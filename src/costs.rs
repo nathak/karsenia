@@ -129,6 +129,10 @@ impl CostStore {
             }
             keys.insert(key.to_owned(), sum);
             *days = clean(std::mem::take(&mut *days));
+            // A clock far in the past puts the day beyond the newest `MAX_DAYS`: it is cut at once, and nothing was counted.
+            if !days.get(day).is_some_and(|keys| keys.contains_key(key)) {
+                return false;
+            }
             self.save(&days);
         }
         let _ = self.events.send(json!({"v": 1, "kind": "cost_changed", "data": {}}));

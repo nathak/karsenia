@@ -116,3 +116,25 @@ async fn a_session_that_comes_back_from_another_account_does_not_count_that_spen
     // The program reports 5.3: the turn is 0.3.
     assert!((today(&server) - 0.4).abs() < 1e-9, "{}", today(&server));
 }
+
+/// If the program restored the total the chat had before it went away (not the returned session's), the first result after the
+/// handback is read against that one: the turn is the difference from it, not the whole total.
+#[tokio::test]
+async fn a_handback_whose_total_restored_the_old_baseline_is_read_against_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let project = root.join("p");
+    std::fs::create_dir_all(&project).unwrap();
+    let bin = wrapper(&root, "alt", &[0.1, 0.4]);
+    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(bin), mcp_bin: None, extract: Default::default(), propose: Default::default(), sched: Default::default() }).await.unwrap();
+    let chat = server.registry.create_in(project.to_str().unwrap(), None, None, false, None).unwrap();
+    let (_, mut rx) = chat.subscribe(0).await.unwrap();
+    chat.send("a".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+    let events = vec![(1u64, "claude".to_owned(), serde_json::json!({"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 5.0}))];
+    chat.absorb(events, tenrec::session::Handed { parent: "other".into(), parent_hash: 1 }).await.unwrap();
+    chat.send("b".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+    // The program says 0.4: 0.1 it had plus this turn's 0.3 (below the moved baseline of 5.0, so not a restart that counts 0.4).
+    assert!((today(&server) - 0.4).abs() < 1e-9, "{}", today(&server));
+}

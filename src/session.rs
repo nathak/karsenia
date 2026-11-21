@@ -371,7 +371,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_chat: 0.0, retire_reply: None };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -411,6 +411,9 @@ struct Actor {
     /// The running total of the program's last result (the baseline the next turn's cost is the difference from); None for a chat that
     /// came from a session whose spend we never saw.
     cost_base: Option<f64>,
+    /// Where the baseline stood before a session was taken back from another account (see `Cmd::Absorb`): the first result after it may
+    /// have restored either that total or the returned session's, and is read against the one that fits.
+    cost_alt: Option<f64>,
     /// What this chat has cost so far.
     cost_chat: f64,
     /// Who waits for the process to end before the worktree is removed.
@@ -649,7 +652,8 @@ impl Actor {
             None if self.meta.imported_from.is_some() => None,
             None => Some(0.0),
         };
-        self.cost_chat = 0.0;
+        // A log from before costs were kept: the program's last total is the best figure for what the chat has cost.
+        self.cost_chat = self.cost_base.unwrap_or(0.0);
     }
 
     /// Every request still waiting is dead (the turn ended or the process went).
@@ -782,6 +786,7 @@ impl Actor {
                     self.emit_at(&kind, data, ts);
                 }
                 if let Some(total) = stands {
+                    self.cost_alt = self.cost_base;
                     self.cost_base = Some(total);
                     // Written down as the chat's own (not imported) so a restart restores the same baseline; nothing is added to the ledger.
                     self.emit("cost", json!({"turn": 0.0, "total": total, "chat": self.cost_chat}));
@@ -1247,7 +1252,15 @@ impl Actor {
     /// numbers (`cost`: the turn, the running total of the program, what the chat has cost) and added to the day's sum of the account (or,
     /// for a chat of a provider, of the provider: its cost is not the account's). Only live results come here: a replay never counts twice.
     fn note_cost(&mut self, raw: &Value) {
-        let crate::costs::Step::Count { delta, total } = crate::costs::turn_cost(self.cost_base, raw) else { return };
+        let crate::costs::Step::Count { mut delta, total } = crate::costs::turn_cost(self.cost_base, raw) else { return };
+        // After a session came back from another account the program may have restored the total it had before (not the returned
+        // session's): a total below the moved baseline that fits the old one is that turn's difference from the old one.
+        if let (Some(base), Some(alt)) = (self.cost_base, self.cost_alt) {
+            if total < base && total >= alt {
+                delta = total - alt;
+            }
+        }
+        self.cost_alt = None;
         self.cost_base = Some(total);
         self.cost_chat += delta;
         self.emit("cost", json!({"turn": delta, "total": total, "chat": self.cost_chat}));
