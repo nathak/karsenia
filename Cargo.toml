@@ -77,3 +77,8 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.regex-syntax]
 opt-level = 3
+
+[[example]]
+name = "shots"
+path = "examples/shots.rs"
+required-features = ["desktop"]
