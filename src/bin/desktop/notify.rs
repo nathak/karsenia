@@ -55,7 +55,7 @@ pub fn check(data: &Path, lang: Lang, chats: &[Chat], current: Option<&str>) {
 fn send(title: &str, body: &str) {
     // Not waited for: a missing `notify-send` or a notification daemon that is slow must not hold the refresh.
     let _ = std::process::Command::new("notify-send")
-        .args(["--app-name=Tenrec", "--expire-time=8000", "--", title, body])
+        .args(["--app-name=Karsenia", "--expire-time=8000", "--", title, body])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

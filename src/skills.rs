@@ -579,7 +579,7 @@ impl SkillStore {
         }
         let meta = dir.join(".claude-plugin");
         crate::private::create_dir(&meta)?;
-        crate::private::write(&meta.join("plugin.json"), &json!({"name": "tenrec", "version": "1", "description": "Skills approved in Tenrec"}).to_string())?;
+        crate::private::write(&meta.join("plugin.json"), &json!({"name": "tenrec", "version": "1", "description": "Skills approved in Karsenia"}).to_string())?;
         Ok(written)
     }
 }

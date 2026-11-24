@@ -9,4 +9,4 @@ so it is stretched to a square), then scaled.
 - `icon-256.png` is the window's icon, `icon-32.png` is built into the tray code, `icon-128.png` is the sidebar's mark, and `ui/favicon.png`
   (64 px) is the web page's
 
-To change the icon, replace these files (same names and sizes). The TENREC wordmark logo is not made yet.
+To change the icon, replace these files (same names and sizes). The source picture is `icon-source.webp` (the full image with the app name under the mascot); the PNG and ICO sizes are cut from it (rounded tile, transparent corners).

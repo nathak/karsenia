@@ -1,4 +1,4 @@
-//! Tenrec as a native desktop app (Slint). The core runs in this process on a tokio runtime; the window runs Slint's event loop
+//! Karsenia as a native desktop app (Slint). The core runs in this process on a tokio runtime; the window runs Slint's event loop
 //! on the main thread. There is no network listener: `claude` reaches the app only through the MCP socket (a named pipe on
 //! Windows) that `start_core` opens. A chat's events are read here, turned into rows by `tenrec::view::transcript`, and
 //! handed to the window at most every 33 ms.
@@ -362,7 +362,7 @@ fn fatal(message: &str) -> ! {
     {
         use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
         let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
-        let (text, title) = (wide(message), wide("Tenrec"));
+        let (text, title) = (wide(message), wide("Karsenia"));
         // SAFETY: two NUL-ended UTF-16 strings that outlive the call; no owner window.
         unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR) };
     }

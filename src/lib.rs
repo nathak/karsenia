@@ -1,4 +1,4 @@
-//! Tenrec: runs `claude` headless and serves a chat UI for it on this machine only.
+//! Karsenia: runs `claude` headless and serves a chat UI for it on this machine only.
 pub mod accounts;
 pub mod attachments;
 pub mod cli_sessions;

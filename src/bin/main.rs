@@ -73,7 +73,7 @@ async fn main() {
     }
     match tenrec::server::start_with(config, terminal).await {
         Ok(running) => {
-            println!("Tenrec is running. Open:\n  {}", running.url());
+            println!("Karsenia is running. Open:\n  {}", running.url());
             let tenrec::server::Running { registry, task, .. } = running;
             // The live view (read only, its own port and token): kept for as long as the app runs.
             let _live = match args.live {
