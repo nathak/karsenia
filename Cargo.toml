@@ -20,7 +20,7 @@ path = "src/bin/fake_claude.rs"
 
 # The native desktop app (Slint). Built with `--features desktop`; the library and its tests do not need Slint.
 [[bin]]
-name = "tenrec-desktop"
+name = "karsenia-desktop"
 path = "src/bin/desktop/main.rs"
 required-features = ["desktop"]
 

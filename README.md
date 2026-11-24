@@ -1,4 +1,4 @@
-# Tenrec
+# Karsenia
 
 **English** · [한국어](#한국어)
 
@@ -11,8 +11,8 @@ A desktop-style host for [Claude Code](https://claude.com/claude-code). A Rust c
 
 ## Download
 
-Prebuilt Windows app: **[Releases](https://github.com/nathak/tenrec/releases/latest)** → `tenrec-desktop-0.1.0-windows-x86_64.zip`
-(check it against the `.sha256` file next to it). Unzip, then double-click `tenrec-desktop.exe`.
+Prebuilt Windows app: **[Releases](https://github.com/nathak/tenrec/releases/latest)** → `karsenia-desktop-0.1.0-windows-x86_64.zip`
+(check it against the `.sha256` file next to it). Unzip, then double-click `karsenia-desktop.exe`.
 
 - It needs `claude` (Claude Code) on your `PATH`.
 - The `.exe` is **not signed**. Windows SmartScreen or a company security product may warn about an unknown program.
@@ -50,15 +50,15 @@ Rust (stable) is needed; the bundled SQLite is C, so a C compiler (or a user-lev
 ```sh
 cargo run                                   # web UI: prints http://127.0.0.1:PORT/#t=TOKEN, open that address
 cargo run -- --port 4311 --data ./data --claude /path/to/claude
-cargo run --features desktop --bin tenrec-desktop     # native desktop app (Slint)
+cargo run --features desktop --bin karsenia-desktop     # native desktop app (Slint)
 cargo test                                  # no model calls: a fake `claude` replays scenarios
 ```
 
 Windows build from Linux (needs `zig` as the linker):
-`cargo build --release --target x86_64-pc-windows-gnu --features desktop --bin tenrec-desktop`
+`cargo build --release --target x86_64-pc-windows-gnu --features desktop --bin karsenia-desktop`
 (set `CC_x86_64_pc_windows_gnu` and `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` to a `zig cc` wrapper; see the notes).
 
-Sessions and settings are kept in `~/.local/share/tenrec` (`%USERPROFILE%\.local\share\tenrec` on Windows;
+Sessions and settings are kept in `~/.local/share/tenrec` (the app was called Tenrec before; the folder, the `TENREC_*` variables, the MCP name `tenrec` and the `tenrec/<id>` worktree branches keep that name so that nothing already saved is lost) (`%USERPROFILE%\.local\share\tenrec` on Windows;
 `TENREC_DATA` or `--data` changes it).
 
 ## Security
@@ -78,9 +78,9 @@ Source code: [MIT](LICENSE). The desktop app is built with [Slint](https://slint
 
 <a id="한국어"></a>
 
-# Tenrec (한국어)
+# Karsenia (한국어)
 
-[English](#tenrec) · **한국어**
+[English](#karsenia) · **한국어**
 
 [Claude Code](https://claude.com/claude-code)를 위한 데스크톱형 호스트입니다. Rust 코어가 `claude` CLI를 헤드리스
 (`--input-format stream-json --output-format stream-json`)로 실행하고, 전용 채팅 화면을 제공합니다. 화면은 네이티브
@@ -91,8 +91,8 @@ Source code: [MIT](LICENSE). The desktop app is built with [Slint](https://slint
 
 ## 내려받기
 
-Windows 빌드: **[Releases](https://github.com/nathak/tenrec/releases/latest)** → `tenrec-desktop-0.1.0-windows-x86_64.zip`
-(옆의 `.sha256` 파일로 확인하세요). 압축을 풀고 `tenrec-desktop.exe`를 실행합니다.
+Windows 빌드: **[Releases](https://github.com/nathak/tenrec/releases/latest)** → `karsenia-desktop-0.1.0-windows-x86_64.zip`
+(옆의 `.sha256` 파일로 확인하세요). 압축을 풀고 `karsenia-desktop.exe`를 실행합니다.
 
 - `claude`(Claude Code)가 `PATH`에 있어야 합니다.
 - `.exe`는 **서명되어 있지 않습니다**. Windows SmartScreen이나 회사 보안 제품이 모르는 프로그램이라고 경고할 수 있습니다.
@@ -127,15 +127,15 @@ Rust(stable)가 필요합니다. 내장 SQLite가 C라서 C 컴파일러(또는 
 ```sh
 cargo run                                   # 웹 화면: http://127.0.0.1:PORT/#t=TOKEN 이 출력되면 그 주소를 엽니다
 cargo run -- --port 4311 --data ./data --claude /path/to/claude
-cargo run --features desktop --bin tenrec-desktop     # 네이티브 데스크톱 앱(Slint)
+cargo run --features desktop --bin karsenia-desktop     # 네이티브 데스크톱 앱(Slint)
 cargo test                                  # 모델 호출 없음: 가짜 `claude`가 시나리오를 재생
 ```
 
 리눅스에서 Windows용 빌드(링커로 `zig` 필요):
-`cargo build --release --target x86_64-pc-windows-gnu --features desktop --bin tenrec-desktop`
+`cargo build --release --target x86_64-pc-windows-gnu --features desktop --bin karsenia-desktop`
 (`CC_x86_64_pc_windows_gnu`와 `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER`를 `zig cc` 래퍼로 지정, 메모 참고).
 
-세션과 설정은 `~/.local/share/tenrec`(Windows는 `%USERPROFILE%\.local\share\tenrec`)에 저장됩니다.
+세션과 설정은 `~/.local/share/tenrec`(Windows는 `%USERPROFILE%\.local\share\tenrec`)에 저장됩니다. (예전 이름이 Tenrec이었습니다. 이미 저장된 것이 사라지지 않도록 이 폴더, `TENREC_*` 변수, MCP 이름 `tenrec`, `tenrec/<id>` 작업 트리 브랜치는 그 이름을 그대로 씁니다.)
 `TENREC_DATA` 또는 `--data`로 바꿀 수 있습니다.
 
 ## 보안

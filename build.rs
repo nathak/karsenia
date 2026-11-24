@@ -29,7 +29,7 @@ fn windows_icon() {
     }
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("tenrec-icon.res");
     match std::fs::read("assets/icon.ico").map_err(|e| e.to_string()).and_then(|ico| icon_resource(&ico)).and_then(|res| std::fs::write(&out, res).map_err(|e| e.to_string())) {
-        Ok(()) => println!("cargo:rustc-link-arg-bin=tenrec-desktop={}", out.display()),
+        Ok(()) => println!("cargo:rustc-link-arg-bin=karsenia-desktop={}", out.display()),
         Err(why) => println!("cargo:warning=the program icon was not embedded: {why}"),
     }
 }

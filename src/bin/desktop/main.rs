@@ -90,17 +90,17 @@ thread_local! {
 fn main() {
     // In the app the built-in workbench is the only one: the plug-in is never used (before anything can start a `claude`).
     tenrec::settings::force_native();
-    // `tenrec-desktop mcp`: the MCP server claude starts for a chat (stdio), not the window.
+    // `karsenia-desktop mcp`: the MCP server claude starts for a chat (stdio), not the window.
     if std::env::args().nth(1).as_deref() == Some("mcp") {
         let rt = tokio::runtime::Runtime::new().expect("no tokio runtime");
         std::process::exit(rt.block_on(tenrec::mcp::run_stdio()));
     }
-    // `tenrec-desktop guard --data <folder> --sid <chat>`: the PreToolUse hook of a chat's claude (the app's own guard), not the window.
+    // `karsenia-desktop guard --data <folder> --sid <chat>`: the PreToolUse hook of a chat's claude (the app's own guard), not the window.
     if std::env::args_os().nth(1).is_some_and(|a| a == "guard") {
         let rest: Vec<String> = std::env::args_os().skip(2).map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(tenrec::workbench::hook::run(&rest));
     }
-    // `tenrec-desktop stop-gate --data <folder> --sid <chat>`: the Stop hook of a chat's claude (holds the first stop while a done condition is unmet,
+    // `karsenia-desktop stop-gate --data <folder> --sid <chat>`: the Stop hook of a chat's claude (holds the first stop while a done condition is unmet,
     // only when the person turned that on), not the app itself.
     if std::env::args_os().nth(1).is_some_and(|a| a == "stop-gate") {
         let rest: Vec<String> = std::env::args_os().skip(2).map(|a| a.to_string_lossy().into_owned()).collect();
@@ -300,7 +300,7 @@ fn start_log(data: &std::path::Path) -> Option<PathBuf> {
         }
         previous(info);
     }));
-    tracing::info!("tenrec-desktop {} ({}) started ({} {})", env!("CARGO_PKG_VERSION"), env!("TENREC_GIT"), std::env::consts::OS, std::env::consts::ARCH);
+    tracing::info!("karsenia-desktop {} ({}) started ({} {})", env!("CARGO_PKG_VERSION"), env!("TENREC_GIT"), std::env::consts::OS, std::env::consts::ARCH);
     Some(path)
 }
 

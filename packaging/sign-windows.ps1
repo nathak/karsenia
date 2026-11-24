@@ -1,4 +1,4 @@
-# Signs tenrec-desktop.exe with a self-signed code-signing certificate (for your own PCs, or a company that trusts the certificate).
+# Signs karsenia-desktop.exe with a self-signed code-signing certificate (for your own PCs, or a company that trusts the certificate).
 # Run it in PowerShell on the Windows PC that will run the program, next to the .exe:
 #     powershell -ExecutionPolicy Bypass -File .\sign-windows.ps1
 # ASCII only on purpose: Windows PowerShell 5.1 reads a file without a byte order mark as ANSI.
@@ -8,7 +8,7 @@
 # - Only the public certificate is written (Tenrec-codesign.cer).
 # - Signing changes the .exe: do not change it after (a rebuild, strip or a resource editor breaks the signature).
 param(
-    [string]$Path = (Join-Path $PSScriptRoot 'tenrec-desktop.exe'),
+    [string]$Path = (Join-Path $PSScriptRoot 'karsenia-desktop.exe'),
     [string]$Subject = 'CN=Tenrec',
     [string]$TimestampServer = 'http://timestamp.digicert.com'
 )
