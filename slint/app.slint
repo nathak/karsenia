@@ -14,9 +14,9 @@ import { TeamPage } from "team.slint";
 import { NewChatCard, AccountsManage } from "newchat.slint";
 import { VhdbPage, Vh, VhDecision } from "vhdb.slint";
 import { ImportPanel, Imp, ImpRow } from "import.slint";
-import { MemPanel, SkillsPanel, SettingsPanel, WtCard, UsageCard, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, Slash, SlashRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole } from "panels.slint";
+import { MemPanel, SkillsPanel, SettingsPanel, WtCard, UsageCard, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, Proj, ProjCard, SwbDone, SwbEvidence, Pal, PalRow, Slash, SlashRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole } from "panels.slint";
 export { Sched, SchedHeadV, SchedTask, SchedRun, Files, FsRow, FsCrumb, HlLine, HlTok, Imp, ImpRow, ChatRow, ChatImg, TRow }
-export { Vh, VhDecision, Theme, T, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, Slash, SlashRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole }
+export { Vh, VhDecision, Theme, T, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, Proj, SwbDone, SwbEvidence, Pal, PalRow, Slash, SlashRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole }
 
 
 // One row of the chat list: a project folder (head) or a chat under it. A chat in a git worktree is listed under the project it came from.
@@ -819,6 +819,13 @@ export component AppWindow inherits Window {
         if Wt.open && root.has-chat && Wt.show: Rectangle {
             TouchArea { clicked => { Wt.open = false; } }
             WtCard { x: root.width - self.width - 16px; y: 62px; width: 400px; }
+        }
+
+        // ---- the check of the project's own Claude Code settings: asked before the chat starts, over everything but the dialogs ----
+        if Proj.show && root.has-chat: Rectangle {
+            background: #00000070;
+            TouchArea { }
+            ProjCard { x: (parent.width - self.width) / 2; y: 90px; width: min(620px, parent.width - 48px); }
         }
 
         // ---- the account chooser of "continue in another account", under the header button; a click outside closes it ----

@@ -605,6 +605,35 @@ export component WtCard inherits Card {
     }
 }
 
+// The check of a project's own Claude Code settings before a chat starts (src/view/project_check.rs words it; src/bin/desktop/proj.rs answers).
+export global Proj {
+    in-out property <bool> show;
+    in property <[WtLine]> lines;
+    in property <bool> busy;
+    callback trust();
+    callback without();
+}
+
+export component ProjCard inherits Card {
+    height: pl.preferred-height;
+    drop-shadow-blur: 24px;
+    drop-shadow-color: #000000a0;
+    background: Theme.container;
+    TouchArea { }
+    pl := VerticalLayout {
+        padding: 18px; spacing: 8px;
+        Text { text: T.tr("proj_title"); color: Theme.on-surface; font-size: 16px; font-weight: 600; }
+        WText { text: T.tr("proj_intro"); fg: Theme.warn-soft; size: 12px; }
+        for l in Proj.lines: WText { text: l.text; fg: l.bad ? Theme.warn-soft : Theme.on-var; size: 11px; mono: true; }
+        HorizontalLayout {
+            spacing: 6px; alignment: end; padding-top: 6px;
+            Btn { text: T.tr("proj_cancel"); height: 30px; enabled: !Proj.busy; clicked => { Proj.show = false; } }
+            Btn { text: T.tr("proj_trust"); height: 30px; danger: true; enabled: !Proj.busy; clicked => { Proj.trust(); } }
+            Btn { text: T.tr("proj_without"); height: 30px; primary: true; enabled: !Proj.busy; clicked => { Proj.without(); } }
+        }
+    }
+}
+
 export component UsageCard inherits Card {
     height: uc.preferred-height;
     drop-shadow-blur: 20px;

@@ -445,6 +445,16 @@ token is checked; a scheduled folder run reads whatever the project folder holds
 
 **Not done:** a permission-mode picker for an existing chat and a stop button for background jobs in the desktop window (`SessionHandle::set_permission_mode` and `stop_task` exist and are tested); `get_context_usage` for an exact gauge; `commands_changed` (the list is read again at the next `init`); `/effort` and `/mcp` in the menu (their headless behaviour was not checked); the web page's composer menu.
 
+## Project check (a project's own Claude Code settings)
+
+A cloned repository can carry configuration that Claude Code reads on its own: hooks, an `env`, credential helper commands, wide allow rules, a default mode that never asks, MCP servers. Before a **normal** chat starts its `claude` (`Actor::ensure_process`, so send, warm and every restart pass it) `project_check::scan` reads three files of the project folder (`.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`; read-only, at most 256 KiB each, a link or a linked `.claude` is reported and never followed, a broken file is itself a finding) and lists what it finds with a severity. Only warnings and dangers ask; notes (an `env` of known harmless names, a status line, a remote MCP server) never do, and a project with nothing risky is never asked. What the findings say names the key, the event or the first word of a command, never a value (an `NAME=value` word shows `NAME=•••`).
+
+`env` is judged by an allowlist: a name is quiet only when it is one of a short exact list of Claude Code's own switches and limits; a name that redirects or makes something load or run (`ANTHROPIC_BASE_URL`, `BASH_ENV`, `CLAUDE_CODE_SHELL_PREFIX`, `PATH`, `GIT_SSH_COMMAND`, `PYTHONPATH`, ...) is a danger; any other name is a warning. No prefix is trusted.
+
+The decision is kept per chat in `Meta::project_cfg`, as the git settings of a worktree are: **trust** stores the hash of the risky parts that was shown (the values of the risky and unknown `env` names count, so a change asks again; a harmless file appearing, which is what "always allow" writes, does not), or **start without** the project's settings, which passes `--setting-sources user` for that chat (measured: the project's CLAUDE.md is then not read either). While a decision is open the first message is refused with the findings as text, a transient `project_check` event carries them to the desktop card (`proj.rs`, `ProjCard`), and the person sends the message again. Provider chats never read project settings and are never asked. An existing chat is checked at its next process start.
+
+**Not done:** a way to take a decision back (a new chat asks again), the web page's card (it shows the refusal text), checking CLAUDE.md, skills, commands and agents, parent folders and the person's own settings, and noticing a change while a process runs.
+
 ## Tests
 
 ```sh

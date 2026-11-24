@@ -21,6 +21,7 @@ mod usage;
 mod notify;
 mod palette;
 mod slash;
+mod proj;
 mod term;
 mod tray;
 mod vhdb;
@@ -181,6 +182,7 @@ fn main() {
     vhdb::wire(&ui, &app);
     palette::wire(&ui, &app);
     slash::wire(&ui, &app);
+    proj::wire(&ui, &app);
     import::wire(&ui, &app);
     accounts::wire(&ui, &app);
     usage::wire(&ui, &app);
@@ -1077,6 +1079,7 @@ fn open_chat(app: &Arc<App>, sid: String) {
             files::panel_open(&ui, app);
         }
         wt::reset(&ui);
+        proj::reset(&ui);
         ui.invoke_focus_composer();
     }
     let a = app.clone();
@@ -1122,6 +1125,16 @@ async fn follow(app: Arc<App>, sid: String, epoch: u64) {
                     }
                     cur.transcript.apply(&envelope.kind, &envelope.data, envelope.ts);
                     dirty = true;
+                    // The core refused a message in a project whose settings need a decision (a live event, never replayed), or the
+                    // decision was taken: the card follows.
+                    if matches!(envelope.kind.as_str(), "project_check" | "project_cfg") {
+                        let (a, data, kind) = (app.clone(), envelope.data.clone(), envelope.kind.clone());
+                        let _ = app.weak.upgrade_in_event_loop(move |ui| {
+                            if a.current.lock().expect("current").epoch == epoch {
+                                if kind == "project_check" { proj::show(&ui, &a, &data) } else { proj::close(&ui) }
+                            }
+                        });
+                    }
                     // A turn ended: the file open in the editor may have been changed by it.
                     if envelope.kind == "claude" && envelope.data["type"] == "result" {
                         let a = app.clone();
