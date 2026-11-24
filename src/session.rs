@@ -1612,9 +1612,21 @@ impl Actor {
                 }
                 Err(why) => {
                     // The slower way, which always works: the process is ended and the next message starts it with the new model.
-                    tracing::info!("set_model was not taken live ({why}); restarting at the next message");
-                    let (result, _restarted) = self.set_model(model);
-                    let _ = reply.send(result);
+                    // It goes back through the command channel so the restart is handled like any other (the old process's remaining
+                    // events are dropped with its stream, and a named chat gets its new process at once).
+                    tracing::info!("set_model was not taken live ({why}); restarting");
+                    match self.me.upgrade() {
+                        Some(me) => {
+                            if let Err(back) = me.send(Cmd::SetModelSlow { model, reply }) {
+                                if let Cmd::SetModelSlow { reply, .. } = back.0 {
+                                    let _ = reply.send(Err("the session is gone".into()));
+                                }
+                            }
+                        }
+                        None => {
+                            let _ = reply.send(Err("the session is gone".into()));
+                        }
+                    }
                 }
             },
             Ctl::PermMode { mode, reply } => match outcome {
