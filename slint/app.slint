@@ -14,9 +14,9 @@ import { TeamPage } from "team.slint";
 import { NewChatCard, AccountsManage } from "newchat.slint";
 import { VhdbPage, Vh, VhDecision } from "vhdb.slint";
 import { ImportPanel, Imp, ImpRow } from "import.slint";
-import { MemPanel, SkillsPanel, SettingsPanel, WtCard, UsageCard, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole } from "panels.slint";
+import { MemPanel, SkillsPanel, SettingsPanel, WtCard, UsageCard, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, Slash, SlashRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole } from "panels.slint";
 export { Sched, SchedHeadV, SchedTask, SchedRun, Files, FsRow, FsCrumb, HlLine, HlTok, Imp, ImpRow, ChatRow, ChatImg, TRow }
-export { Vh, VhDecision, Theme, T, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole }
+export { Vh, VhDecision, Theme, T, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, SwbDone, SwbEvidence, Pal, PalRow, Slash, SlashRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole }
 
 
 // One row of the chat list: a project folder (head) or a chat under it. A chat in a git worktree is listed under the project it came from.
@@ -174,6 +174,8 @@ export component AppWindow inherits Window {
     in property <bool> picking;
     callback pick-folder();
     callback send(string);
+    // The draft is one "/word" being typed: the menu opens (Rust decides, with the commands of the chat).
+    changed draft => { Slash.draft-changed(root.draft); }
     // A picture of a message: opened full size over the window, closed by a click or Esc.
     in-out property <bool> zoom-open;
     in property <image> zoom-image;
@@ -622,6 +624,40 @@ export component AppWindow inherits Window {
                 // composer
                 Rectangle {
                     height: compose-card.height + 26px;
+                    // The "/" menu: above the composer, the row picked is the one the keys move (Up, Down, Tab or Enter picks, Esc closes).
+                    if Slash.open && root.has-chat && root.side == 0 && !root.new-open: menu := Rectangle {
+                        property <int> shown: min(Slash.rows.length, 7);
+                        property <int> sel: Slash.sel;
+                        x: root.gutter; width: min(560px, parent.width - 2 * root.gutter);
+                        height: (self.shown == 0 ? 40px : self.shown * 36px + 12px) + (Slash.note != "" ? 26px : 0px);
+                        y: 4px - self.height;
+                        background: Theme.container; border-radius: 10px; border-width: 1px; border-color: Theme.hairline;
+                        drop-shadow-blur: 16px; drop-shadow-color: #00000070; clip: true;
+                        changed sel => {
+                            if (self.sel * 36px < -slist.content-y) { slist.content-y = -self.sel * 36px; }
+                            else if ((self.sel + 1) * 36px > -slist.content-y + slist.height) { slist.content-y = -((self.sel + 1) * 36px - slist.height); }
+                        }
+                        VerticalLayout {
+                            if Slash.rows.length == 0: Rectangle { height: 40px; Text { x: 14px; text: T.tr("pal_none"); color: Theme.outline; font-size: 13px; vertical-alignment: center; } }
+                            slist := ListView {
+                                height: menu.shown * 36px + 12px;
+                                for r[i] in Slash.rows: Rectangle {
+                                    height: 36px;
+                                    Rectangle {
+                                        x: 6px; width: parent.width - 12px; height: 34px; border-radius: 7px;
+                                        background: i == Slash.sel ? Theme.primary.with-alpha(0.16) : (sa.has-hover ? Theme.high : transparent);
+                                        HorizontalLayout {
+                                            padding-left: 10px; padding-right: 10px; spacing: 10px;
+                                            Text { text: "/" + r.name; color: r.builtin ? Theme.primary-soft : Theme.on-surface; font-size: 13px; font-weight: 600; font-family: Theme.mono; vertical-alignment: center; }
+                                            Text { text: r.about; color: Theme.outline; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                                        }
+                                        sa := TouchArea { mouse-cursor: pointer; clicked => { Slash.pick(i); } }
+                                    }
+                                }
+                            }
+                            if Slash.note != "": Rectangle { height: 26px; Text { x: 14px; text: Slash.note; color: Theme.outline; font-size: 11px; vertical-alignment: center; } }
+                        }
+                    }
                     compose-card := Rectangle {
                         x: root.gutter; y: 10px; width: parent.width - 2 * root.gutter; height: cv.preferred-height;
                         background: Theme.lowest;
@@ -678,6 +714,14 @@ export component AppWindow inherits Window {
                                             }
                                         }
                                         key-pressed(event) => {
+                                            if (Slash.open) {
+                                                if (event.text == Key.Escape) { Slash.open = false; return accept; }
+                                                if (Slash.rows.length > 0) {
+                                                    if (event.text == Key.UpArrow) { Slash.sel = max(0, Slash.sel - 1); return accept; }
+                                                    if (event.text == Key.DownArrow) { Slash.sel = min(Slash.rows.length - 1, Slash.sel + 1); return accept; }
+                                                    if ((event.text == Key.Tab || event.text == Key.Return) && !event.modifiers.shift && !event.modifiers.control) { Slash.pick(Slash.sel); return accept; }
+                                                }
+                                            }
                                             if (event.text == Key.Return && !event.modifiers.shift && !event.modifiers.control) {
                                                 if (root.side == 0 && !root.new-open && root.state != "running" && (root.draft != "" || Att.items.length > 0)) { root.send(root.draft); }
                                                 return accept;
@@ -707,6 +751,7 @@ export component AppWindow inherits Window {
                                         }
                                     }
                                     if Files.term-enabled && root.has-chat: Btn { y: 7px; text: "!  " + T.tr("shell_chip"); primary: root.shell-mode; clicked => { root.shell-mode = !root.shell-mode; } }
+                                    if root.has-chat: Btn { y: 7px; text: "/  " + T.tr("slash_btn"); enabled: root.state != "running" && !root.shell-mode; clicked => { root.draft = "/"; composer.focus(); } }
                                     Btn { y: 7px; text: T.tr("att_add"); show-icon: true; icon: @image-url("icons/image.svg"); enabled: root.has-chat; clicked => { Att.pick(); } }
                                     Rectangle { horizontal-stretch: 1; }
                                     Text { text: T.hint; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }

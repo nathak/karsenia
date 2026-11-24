@@ -20,6 +20,7 @@ mod team;
 mod usage;
 mod notify;
 mod palette;
+mod slash;
 mod term;
 mod tray;
 mod vhdb;
@@ -59,6 +60,8 @@ struct App {
     cwd: Mutex<Option<String>>,
     /// The open chat's account (None: the default one); a skill proposed from the chat belongs to it.
     chat_acct: Mutex<Option<String>>,
+    /// The command names the open chat's program listed (its skills and custom commands): the "/" menu offers them.
+    slash_names: Mutex<Vec<String>>,
 }
 
 /// The most of a chat the text view puts on screen (the copy of all of it is not cut): a text that long is laid out twice.
@@ -163,7 +166,7 @@ fn main() {
     let zoom_pct = zoom::saved(&data);
     let zoom_data = data.clone();
     let (bus_tx, bus_rx, term_rx) = tenrec::server::local_with_terminal(registry.clone(), term::enabled());
-    let app = Arc::new(App { registry: registry.clone(), lang, current: Mutex::new(Current { sid: None, transcript: Transcript::new(lang), epoch: 0, follow: None }), weak: ui.as_weak(), data, bus: bus::Bus::new(bus_tx), cwd: Mutex::new(None), chat_acct: Mutex::new(None) });
+    let app = Arc::new(App { registry: registry.clone(), lang, current: Mutex::new(Current { sid: None, transcript: Transcript::new(lang), epoch: 0, follow: None }), weak: ui.as_weak(), data, bus: bus::Bus::new(bus_tx), cwd: Mutex::new(None), chat_acct: Mutex::new(None), slash_names: Mutex::new(Vec::new()) });
     wire(&ui, &app);
     panels::wire(&ui, &app);
     team::wire(&ui, &app);
@@ -177,6 +180,7 @@ fn main() {
     term::wire(&ui, &app);
     vhdb::wire(&ui, &app);
     palette::wire(&ui, &app);
+    slash::wire(&ui, &app);
     import::wire(&ui, &app);
     accounts::wire(&ui, &app);
     usage::wire(&ui, &app);
@@ -1543,6 +1547,7 @@ async fn refresh_sessions(app: &Arc<App>) {
     notify::check_budget(&app.data, app.lang, &app.registry.costs().snapshot(), budgets.budget_daily_usd, budgets.budget_monthly_usd);
     let active = list.iter().find(|i| current.as_deref() == Some(i.meta.sid.as_str()));
     *app.cwd.lock().expect("cwd") = active.map(|i| i.meta.cwd.to_string_lossy().into_owned());
+    *app.slash_names.lock().expect("slash names") = active.map(|i| i.meta.slash_commands.clone()).unwrap_or_default();
     let chat_acct = active.and_then(|i| i.meta.account.as_ref().map(|a| a.id.clone()));
     let chat_prov = active.and_then(|i| tenrec::view::panels::listed_provider(i.meta.provider.as_ref()));
     // The gateway picker: whether this chat may switch (it belongs to an account, has no container, and its provider is none or one that uses

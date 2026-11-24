@@ -236,6 +236,10 @@ pub struct Transcript {
     ts: u64,
     /// The turn in progress answers a `/swb` message, and the status reply it showed so far.
     team_cmd: bool,
+    /// The command word of the message being answered (`/cost`), while one is: a local command's output is labelled with it.
+    cmd_name: Option<String>,
+    /// The assistant message being read was made by the program itself (a command's output), not by a model.
+    synthetic: bool,
     cmd_status: bool,
     team_cand: Option<TeamLine>,
     pub head: Head,
@@ -618,7 +622,7 @@ fn local(ms: u64) -> Option<(String, String)> {
 
 impl Transcript {
     pub fn new(lang: Lang) -> Self {
-        Self { cost_turn: None, lang, nodes: Vec::new(), tools: HashMap::new(), live_text: None, live_think: None, think_ms: None, asst_meta: false, day: String::new(), ts: 0, team_cmd: false, cmd_status: false, team_cand: None, head: Head::default(), pending: Vec::new(), replaying: true, first_text: None, expanded: Default::default(), ctx_warned: Pressure::Ok, watch: Watch::new() }
+        Self { cost_turn: None, lang, nodes: Vec::new(), tools: HashMap::new(), live_text: None, live_think: None, think_ms: None, asst_meta: false, day: String::new(), ts: 0, team_cmd: false, cmd_name: None, synthetic: false, cmd_status: false, team_cand: None, head: Head::default(), pending: Vec::new(), replaying: true, first_text: None, expanded: Default::default(), ctx_warned: Pressure::Ok, watch: Watch::new() }
     }
 
     fn t(&self, key: &str) -> String {
@@ -647,7 +651,10 @@ impl Transcript {
         }
         self.asst_meta = true;
         self.day_mark();
-        let who = self.head.model.as_deref().map(model_label).filter(|m| !m.is_empty()).unwrap_or_else(|| "Claude".into());
+        let who = match (&self.cmd_name, self.synthetic) {
+            (Some(name), true) => format!("/{name}"),
+            _ => self.head.model.as_deref().map(model_label).filter(|m| !m.is_empty()).unwrap_or_else(|| "Claude".into()),
+        };
         let time = local(self.ts).map(|d| d.1).unwrap_or_default();
         self.push(Item::AsstMeta { who, time }, None);
     }
@@ -734,6 +741,7 @@ impl Transcript {
                 let mut text = s(data, "text").to_owned();
                 self.team_cmd = team::is_swb_command(&text);
                 self.cmd_status = text.trim() == "/swb status";
+                self.cmd_name = crate::session::is_slash(&text).then(|| text.trim_start().trim_start_matches('/').split_whitespace().next().unwrap_or_default().to_owned());
                 self.team_cand = None;
                 if self.first_text.is_none() && !text.is_empty() && !crate::session::is_slash(&text) {
                     self.first_text = Some(text.chars().take(60).collect());
@@ -898,6 +906,7 @@ impl Transcript {
                 }
             }
             "assistant" => {
+                self.synthetic = parent.is_none() && d.pointer("/message/model").and_then(Value::as_str) == Some("<synthetic>");
                 if parent.is_none() {
                     self.end_live();
                     // The last call's prompt plus its answer is how much of the window the chat takes now (a result's own
@@ -946,6 +955,8 @@ impl Transcript {
                 self.end_live();
                 self.think_ms = None;
                 self.asst_meta = false;
+                self.synthetic = false;
+                self.cmd_name = None;
                 // A command the plug-in answered itself: no model was called, so there is no cost to show.
                 let zero = s(d, "subtype") == "success" && d.get("num_turns").and_then(Value::as_u64) == Some(0) && d.get("is_error").and_then(Value::as_bool) != Some(true);
                 if self.team_cmd {
@@ -1045,6 +1056,20 @@ impl Transcript {
                     text.push_str(&fill(&self.t("api_retry_in"), &[("s", format!("{:.1}", ms as f64 / 1000.0))]));
                 }
                 self.note(text, "note-warn");
+            }
+            // `/compact` (or the automatic one) shortened the conversation: how much it was, and the window is no longer as full as it was.
+            "system" if s(d, "subtype") == "compact_boundary" => {
+                let before = d.pointer("/compact_metadata/pre_tokens").and_then(Value::as_u64).map_or("?".to_owned(), |n| n.to_string());
+                self.note(fill(&self.t("slash_compacted"), &[("n", before)]), "note");
+                self.head.ctx_used = None;
+                self.ctx_warned = Pressure::Ok;
+            }
+            // `/clear`: a new conversation begins here.
+            "conversation_reset" => {
+                self.note(self.t("slash_reset"), "note");
+                self.head.ctx_used = None;
+                self.head.turn = None;
+                self.ctx_warned = Pressure::Ok;
             }
             "system" if s(d, "subtype") == "init" => {
                 if let Some(model) = d.get("model").and_then(Value::as_str) {
@@ -1561,6 +1586,40 @@ mod tests {
         t.apply("user", &json!({"text": "/swb status"}), 5000);
         t.apply("claude", &json!({"type": "result", "subtype": "success", "num_turns": 2, "is_error": false, "result": "a sentence a model wrote"}), 6000);
         assert_eq!(t.head.swb_status.as_ref().map(|s| s.1), Some(2000));
+    }
+
+    #[test]
+    fn a_command_output_is_labelled_with_the_command_not_the_model() {
+        let mut t = chat();
+        t.apply("claude", &json!({"type": "system", "subtype": "init", "model": "claude-haiku-5-5"}), 1);
+        say(&mut t, "/cost", 2);
+        t.apply("claude", &json!({"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "Total cost: $0.00"}]}}), 3);
+        t.apply("claude", &json!({"type": "result", "subtype": "success", "is_error": false, "num_turns": 0, "total_cost_usd": 0, "result": "Total cost: $0.00"}), 3);
+        let rows = t.rows();
+        let who: Vec<&str> = rows.iter().filter(|r| r.kind == "meta-asst").map(|r| r.text.as_str()).collect();
+        assert_eq!(who, ["/cost"], "{:?}", rows.iter().map(|r| (r.kind, r.text.clone())).collect::<Vec<_>>());
+        assert!(rows.iter().any(|r| r.md.contains("Total cost") || r.text.contains("Total cost")), "the output is shown");
+        // The next real answer is the model's again.
+        say(&mut t, "hello", 4);
+        reply(&mut t, "hi", 1, 5);
+        let who: Vec<String> = t.rows().iter().filter(|r| r.kind == "meta-asst").map(|r| r.text.clone()).collect();
+        assert_eq!(who.len(), 2);
+        assert_ne!(who[1], "/cost");
+    }
+
+    #[test]
+    fn compaction_and_clearing_are_told_and_empty_the_window_gauge() {
+        let mut t = chat();
+        say(&mut t, "hello", 1);
+        t.apply("claude", &json!({"type": "assistant", "message": {"usage": {"input_tokens": 150000, "output_tokens": 10}, "content": [{"type": "text", "text": "hi"}]}}), 2);
+        assert!(t.head.ctx_used.is_some());
+        t.apply("claude", &json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {"trigger": "manual", "pre_tokens": 150010}}), 3);
+        assert_eq!(t.head.ctx_used, None);
+        assert!(t.rows().iter().any(|r| r.kind.starts_with("note") && r.text.contains("150010")), "compacted note");
+        t.apply("claude", &json!({"type": "assistant", "message": {"usage": {"input_tokens": 9000, "output_tokens": 10}, "content": [{"type": "text", "text": "ok"}]}}), 4);
+        t.apply("claude", &json!({"type": "conversation_reset", "trigger": "clear", "new_conversation_id": "x"}), 5);
+        assert_eq!(t.head.ctx_used, None);
+        assert!(t.rows().iter().filter(|r| r.kind.starts_with("note")).count() >= 2);
     }
 
     #[test]

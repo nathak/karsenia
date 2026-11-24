@@ -418,6 +418,19 @@ export global Pal {
     callback run(int);
 }
 
+export struct SlashRow { name: string, about: string, arg: bool, confirm: bool, builtin: bool }
+
+// The "/" menu of the composer: the commands that match the word being typed; the window acts on the one picked.
+export global Slash {
+    in-out property <bool> open;
+    in property <[SlashRow]> rows;
+    in-out property <int> sel;
+    // A line under the list (the skills show only after the first message).
+    in property <string> note;
+    callback draft-changed(string);
+    callback pick(int);
+}
+
 export global Dialog {
     in property <bool> visible;
     in property <string> title;
