@@ -101,19 +101,17 @@ pub fn chosen(index: i32, name: &str) -> Result<Option<String>, ()> {
 }
 
 /// The key field is emptied and the form closes.
-/// The form for a new provider: empty, with the way of sending (0 bearer .. 4 an account's login) and, for a login, the account (None is the
+/// The form for a new provider: empty, with the way of sending (0 bearer, 1 x-api-key, 2 headers, 4 an account's login) and, for a login, the account (None is the
 /// default one); `from` says where it was opened ("settings" or "acct:<account id>").
 fn open_new(ui: &AppWindow, auth: i32, account: Option<&str>, from: &str) {
     let p = ui.global::<Prov>();
     p.set_edit_id(SharedString::new());
-    for set in [Prov::set_f_name, Prov::set_f_url, Prov::set_f_key, Prov::set_f_model, Prov::set_f_opus, Prov::set_f_sonnet, Prov::set_f_haiku, Prov::set_f_headers, Prov::set_f_oauth] {
+    for set in [Prov::set_f_name, Prov::set_f_url, Prov::set_f_key, Prov::set_f_model, Prov::set_f_opus, Prov::set_f_sonnet, Prov::set_f_haiku, Prov::set_f_headers] {
         set(&p, SharedString::new());
     }
     p.set_f_auth(auth);
     p.set_f_clear(false);
     p.set_f_has_key(false);
-    p.set_f_clear_oauth(false);
-    p.set_f_has_oauth(false);
     p.set_f_login_acct(crate::accounts::index_of(account));
     p.set_form_from(from.into());
     p.set_editing(true);
@@ -128,15 +126,11 @@ fn open_edit(ui: &AppWindow, id: &str, from: &str) {
     p.set_edit_id(id.into());
     p.set_f_name(text(&one["name"]));
     p.set_f_url(text(&one["base_url"]));
-    p.set_f_auth(match one["auth"].as_str() { Some("x_api_key") => 1, Some("headers") => 2, Some("oauth_token") => 3, Some("account_login") => 4, _ => 0 });
+    p.set_f_auth(match one["auth"].as_str() { Some("x_api_key") => 1, Some("headers") => 2, Some("account_login") => 4, _ => 0 });
     // The key is never sent back: the field starts empty and an empty field keeps the saved key.
     p.set_f_key(SharedString::new());
     p.set_f_clear(false);
     p.set_f_has_key(one["has_token"] == true);
-    // The subscription token is never sent back either.
-    p.set_f_oauth(SharedString::new());
-    p.set_f_clear_oauth(false);
-    p.set_f_has_oauth(one["has_oauth"] == true);
     p.set_f_login_acct(crate::accounts::index_of(one["login_account"].as_str()));
     p.set_f_model(text(&one["model"]));
     p.set_f_opus(text(&one["models"]["opus"]));
@@ -223,7 +217,7 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         // The account of an account-login provider: the picker's index and the name it showed must still agree (the list can change meanwhile).
         let login_name = slint::Model::row_data(&ui.global::<crate::Acct>().get_names(), p.get_f_login_acct().max(0) as usize).unwrap_or_default().to_string();
         let account = crate::accounts::id_at(p.get_f_login_acct(), &login_name).flatten();
-        let op = prov_op(&ProvForm { id: Some(id.as_str()), name: &name, url: &url, auth: p.get_f_auth(), key: &key, clear: p.get_f_clear(), model: &model, aliases: [&aliases[0], &aliases[1], &aliases[2]], headers: &p.get_f_headers().to_string(), oauth: &p.get_f_oauth().to_string(), clear_oauth: p.get_f_clear_oauth(), account: account.as_deref() });
+        let op = prov_op(&ProvForm { id: Some(id.as_str()), name: &name, url: &url, auth: p.get_f_auth(), key: &key, clear: p.get_f_clear(), model: &model, aliases: [&aliases[0], &aliases[1], &aliases[2]], headers: &p.get_f_headers().to_string(), account: account.as_deref() });
         // `send`, not `ask`: the operation (the key in it) is not kept waiting for its reply.
         let rid = a.bus.send(op);
         SAVE_RID.with(|r| r.set(rid));

@@ -24,9 +24,6 @@ pub enum Auth {
     /// The key is sent only where the provider's header lines say `{key}`: `Authorization` carries a placeholder, not the key (a gateway
     /// that takes its key in a header of its own and may refuse an `Authorization` it does not know).
     Headers,
-    /// The CLI is given the provider's subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, made by `claude setup-token`) as its own login, and no
-    /// `ANTHROPIC_AUTH_TOKEN`: for a gateway that passes a Claude subscription through. That token is sent to the provider's address.
-    OauthToken,
     /// The chat's `claude` runs in the folder of one of the person's accounts and uses that account's own login (as it would without any
     /// gateway variable): the login token is sent to the provider's address. No key or token of the provider's own is used for the login.
     AccountLogin,
@@ -38,7 +35,6 @@ impl Auth {
             "bearer" => Some(Self::Bearer),
             "x_api_key" => Some(Self::XApiKey),
             "headers" => Some(Self::Headers),
-            "oauth_token" => Some(Self::OauthToken),
             "account_login" => Some(Self::AccountLogin),
             _ => None,
         }
@@ -65,9 +61,6 @@ pub struct Provider {
     pub auth: Auth,
     #[serde(default)]
     pub token: Option<String>,
-    /// The subscription token of `Auth::OauthToken` (a separate secret from `token`, which is what `{key}` stands for).
-    #[serde(default)]
-    pub oauth_token: Option<String>,
     /// For `Auth::AccountLogin`: the id of the account whose login is used; None is the default account.
     #[serde(default)]
     pub login_account: Option<String>,
@@ -100,7 +93,6 @@ pub struct ProviderView {
     pub host: String,
     pub auth: Auth,
     pub has_token: bool,
-    pub has_oauth: bool,
     pub login_account: Option<String>,
     pub model: Option<String>,
     pub models: Aliases,
@@ -122,7 +114,7 @@ pub struct ProviderRef {
 
 impl Provider {
     pub fn view(&self) -> ProviderView {
-        ProviderView { id: self.id.clone(), name: self.name.clone(), base_url: self.base_url.clone(), host: host_of(&self.base_url), auth: self.auth, has_token: self.token.is_some(), has_oauth: self.oauth_token.is_some(), login_account: self.login_account.clone(), model: self.model.clone(), models: self.models.clone(), headers: self.headers.clone().unwrap_or_default() }
+        ProviderView { id: self.id.clone(), name: self.name.clone(), base_url: self.base_url.clone(), host: host_of(&self.base_url), auth: self.auth, has_token: self.token.is_some(), login_account: self.login_account.clone(), model: self.model.clone(), models: self.models.clone(), headers: self.headers.clone().unwrap_or_default() }
     }
 
     pub fn reference(&self) -> ProviderRef {
@@ -256,10 +248,10 @@ pub fn validate_headers(text: &str, has_key: bool) -> Result<Option<String>, &'s
 }
 
 impl Provider {
-    /// Every secret of this provider that a chat must never show or store (what a chat's events are scrubbed of): the key and the
-    /// subscription token, those long enough to be told apart from other text.
+    /// Every secret of this provider that a chat must never show or store (what a chat's events are scrubbed of): the key, when it is
+    /// long enough to be told apart from other text.
     pub fn secrets(&self) -> Vec<String> {
-        [&self.token, &self.oauth_token].into_iter().flatten().filter(|t| t.len() >= 8).cloned().collect()
+        self.token.iter().filter(|t| t.len() >= 8).cloned().collect()
     }
 
     /// The value of `ANTHROPIC_CUSTOM_HEADERS` for a chat: the lines with the key put where `{key}` stands. None when there are no lines.
@@ -291,9 +283,6 @@ pub struct Form {
     /// None keeps the key already saved.
     pub token: Option<String>,
     pub clear_token: bool,
-    /// The subscription token; None keeps the one already saved.
-    pub oauth_token: Option<String>,
-    pub clear_oauth: bool,
     /// For `Auth::AccountLogin`: the account whose login is used (None: the default account).
     pub account: Option<String>,
     pub model: String,
@@ -311,8 +300,19 @@ impl ProviderStore {
     /// An unreadable file opens as an empty list and is left where it is (never overwritten by opening); the notice says so.
     pub fn open(path: PathBuf) -> (Self, Option<String>) {
         let (list, notice) = match std::fs::read_to_string(&path) {
-            Ok(text) => match serde_json::from_str::<File>(&text) {
-                Ok(file) => (file.providers, None),
+            Ok(text) => match read_file(&text) {
+                Ok((file, Cleanup { touched: false, .. })) => (file.providers, None),
+                Ok((file, cleanup)) => {
+                    // A file of an older version held a subscription token: the file is written again without it, at once.
+                    let written = write_list(&path, &file.providers);
+                    let notice = match (cleanup.changed, written) {
+                        // Only `null` fields were dropped: nothing secret was held, so neither a success nor a failed rewrite is news.
+                        (0, _) => None,
+                        (n, Ok(())) => Some(format!("the subscription token way of sending is no longer offered: {n} provider(s) used it; the saved token was removed and they now send their key only where their header lines say {{key}}. Edit them to choose how the key is sent")),
+                        (_, Err(e)) => Some(format!("an old subscription token could not be removed from providers.json ({e}); it is never used. Saving any provider removes it")),
+                    };
+                    (file.providers, notice)
+                }
                 Err(_) => (Vec::new(), Some("providers.json could not be read; no provider is available until it is fixed or removed".to_owned())),
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (Vec::new(), None),
@@ -334,8 +334,7 @@ impl ProviderStore {
     }
 
     fn write(&self, list: &[Provider]) -> Result<(), String> {
-        let text = serde_json::to_string_pretty(&File { v: 1, providers: list.to_vec() }).map_err(|e| e.to_string())?;
-        crate::private::write(&self.path, &text).map_err(|e| format!("could not save: {e}"))
+        write_list(&self.path, list)
     }
 
     /// Makes a provider, or changes the one named by `form.id`. Returns its id.
@@ -359,19 +358,11 @@ impl ProviderStore {
         if form.auth == Auth::XApiKey && token.is_none() {
             return Err("an API key address needs the key".into());
         }
-        let oauth_token = match (&form.oauth_token, form.clear_oauth) {
-            (Some(text), _) => Some(validate_token(text).map_err(|_| "the subscription token must be 8 to 4096 characters, with no space or character that is not plain text")?),
-            (None, true) => None,
-            (None, false) => existing.and_then(|i| list[i].oauth_token.clone()),
-        };
         let login_account = match (form.auth, &form.account) {
             (Auth::AccountLogin, Some(id)) if !crate::accounts::valid_id(id) => return Err("that account is not valid".into()),
             (Auth::AccountLogin, account) => account.clone(),
             _ => None,
         };
-        if form.auth == Auth::OauthToken && oauth_token.is_none() {
-            return Err("a subscription token address needs the token".into());
-        }
         let headers = validate_headers(&form.headers, token.is_some())?;
         if list.iter().enumerate().any(|(i, p)| p.name == name && Some(i) != existing) {
             return Err("another provider has this name".into());
@@ -379,7 +370,7 @@ impl ProviderStore {
         let id = match existing {
             Some(i) => {
                 let p = &mut list[i];
-                (p.name, p.base_url, p.auth, p.token, p.oauth_token, p.login_account, p.model, p.models, p.headers, p.updated) = (name, base_url, form.auth, token, oauth_token, login_account, model, models, headers, now);
+                (p.name, p.base_url, p.auth, p.token, p.login_account, p.model, p.models, p.headers, p.updated) = (name, base_url, form.auth, token, login_account, model, models, headers, now);
                 p.id.clone()
             }
             None => {
@@ -387,7 +378,7 @@ impl ProviderStore {
                     return Err("there are too many providers".into());
                 }
                 let id = crate::random_hex(6);
-                list.push(Provider { id: id.clone(), name, base_url, auth: form.auth, token, oauth_token, login_account, model, models, headers, created: now, updated: now });
+                list.push(Provider { id: id.clone(), name, base_url, auth: form.auth, token, login_account, model, models, headers, created: now, updated: now });
                 id
             }
         };
@@ -416,6 +407,40 @@ struct File {
     v: u8,
     #[serde(default)]
     providers: Vec<Provider>,
+}
+
+fn write_list(path: &std::path::Path, list: &[Provider]) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(&File { v: 1, providers: list.to_vec() }).map_err(|e| e.to_string())?;
+    crate::private::write_atomic(path, &text).map_err(|e| format!("could not save: {e}"))
+}
+
+/// What reading a file of an older version had to change: `touched` is true when it must be written again, `changed` counts the
+/// providers that held a token or used the mode (what the notice counts; a field that was only `null` is not news).
+struct Cleanup {
+    touched: bool,
+    changed: usize,
+}
+
+/// A file of an older version: the stored subscription token (`oauth_token`, of the removed `"auth": "oauth_token"` mode) is dropped, and
+/// such a provider becomes `headers` (its key goes only where its header lines say `{key}`; `Authorization` gets the placeholder), so it
+/// sends no credential it did not send before and its gateway refuses it until the way of sending is chosen again.
+fn read_file(text: &str) -> Result<(File, Cleanup), serde_json::Error> {
+    let mut value: serde_json::Value = serde_json::from_str(text)?;
+    let mut cleanup = Cleanup { touched: false, changed: 0 };
+    if let Some(list) = value.get_mut("providers").and_then(|p| p.as_array_mut()) {
+        for p in list.iter_mut().filter_map(|p| p.as_object_mut()) {
+            let token = p.remove("oauth_token");
+            let mode = p.get("auth").and_then(|a| a.as_str()) == Some("oauth_token");
+            if mode {
+                p.insert("auth".into(), "headers".into());
+            }
+            cleanup.touched |= token.is_some() || mode;
+            if mode || token.is_some_and(|t| !t.is_null()) {
+                cleanup.changed += 1;
+            }
+        }
+    }
+    Ok((serde_json::from_value(value)?, cleanup))
 }
 
 #[cfg(test)]
@@ -609,31 +634,70 @@ mod tests {
     }
 
     #[test]
-    fn a_subscription_token_is_kept_apart_from_the_key_never_shown_and_needed_for_its_mode() {
+    fn an_old_file_loses_its_subscription_token_and_the_mode_becomes_headers() {
         let dir = tempfile::tempdir().unwrap();
-        let (store, _) = ProviderStore::open(dir.path().join("providers.json"));
-        let base = || Form { name: "Air".into(), base_url: "https://gateway.example.com/anthropic".into(), auth: Auth::OauthToken, ..Default::default() };
-        assert!(store.save(base(), 1).is_err(), "the mode needs the token");
-        assert!(store.save(Form { oauth_token: Some("short".into()), ..base() }, 1).is_err(), "too short to be a token");
-        let id = store.save(Form { oauth_token: Some("sk-ant-oat01-subscription-token".into()), token: Some("airkey-123456".into()), headers: "AIR-Api-Key: {key}".into(), ..base() }, 1).unwrap();
-        let view = store.list_views().remove(0);
-        assert!(view.has_oauth && view.has_token);
-        let shown = serde_json::to_string(&view).unwrap();
-        assert!(!shown.contains("sk-ant-oat01") && !shown.contains("airkey-123456"), "{shown}");
-        let p = store.get(&id).unwrap();
-        assert_eq!(p.custom_headers().as_deref(), Some("AIR-Api-Key: airkey-123456"), "{{key}} is the key, not the subscription token");
-        assert_eq!(p.secrets().len(), 2);
-        assert!(!format!("{p:?}").contains("sk-ant-oat01"));
-        // An edit with no new token keeps it; clearing it while the mode needs it is refused and changes nothing.
-        store.save(Form { id: Some(id.clone()), ..base() }, 2).unwrap();
-        assert_eq!(store.get(&id).unwrap().oauth_token.as_deref(), Some("sk-ant-oat01-subscription-token"));
-        assert!(store.save(Form { id: Some(id.clone()), clear_oauth: true, ..base() }, 3).is_err());
-        assert!(store.get(&id).unwrap().oauth_token.is_some());
-        // Another mode may drop it.
-        store.save(Form { id: Some(id.clone()), auth: Auth::Bearer, clear_oauth: true, ..base() }, 4).unwrap();
-        assert!(store.get(&id).unwrap().oauth_token.is_none());
-        let old: Provider = serde_json::from_str(r#"{"id":"x","name":"N","base_url":"https://a.example"}"#).unwrap();
-        assert!(old.oauth_token.is_none() && old.secrets().is_empty());
+        let path = dir.path().join("providers.json");
+        std::fs::write(
+            &path,
+            r#"{"v":1,"providers":[
+ {"id":"a","name":"A","base_url":"https://a.example","auth":"bearer","token":"sk-secret-1234","oauth_token":null},
+ {"id":"b","name":"B","base_url":"https://b.example","auth":"oauth_token","token":"airkey-123456","oauth_token":"sk-ant-oat01-subscription-token","headers":"AIR-Api-Key: {key}"},
+ {"id":"c","name":"C","base_url":"https://c.example","auth":"x_api_key","token":"sk-other-5678","oauth_token":"sk-ant-oat01-stray-token"}]}"#,
+        )
+        .unwrap();
+        let (store, notice) = ProviderStore::open(path.clone());
+        assert!(notice.unwrap().contains("2 provider(s)"), "two providers held a token or used the mode");
+        assert_eq!(store.list_views().len(), 3);
+        let b = store.get("b").unwrap();
+        assert_eq!(b.auth, Auth::Headers);
+        assert_eq!(b.token.as_deref(), Some("airkey-123456"));
+        assert_eq!(b.custom_headers().as_deref(), Some("AIR-Api-Key: airkey-123456"));
+        assert_eq!(store.get("c").unwrap().auth, Auth::XApiKey);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("sk-ant-oat01") && !text.contains("oauth_token"), "{text}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let plan = crate::claude::env::plan(&[], Some(&b), std::path::Path::new("/cfg"));
+        assert!(plan.set.iter().all(|(name, _)| name != "CLAUDE_CODE_OAUTH_TOKEN"));
+        // Opened again: nothing left to say, and the file is as it was written.
+        let (_, again) = ProviderStore::open(path.clone());
+        assert!(again.is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_rewrite_of_an_old_file_keeps_the_list_and_the_next_save_removes_the_token() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.json");
+        std::fs::write(&path, r#"{"v":1,"providers":[{"id":"a","name":"A","base_url":"https://a.example","auth":"bearer","token":"sk-secret-1234","oauth_token":"sk-ant-oat01-stray-token"}]}"#).unwrap();
+        // The folder cannot be written into, so the rewrite fails (a process that is root writes anyway: then there is nothing to test).
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let (store, notice) = ProviderStore::open(path.clone());
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        if let Some(notice) = notice {
+            assert!(notice.contains("could not be removed"), "{notice}");
+            assert_eq!(store.list_views().len(), 1, "the list is kept");
+            assert!(std::fs::read_to_string(&path).unwrap().contains("sk-ant-oat01"), "the file is as it was");
+            store.save(Form { id: Some("a".into()), name: "A".into(), base_url: "https://a.example".into(), ..Default::default() }, 2).unwrap();
+        }
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("sk-ant-oat01"), "a save removes it");
+    }
+
+    #[test]
+    fn a_file_with_only_null_subscription_tokens_is_cleaned_without_a_notice() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.json");
+        std::fs::write(&path, r#"{"v":1,"providers":[{"id":"a","name":"A","base_url":"https://a.example","auth":"bearer","token":"sk-secret-1234","oauth_token":null}]}"#).unwrap();
+        let (store, notice) = ProviderStore::open(path.clone());
+        assert!(notice.is_none(), "a field that was only null is not news");
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("oauth_token"));
+        assert_eq!(store.get("a").unwrap().token.as_deref(), Some("sk-secret-1234"));
+        assert_eq!(Auth::parse("oauth_token"), None);
     }
 
     #[test]
@@ -659,7 +723,7 @@ mod tests {
     fn a_chats_provider_reference_written_before_login_existed_reads_as_an_ordinary_provider() {
         let old: ProviderRef = serde_json::from_str(r#"{"id":"p1","name":"N","host":"a.example"}"#).unwrap();
         assert!(!old.login);
-        let mut p = Provider { id: "p1".into(), name: "N".into(), base_url: "https://a.example".into(), auth: Auth::AccountLogin, token: None, oauth_token: None, login_account: None, model: None, models: Aliases::default(), headers: None, created: 0, updated: 0 };
+        let mut p = Provider { id: "p1".into(), name: "N".into(), base_url: "https://a.example".into(), auth: Auth::AccountLogin, token: None, login_account: None, model: None, models: Aliases::default(), headers: None, created: 0, updated: 0 };
         assert!(p.reference().login);
         p.auth = Auth::Bearer;
         assert!(!p.reference().login);

@@ -65,7 +65,7 @@ const TEXT = {
     provider: '제공자', provAccount: 'Claude 계정 (기본)', provNote: '다른 제공자를 고르면 이 대화의 모든 내용(Claude가 읽은 파일과 명령 결과 포함)이 그 주소로 갑니다. 이 대화에는 기억, 스킬, 기록 검색, 자동 저장이 쓰이지 않고, 이 대화도 다른 대화의 기억이나 검색에 들어가지 않습니다. 제공자는 새 대화를 만들 때만 고를 수 있고 바꿀 수 없습니다.',
     provTitle: '모델 제공자', provIntro: 'Anthropic 호환 주소(게이트웨이, 사내 프록시, 로컬 서버)를 등록하면 새 대화를 그 주소로 연결할 수 있습니다. 키는 이 컴퓨터의 데이터 폴더에만 저장되고 화면에는 다시 나오지 않습니다. 같은 컴퓨터에서 실행되는 도구(명령 실행, 파일 읽기)는 그 파일을 읽을 수 있으니, 그런 요청은 승인할 때 확인하세요.',
     provNew: '＋ 새 제공자', provName: '이름', provUrl: '주소 (https://, 이 컴퓨터는 http:// 가능)', provAuth: '키를 보내는 방식', provAuthBearer: 'Authorization: Bearer (게이트웨이, 프록시)', provAuthKey: 'x-api-key (API 키)',
-    provAuthLogin: '계정 로그인 (기본 계정의 로그인이 이 주소로 전송됩니다)', provAuthOauth: '구독 토큰 (claude setup-token)', provOauth: '구독 토큰 (구독 토큰 방식일 때만): 이 토큰은 위 주소로 전송됩니다. 비워 두면 저장된 값을 유지합니다', provAuthHeaders: '헤더만 (키는 요청 헤더의 {key} 자리에만)', provHeaders: '요청 헤더 (선택): 한 줄에 하나, 이름: 값. 키 자리는 {key}', provKey: '키', provKeyClear: '저장된 키 지우기', provKeyKeep: '비워 두면 저장된 키를 그대로 둡니다.', provKeyNone: '키 없이 쓰는 주소는 비워 두세요.', provModel: '기본 모델 (비우면 Claude Code 기본)', provAliases: '모델 이름 바꾸기', provAliasesNote: 'Claude Code가 opus, sonnet, haiku로 부르는 모델을 이 주소의 모델 이름으로 바꿉니다. 백그라운드 작업은 haiku를 쓰므로 비워 두면 그 주소에 없는 이름을 요청할 수 있습니다.',
+    provAuthLogin: '계정 로그인 (기본 계정의 로그인이 이 주소로 전송됩니다)', provAuthHeaders: '헤더만 (키는 요청 헤더의 {key} 자리에만)', provHeaders: '요청 헤더 (선택): 한 줄에 하나, 이름: 값. 키 자리는 {key}', provKey: '키', provKeyClear: '저장된 키 지우기', provKeyKeep: '비워 두면 저장된 키를 그대로 둡니다.', provKeyNone: '키 없이 쓰는 주소는 비워 두세요.', provModel: '기본 모델 (비우면 Claude Code 기본)', provAliases: '모델 이름 바꾸기', provAliasesNote: 'Claude Code가 opus, sonnet, haiku로 부르는 모델을 이 주소의 모델 이름으로 바꿉니다. 백그라운드 작업은 haiku를 쓰므로 비워 두면 그 주소에 없는 이름을 요청할 수 있습니다.',
     provSave: '저장', provEdit: '수정', provDelete: '삭제', provDeleteConfirm: '이 제공자를 삭제할까요? 이 제공자의 대화 {n}개는 기록만 남고 더 이어 갈 수 없습니다.', provHasKey: '키 있음', provNoKey: '키 없음', provChats: '대화', provNoProviders: '아직 제공자가 없습니다.',
     provBanner: '이 대화의 내용은 {host} 로 갑니다 (Claude 계정이 아님). 기억, 스킬, 기록 검색, 자동 저장은 이 대화에 쓰이지 않습니다.', provVia: '→',
     ctrUse: '컨테이너 안에서 실행 (실험)', ctrTitle: '컨테이너 (실험)', ctrIntro: '제공자를 쓰는 대화의 claude를 docker 또는 podman 컨테이너 안에서 실행합니다. 컨테이너는 프로젝트 폴더(읽기·쓰기)와 이 대화의 설정 폴더만 보고, 홈 폴더, 데이터 폴더, Claude 계정 인증 정보는 보지 못합니다. 프로젝트 폴더 자체는 보호하지 않고 네트워크는 열려 있으며, 이 컴퓨터의 주소(localhost)는 컨테이너에서 닿지 않습니다. 이미지에는 claude가 들어 있어야 하고, 실제 docker·podman으로는 아직 검증하지 못했습니다.',
@@ -152,7 +152,7 @@ const TEXT = {
     provider: 'Provider', provAccount: 'Claude account (default)', provNote: 'If you pick another provider, everything in this chat (including files Claude read and command output) goes to that address. This chat gets no notes, skills, history search or auto-save, and it is not part of other chats\' notes or search. A provider is chosen only when the chat is made and cannot be changed.',
     provTitle: 'Model providers', provIntro: 'Add an Anthropic-compatible address (a gateway, a company proxy, a local server) and new chats can be connected to it. The key is kept only in this computer\'s data folder and is never shown again. Tools that run on this computer (commands, file reads) can read that file, so check such requests before you approve them.',
     provNew: '+ New provider', provName: 'Name', provUrl: 'Address (https://, http:// only for this computer)', provAuth: 'How the key is sent', provAuthBearer: 'Authorization: Bearer (gateway, proxy)', provAuthKey: 'x-api-key (API key)',
-    provAuthLogin: 'Account login (the default account\'s login token is sent to this address)', provAuthOauth: 'Subscription token (claude setup-token)', provOauth: 'Subscription token (only for that mode): it is sent to the address above. Leave empty to keep the saved one', provAuthHeaders: 'Headers only (the key goes only where a header line says {key})', provHeaders: 'Request headers (optional): one per line, Name: value. Write {key} where the key goes', provKey: 'Key', provKeyClear: 'Clear the saved key', provKeyKeep: 'Leave empty to keep the saved key.', provKeyNone: 'Leave empty for an address that needs no key.', provModel: 'Default model (empty: Claude Code\'s own default)', provAliases: 'Rename models', provAliasesNote: 'Claude Code asks for opus, sonnet and haiku; these give the names this address uses for them. Background work uses haiku, so if it is empty, a name the address does not have may be asked for.',
+    provAuthLogin: 'Account login (the default account\'s login token is sent to this address)', provAuthHeaders: 'Headers only (the key goes only where a header line says {key})', provHeaders: 'Request headers (optional): one per line, Name: value. Write {key} where the key goes', provKey: 'Key', provKeyClear: 'Clear the saved key', provKeyKeep: 'Leave empty to keep the saved key.', provKeyNone: 'Leave empty for an address that needs no key.', provModel: 'Default model (empty: Claude Code\'s own default)', provAliases: 'Rename models', provAliasesNote: 'Claude Code asks for opus, sonnet and haiku; these give the names this address uses for them. Background work uses haiku, so if it is empty, a name the address does not have may be asked for.',
     provSave: 'Save', provEdit: 'Edit', provDelete: 'Delete', provDeleteConfirm: 'Delete this provider? Its {n} chat(s) keep their history and can no longer be continued.', provHasKey: 'key set', provNoKey: 'no key', provChats: 'chats', provNoProviders: 'No providers yet.',
     provBanner: 'This chat\'s content goes to {host} (not your Claude account). Notes, skills, history search and auto-save are not used in this chat.', provVia: '→',
     ctrUse: 'Run inside a container (experimental)', ctrTitle: 'Container (experimental)', ctrIntro: 'Runs the claude of a chat that uses a provider inside a docker or podman container. The container sees the project folder (read-write) and this chat\'s own settings folder, and not your home folder, the data folder or the Claude account\'s credentials. It does not protect the project folder itself, the network is open, and an address on this computer (localhost) cannot be reached from inside. The image must contain claude. It has not been verified with a real docker or podman yet.',
@@ -1916,7 +1916,6 @@ function pvFill(p) {
   $('pv-model').value = p && p.model ? p.model : ''
   for (const tier of ['opus', 'sonnet', 'haiku']) $('pv-' + tier).value = p && p.models && p.models[tier] ? p.models[tier] : ''
   $('pv-headers').value = p && p.headers ? p.headers : ''
-  $('pv-oauth').value = ''
   // An account chosen in the desktop app is kept as it is when the page saves the provider again.
   S.pvAccount = p && p.login_account ? p.login_account : null
 }
@@ -1963,14 +1962,14 @@ $('ctr-form').addEventListener('submit', event => {
   pvSend({ op: 'provider_container', runtime: $('ctr-runtime').value, image: $('ctr-image').value })
 })
 $('prov-new').addEventListener('click', () => { S.pvEditing = ''; pvFill(null); renderProviders() })
-$('pv-cancel').addEventListener('click', () => { S.pvEditing = null; $('pv-key').value = ''; $('pv-oauth').value = ''; renderProviders() })
+$('pv-cancel').addEventListener('click', () => { S.pvEditing = null; $('pv-key').value = ''; renderProviders() })
 $('prov-form').addEventListener('submit', event => {
   event.preventDefault()
   const key = $('pv-key').value
   pvSend({
     op: 'provider_save', id: S.pvEditing || undefined, name: $('pv-name').value, base_url: $('pv-url').value, auth: $('pv-auth').value,
     token: key || undefined, clear_token: $('pv-clear').checked, model: $('pv-model').value,
-    models: { opus: $('pv-opus').value, sonnet: $('pv-sonnet').value, haiku: $('pv-haiku').value }, headers: $('pv-headers').value, oauth_token: $('pv-oauth').value || undefined, account: S.pvAccount || undefined,
+    models: { opus: $('pv-opus').value, sonnet: $('pv-sonnet').value, haiku: $('pv-haiku').value }, headers: $('pv-headers').value, account: S.pvAccount || undefined,
   })
 })
 

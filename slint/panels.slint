@@ -370,15 +370,11 @@ export global Prov {
     in-out property <string> edit-id;
     in-out property <string> f-name;
     in-out property <string> f-url;
-    // 0 bearer, 1 x-api-key, 2 headers only (the key goes only where the header lines say {key}), 3 subscription token (the CLI's own login), 4 an account's login.
+    // 0 bearer, 1 x-api-key, 2 headers only (the key goes only where the header lines say {key}), 3 is no longer used (it was the removed subscription token), 4 an account's login.
     in-out property <int> f-auth;
     in-out property <string> f-key;
     in-out property <bool> f-clear;
     in-out property <bool> f-has-key;
-    // The subscription token (auth 3): a secret apart from the key; an empty field keeps the saved one.
-    in-out property <string> f-oauth;
-    in-out property <bool> f-clear-oauth;
-    in-out property <bool> f-has-oauth;
     // For auth 4 (an account's login): the account, as an index in Acct.names (0 is the default account).
     in-out property <int> f-login-acct;
     in-out property <string> f-model;
@@ -733,16 +729,14 @@ export component ProvForm inherits Rectangle {
                 Field { label: T.tr("pv_url"); LineEdit { text <=> Prov.f-url; placeholder-text: "https://"; } }
                 if !root.in-account: Field {
                     label: T.tr("pv_auth");
-                    HorizontalLayout { alignment: start; Segment { items: ["Bearer", "x-api-key", T.tr("pv_auth_headers"), T.tr("pv_auth_oauth"), T.tr("pv_auth_login")]; current: Prov.f-auth; chosen(i) => { Prov.f-auth = i; } } }
+                    // Shown in this order; the stored codes are 0 bearer, 1 x-api-key, 2 headers, 4 account login (3 was the removed subscription token).
+                    HorizontalLayout { alignment: start; Segment { items: ["Bearer", "x-api-key", T.tr("pv_auth_headers"), T.tr("pv_auth_login")]; current: Prov.f-auth == 4 ? 3 : Prov.f-auth; chosen(i) => { Prov.f-auth = i == 3 ? 4 : i; } } }
                 }
                 Field { label: T.tr("pv_key"); LineEdit { text <=> Prov.f-key; input-type: InputType.password; } }
                 WText { text: Prov.f-has-key ? T.tr("pv_key_keep") : T.tr("pv_key_none"); fg: Theme.outline; size: 11px; }
                 if Prov.f-has-key: CheckBox { text: T.tr("pv_key_clear"); checked <=> Prov.f-clear; }
                 if Prov.f-auth == 4 && !root.in-account: Field { label: T.tr("pv_login_acct"); ComboBox { model: Acct.names; current-index <=> Prov.f-login-acct; } }
                 if Prov.f-auth == 4: WText { text: T.tr("pv_login_note"); fg: Theme.warn-soft; size: 11px; }
-                if Prov.f-auth == 3: Field { label: T.tr("pv_oauth"); LineEdit { text <=> Prov.f-oauth; input-type: InputType.password; } }
-                if Prov.f-auth == 3: WText { text: Prov.f-has-oauth ? T.tr("pv_oauth_keep") : T.tr("pv_oauth_note"); fg: Theme.warn-soft; size: 11px; }
-                if Prov.f-auth == 3 && Prov.f-has-oauth: CheckBox { text: T.tr("pv_oauth_clear"); checked <=> Prov.f-clear-oauth; }
                 Field { label: T.tr("pv_model"); LineEdit { text <=> Prov.f-model; } }
                 Field {
                     label: T.tr("pv_aliases");
