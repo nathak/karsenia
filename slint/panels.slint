@@ -624,7 +624,14 @@ export component ProjCard inherits Card {
         padding: 18px; spacing: 8px;
         Text { text: T.tr("proj_title"); color: Theme.on-surface; font-size: 16px; font-weight: 600; }
         WText { text: T.tr("proj_intro"); fg: Theme.warn-soft; size: 12px; }
-        for l in Proj.lines: WText { text: l.text; fg: l.bad ? Theme.warn-soft : Theme.on-var; size: 11px; mono: true; }
+        // The findings scroll inside a bounded area, so the buttons below are always on screen.
+        ScrollView {
+            height: min(pv.preferred-height, 240px);
+            pv := VerticalLayout {
+                spacing: 8px;
+                for l in Proj.lines: WText { text: l.text; fg: l.bad ? Theme.warn-soft : Theme.on-var; size: 11px; mono: true; }
+            }
+        }
         HorizontalLayout {
             spacing: 6px; alignment: end; padding-top: 6px;
             Btn { text: T.tr("proj_cancel"); height: 30px; enabled: !Proj.busy; clicked => { Proj.show = false; } }

@@ -1711,7 +1711,8 @@ impl Actor {
         if !scan.needs_decision() {
             return Ok(());
         }
-        if matches!(&self.meta.project_cfg, Some(ProjectChoice::Trusted { hash }) if *hash == scan.hash) {
+        // A link is not followed, so what it leads to may change with the hash staying the same: it is never trusted, only left out.
+        if !scan.has_link() && matches!(&self.meta.project_cfg, Some(ProjectChoice::Trusted { hash }) if *hash == scan.hash) {
             return Ok(());
         }
         self.emit_project_check(&scan);
@@ -1734,6 +1735,10 @@ impl Actor {
             return Ok(());
         }
         let scan = crate::project_check::scan(&self.meta.cwd);
+        if scan.has_link() {
+            self.emit_project_check(&scan);
+            return Err("a settings file or folder of this project is a link, which is not followed and cannot be trusted; start without the project's settings, or replace the link by the file".into());
+        }
         if scan.needs_decision() && scan.hash != hash {
             self.emit_project_check(&scan);
             return Err("the settings changed again; look at them again".into());

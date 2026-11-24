@@ -123,3 +123,23 @@ async fn nothing_risky_never_asks_and_an_old_chat_meta_without_the_field_is_read
     };
     assert_eq!(old.project_cfg, None);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_linked_settings_file_is_never_trusted_only_left_out() {
+    let r = rig(None).await;
+    let real = r.root.join("real.json");
+    std::fs::write(&real, r#"{"hooks":{"Stop":[{"hooks":[{"command":"./a.sh"}]}]}}"#).unwrap();
+    std::os::unix::fs::symlink(&real, r.project.join(".claude/settings.json")).unwrap();
+    let chat = r.server.registry.create_in(r.project.to_str().unwrap(), None, None, false, None).unwrap();
+    let (_, mut rx) = chat.subscribe(0).await.unwrap();
+    assert!(chat.send("hi".into(), vec![]).await.is_err());
+    let hash = shown(&mut rx).expect("shown");
+    let err = chat.project_decide(hash, false).await.unwrap_err();
+    assert!(err.contains("link"), "{err}");
+    assert!(chat.send("hi".into(), vec![]).await.is_err(), "still asks");
+    chat.project_decide(String::new(), true).await.unwrap();
+    chat.send("hi".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+    assert!(r.starts()[0].contains("--setting-sources user"));
+}

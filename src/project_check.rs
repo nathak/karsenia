@@ -51,6 +51,11 @@ impl Scan {
         self.findings.iter().any(|f| f.severity >= Severity::Warn)
     }
 
+    /// A configuration file or folder is a link: it is not followed, so its content is not what the hash covers and nothing can be trusted.
+    pub fn has_link(&self) -> bool {
+        self.findings.iter().any(|f| f.key == "link")
+    }
+
     /// The findings as one line of text for a refusal.
     pub fn summary(&self) -> String {
         self.findings.iter().filter(|f| f.severity >= Severity::Warn).map(|f| format!("{} {}: {}", f.file, f.key, f.text)).collect::<Vec<_>>().join("; ")
@@ -402,6 +407,7 @@ mod tests {
         std::os::unix::fs::symlink(outside.path().join("real.json"), dir.path().join(".claude/settings.json")).unwrap();
         let s = scan(dir.path());
         assert_eq!(kinds(&s), [("link", Severity::Warn)]);
+        assert!(s.has_link());
         // A linked `.claude` folder is not followed either.
         let dir = tempfile::tempdir().unwrap();
         let other = project(&[(".claude/settings.json", r#"{"hooks":{"Stop":[]}}"#), ("d/settings.json", r#"{"enableAllProjectMcpServers":true}"#)]);
