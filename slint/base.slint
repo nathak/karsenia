@@ -4,20 +4,25 @@ export global Theme {
     in-out property <int> mode: 0;
     in-out property <bool> sys-dark: true;
     out property <bool> dark: root.mode == 0 || (root.mode == 2 && root.sys-dark);
-    out property <color> surface: root.dark ? #141311 : #faf9f5;
-    out property <color> lowest: root.dark ? #0f0e0d : #ffffff;
-    out property <color> low: root.dark ? #1c1b1a : #f4f2ec;
-    out property <color> container: root.dark ? #201f1d : #eeebe4;
-    out property <color> high: root.dark ? #2b2927 : #e7e3da;
-    out property <color> highest: root.dark ? #363432 : #dcd7cc;
-    out property <color> hairline: root.dark ? #3a3835 : #d6d1c6;
-    out property <color> outline: root.dark ? #8c877f : #79746b;
-    out property <color> on-surface: root.dark ? #e7e2dd : #1f1d1a;
-    out property <color> on-var: root.dark ? #c4bfb8 : #524d46;
-    out property <color> primary: root.dark ? #d97757 : #c4573a;
-    out property <color> primary-soft: root.dark ? #ffb59e : #b0472b;
-    out property <color> on-primary: root.dark ? #1b0f0a : #ffffff;
-    out property <color> ok: root.dark ? #88d7a1 : #2b8350;
+    out property <color> surface: root.dark ? #121614 : #f6f7f2;
+    out property <color> lowest: root.dark ? #0e1210 : #ffffff;
+    out property <color> low: root.dark ? #171c1a : #eef1ea;
+    out property <color> container: root.dark ? #1b221e : #e8ece3;
+    out property <color> high: root.dark ? #242c27 : #dfe4d9;
+    out property <color> highest: root.dark ? #2e3731 : #d5dbce;
+    out property <color> hairline: root.dark ? #2c3630 : #c9d0c2;
+    out property <color> outline: root.dark ? #85918a : #6c766d;
+    out property <color> on-surface: root.dark ? #e3e8e1 : #1a1f1b;
+    out property <color> on-var: root.dark ? #bcc6be : #48514a;
+    // The brand: the moss green of the icon (selection, buttons, toggles, progress, links).
+    out property <color> primary: root.dark ? #a5b649 : #5f7a1f;
+    out property <color> primary-soft: root.dark ? #c4d160 : #4e6619;
+    out property <color> on-primary: root.dark ? #141a0b : #ffffff;
+    // Attention (a warning, a limit, a notice, a held call): the orange of the icon, never the brand green.
+    out property <color> warn: root.dark ? #dc825a : #b4532a;
+    out property <color> warn-soft: root.dark ? #f0a283 : #9a4421;
+    out property <color> on-warn: root.dark ? #1b0f0a : #ffffff;
+    out property <color> ok: root.dark ? #8fdcaa : #267a4b;
     out property <color> error: root.dark ? #f2796f : #c4372c;
     out property <color> info: root.dark ? #a6c9f8 : #295fae;
     out property <color> violet: root.dark ? #857bed : #5a4fd0;
@@ -165,11 +170,11 @@ export component Badge inherits Rectangle {
     height: 20px;
     width: lbl.preferred-width + 16px;
     border-radius: 4px;
-    background: root.tone == "ok" ? Theme.ok.with-alpha(0.14) : root.tone == "warn" ? Theme.primary.with-alpha(0.16) : root.tone == "err" ? Theme.error.with-alpha(0.16) : root.tone == "info" ? Theme.info.with-alpha(0.14) : root.tone == "primary" ? Theme.primary.with-alpha(0.16) : Theme.high;
+    background: root.tone == "ok" ? Theme.ok.with-alpha(0.14) : root.tone == "warn" ? Theme.warn.with-alpha(0.16) : root.tone == "err" ? Theme.error.with-alpha(0.16) : root.tone == "info" ? Theme.info.with-alpha(0.14) : root.tone == "primary" ? Theme.primary.with-alpha(0.16) : Theme.high;
     lbl := Text {
         x: 8px; y: (parent.height - self.preferred-height) / 2;
         text: root.text; font-size: 11px; font-weight: 600; font-family: root.mono ? Theme.mono : "";
-        color: root.tone == "ok" ? Theme.ok : root.tone == "warn" ? Theme.primary-soft : root.tone == "err" ? Theme.error : root.tone == "info" ? Theme.info : root.tone == "primary" ? Theme.primary-soft : Theme.on-var;
+        color: root.tone == "ok" ? Theme.ok : root.tone == "warn" ? Theme.warn-soft : root.tone == "err" ? Theme.error : root.tone == "info" ? Theme.info : root.tone == "primary" ? Theme.primary-soft : Theme.on-var;
     }
 }
 

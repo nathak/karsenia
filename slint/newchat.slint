@@ -247,7 +247,7 @@ export component AccountsManage inherits Rectangle {
             Text { text: T.tr("nc_manage"); font-size: 18px; font-weight: 600; color: Theme.on-surface; vertical-alignment: center; horizontal-stretch: 1; }
             VerticalLayout { alignment: center; Badge { text: Acct.rows.length + " " + T.tr("nc_profiles"); } }
         }
-        if Acct.notice != "": WText { text: Acct.notice; size: 12px; fg: Theme.primary-soft; }
+        if Acct.notice != "": WText { text: Acct.notice; size: 12px; fg: Theme.warn-soft; }
         for r in Acct.rows: AccountCard { r: r; }
         if Acct.can-add: HorizontalLayout {
             spacing: 8px;

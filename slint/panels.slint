@@ -99,7 +99,7 @@ export global Usage {
     // The card was opened (it asks by itself when what it holds is old or a window has ended).
     callback opened();
     pure public function tone(level: string) -> color {
-        return level == "ok" ? Theme.ok : level == "warn" ? Theme.primary : level == "limit" ? Theme.error : Theme.outline;
+        return level == "ok" ? Theme.ok : level == "warn" ? Theme.warn : level == "limit" ? Theme.error : Theme.outline;
     }
 }
 
@@ -578,10 +578,10 @@ export component WtCard inherits Card {
         Text { text: T.tr("wt_title"); color: Theme.on-surface; font-size: 15px; font-weight: 600; }
         WText { text: Wt.banner; fg: Theme.on-var; size: 11px; mono: true;  }
         WText { text: T.tr("wt_hint"); fg: Theme.outline; size: 11px;  }
-        if Wt.cfg: WText { text: T.tr("wt_cfg_intro"); fg: Theme.primary-soft; size: 12px;  }
+        if Wt.cfg: WText { text: T.tr("wt_cfg_intro"); fg: Theme.warn-soft; size: 12px;  }
         for e in Wt.cfg-entries: WText { text: e; fg: Theme.on-var; size: 11px; mono: true;  }
         if !Wt.cfg && Wt.checked: WText { text: Wt.summary; fg: Theme.on-surface; size: 12px;  }
-        if !Wt.cfg: VerticalLayout { spacing: 8px; for l in Wt.lines: WText { text: l.text; fg: l.bad ? Theme.primary-soft : Theme.ok; size: 12px; } }
+        if !Wt.cfg: VerticalLayout { spacing: 8px; for l in Wt.lines: WText { text: l.text; fg: l.bad ? Theme.warn-soft : Theme.ok; size: 12px; } }
         HorizontalLayout {
             spacing: 6px; alignment: end; padding-top: 4px;
             if Wt.cfg: Btn { text: T.tr("wt_cfg_accept"); height: 28px; primary: true; enabled: !Wt.busy; clicked => { Wt.accept(); } }
@@ -650,7 +650,7 @@ export component UsageCard inherits Card {
             Text { horizontal-stretch: 1; text: Usage.empty ? "" : Usage.seen; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; }
             Btn { text: Usage.busy ? T.tr("us_refreshing") : T.tr("us_refresh"); height: 26px; enabled: !Usage.busy; clicked => { Usage.refresh(); } }
         }
-        if Usage.note != "": WText { text: Usage.note; size: 11px; fg: Theme.primary-soft; }
+        if Usage.note != "": WText { text: Usage.note; size: 11px; fg: Theme.warn-soft; }
         if Usage.assume: WText { text: T.tr("us_assume"); size: 11px; fg: Theme.outline; }
     }
 }
@@ -690,9 +690,9 @@ export component ProvForm inherits Rectangle {
                 WText { text: Prov.f-has-key ? T.tr("pv_key_keep") : T.tr("pv_key_none"); fg: Theme.outline; size: 11px; }
                 if Prov.f-has-key: CheckBox { text: T.tr("pv_key_clear"); checked <=> Prov.f-clear; }
                 if Prov.f-auth == 4 && !root.in-account: Field { label: T.tr("pv_login_acct"); ComboBox { model: Acct.names; current-index <=> Prov.f-login-acct; } }
-                if Prov.f-auth == 4: WText { text: T.tr("pv_login_note"); fg: Theme.primary-soft; size: 11px; }
+                if Prov.f-auth == 4: WText { text: T.tr("pv_login_note"); fg: Theme.warn-soft; size: 11px; }
                 if Prov.f-auth == 3: Field { label: T.tr("pv_oauth"); LineEdit { text <=> Prov.f-oauth; input-type: InputType.password; } }
-                if Prov.f-auth == 3: WText { text: Prov.f-has-oauth ? T.tr("pv_oauth_keep") : T.tr("pv_oauth_note"); fg: Theme.primary-soft; size: 11px; }
+                if Prov.f-auth == 3: WText { text: Prov.f-has-oauth ? T.tr("pv_oauth_keep") : T.tr("pv_oauth_note"); fg: Theme.warn-soft; size: 11px; }
                 if Prov.f-auth == 3 && Prov.f-has-oauth: CheckBox { text: T.tr("pv_oauth_clear"); checked <=> Prov.f-clear-oauth; }
                 Field { label: T.tr("pv_model"); LineEdit { text <=> Prov.f-model; } }
                 Field {
@@ -720,7 +720,7 @@ export component ProvidersCard inherits Card {
         padding: 18px; spacing: 8px;
         Text { text: T.tr("pv_title"); color: Theme.outline; font-size: 12px; font-weight: 600; }
         WText { text: T.tr("pv_intro"); fg: Theme.on-var; size: 13px; }
-        if Prov.notice != "": WText { text: Prov.notice; fg: Theme.primary-soft; size: 12px; }
+        if Prov.notice != "": WText { text: Prov.notice; fg: Theme.warn-soft; size: 12px; }
         VerticalLayout {
             for r in Prov.rows: ProvRowView { r: r; }
         }
@@ -745,7 +745,7 @@ export component MemPanel inherits Rectangle {
         VerticalLayout {
             padding-left: max(28px, (root.width - 900px) / 2); padding-right: max(28px, (root.width - 900px) / 2); padding-top: 28px; padding-bottom: 28px; spacing: 14px;
             KnowledgeHead { memo: true; }
-            if Mem.head.notice != "": WText { text: Mem.head.notice; fg: Theme.primary-soft; size: 13px; }
+            if Mem.head.notice != "": WText { text: Mem.head.notice; fg: Theme.warn-soft; size: 13px; }
             if Mem.head.available && Mem.head.card: Card {
                 accent: true;
                 VerticalLayout {
@@ -798,8 +798,8 @@ component SkillRowView inherits VerticalLayout {
             }
             if r.description != "": WText { text: r.description; fg: Theme.on-var; size: 13px; }
             if r.risks != "": Rectangle {
-                background: (r.has-block ? Theme.error : Theme.primary).with-alpha(0.08); border-radius: 6px; border-width: 1px; border-color: (r.has-block ? Theme.error : Theme.primary).with-alpha(0.4);
-                VerticalLayout { padding: 10px; WText { text: r.risks; fg: r.has-block ? Theme.error : Theme.primary-soft; size: 12px; mono: true; } }
+                background: (r.has-block ? Theme.error : Theme.warn).with-alpha(0.08); border-radius: 6px; border-width: 1px; border-color: (r.has-block ? Theme.error : Theme.warn).with-alpha(0.4);
+                VerticalLayout { padding: 10px; WText { text: r.risks; fg: r.has-block ? Theme.error : Theme.warn-soft; size: 12px; mono: true; } }
             }
             if r.kind == "proposal": Text { text: T.tr("sk_full"); color: Theme.outline; font-size: 11px; }
             if r.kind == "proposal": Rectangle {
@@ -819,7 +819,7 @@ component SkillRowView inherits VerticalLayout {
                     Field { label: T.tr("sk_description"); LineEdit { text <=> Sk.edit-desc; } }
                     Field { label: T.tr("sk_body"); TextEdit { height: 220px; text <=> Sk.edit-body; } }
                     if Sk.edit-risks != "": Text { text: T.tr("sk_edited_report"); color: Theme.outline; font-size: 11px; }
-                    if Sk.edit-risks != "": WText { text: Sk.edit-risks; fg: Theme.primary-soft; size: 12px; mono: true; }
+                    if Sk.edit-risks != "": WText { text: Sk.edit-risks; fg: Theme.warn-soft; size: 12px; mono: true; }
                     if Sk.edit-risks != "": CheckBox { text: T.tr("sk_ack"); checked <=> Sk.edit-ack; }
                     HorizontalLayout {
                         spacing: 6px; alignment: end;
@@ -863,7 +863,7 @@ export component SkillsPanel inherits Rectangle {
         VerticalLayout {
             padding-left: max(28px, (root.width - 900px) / 2); padding-right: max(28px, (root.width - 900px) / 2); padding-top: 28px; padding-bottom: 28px; spacing: 14px;
             KnowledgeHead { memo: false; }
-            if Sk.head.notice != "": WText { text: Sk.head.notice; fg: Theme.primary-soft; size: 13px; }
+            if Sk.head.notice != "": WText { text: Sk.head.notice; fg: Theme.warn-soft; size: 13px; }
             if Sk.head.available: CheckBox { text: T.tr("sk_auto"); checked: Sk.head.auto; toggled => { Sk.auto(self.checked); } }
             if Sk.head.available && Know.adding: HorizontalLayout {
                 spacing: 8px;
@@ -893,7 +893,7 @@ export component SettingsPanel inherits Rectangle {
                     padding: 18px; spacing: 10px;
                     Text { text: T.tr("pref_title"); color: Theme.outline; font-size: 12px; font-weight: 600; }
                     HorizontalLayout { alignment: start; Segment { items: ["한국어", "English"]; current: Prefs.lang; chosen(i) => { Prefs.lang-chosen(i); } } }
-                    if Prefs.changed: WText { text: T.tr("pref_restart"); fg: Theme.primary-soft; size: 12px; }
+                    if Prefs.changed: WText { text: T.tr("pref_restart"); fg: Theme.warn-soft; size: 12px; }
                 }
             }
             ProvidersCard { }

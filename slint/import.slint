@@ -31,7 +31,7 @@ export component ImportPanel inherits Rectangle {
             LineEdit { horizontal-stretch: 1; text <=> Imp.filter; placeholder-text: T.tr("imp_filter_ph"); font-size: 14px; edited(text) => { Imp.filter-edited(text); } }
             if Acct.names.length > 1: ComboBox { width: 180px; model: Acct.names; current-index <=> Imp.acct; selected => { Imp.scan(Imp.acct, Acct.names[Imp.acct]); } }
         }
-        if Imp.note != "": WText { text: Imp.note; fg: Theme.primary-soft; size: 12px; }
+        if Imp.note != "": WText { text: Imp.note; fg: Theme.warn-soft; size: 12px; }
         if Imp.busy: Text { text: T.tr("imp_scanning"); color: Theme.outline; font-size: 13px; }
         if !Imp.busy && Imp.rows.length == 0: Text { text: Imp.filter == "" ? T.tr("imp_empty") : T.tr("imp_no_match"); color: Theme.outline; font-size: 13px; }
         ScrollView {

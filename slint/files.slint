@@ -126,7 +126,7 @@ export component FilesPanel inherits Rectangle {
                         }
                     }
                 }
-                if Files.notice != "": WText { text: Files.notice; fg: Theme.primary-soft; size: 11px; }
+                if Files.notice != "": WText { text: Files.notice; fg: Theme.warn-soft; size: 11px; }
                 if Files.rows.length == 0: Text { text: T.tr("fs_empty"); color: Theme.outline; font-size: 12px; }
                 ScrollView {
                     vertical-stretch: 1;
@@ -197,7 +197,7 @@ export component FilesPanel inherits Rectangle {
                         VerticalLayout { alignment: center; Btn { text: T.tr("fs_save"); height: 28px; primary: true; enabled: !Files.readonly && Files.text != Files.orig; clicked => { Files.save(); } } }
                     }
                 }
-                if Files.file != "" && Files.note != "": Rectangle { height: nt.preferred-height + 14px; background: Theme.primary.with-alpha(0.08); nt := VerticalLayout { padding: 7px; padding-left: 14px; padding-right: 14px; WText { text: Files.note; fg: Theme.primary-soft; size: 12px; } } }
+                if Files.file != "" && Files.note != "": Rectangle { height: nt.preferred-height + 14px; background: Theme.warn.with-alpha(0.08); nt := VerticalLayout { padding: 7px; padding-left: 14px; padding-right: 14px; WText { text: Files.note; fg: Theme.warn-soft; size: 12px; } } }
                 if Files.file != "" && !Files.view: Rectangle {
                     vertical-stretch: 1; background: Theme.lowest; clip: true;
                     fl := Flickable {

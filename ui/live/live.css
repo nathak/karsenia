@@ -1,14 +1,14 @@
-/* Tenrec live view. The tokens follow the main app's design system; nothing is loaded from anywhere but this server. */
+/* Karsenia live view. The tokens follow the main app's design system; nothing is loaded from anywhere but this server. */
 :root {
-  --bg: #141311; --low: #1c1b1a; --card: #201f1d; --high: #2b2927; --line: #3a3835; --muted: #8c877f; --text: #e7e2dd; --text2: #c4bfb8;
-  --accent: #d97757; --accent-soft: #ffb59e; --ok: #88d7a1; --err: #f2796f; --info: #a6c9f8; --violet: #857bed; --warn: #f5c36b;
+  --bg: #121614; --low: #171c1a; --card: #1b221e; --high: #242c27; --line: #2c3630; --muted: #85918a; --text: #e3e8e1; --text2: #bcc6be;
+  --accent: #a5b649; --accent-soft: #c4d160; --ok: #8fdcaa; --err: #f2796f; --info: #a6c9f8; --violet: #857bed; --warn: #dc825a;
   --font: system-ui, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
   --mono: ui-monospace, "JetBrains Mono", Consolas, Menlo, "D2Coding", monospace;
   color-scheme: dark;
 }
 :root[data-theme="light"] {
-  --bg: #fbf9f6; --low: #f5f2ee; --card: #efebe6; --high: #e9e5df; --line: #dedbd3; --muted: #6f6a60; --text: #1f1d1a; --text2: #4a463f;
-  --accent: #c15f3c; --accent-soft: #a04a2b; --ok: #2e7d4f; --err: #b3261e; --info: #2b5c8f; --violet: #534ab3; --warn: #8a5a00;
+  --bg: #f6f7f2; --low: #eef1ea; --card: #e8ece3; --high: #dfe4d9; --line: #c9d0c2; --muted: #6c766d; --text: #1a1f1b; --text2: #48514a;
+  --accent: #5f7a1f; --accent-soft: #4e6619; --ok: #267a4b; --err: #b3261e; --info: #2b5c8f; --violet: #534ab3; --warn: #b4532a;
   color-scheme: light;
 }
 * { box-sizing: border-box; }

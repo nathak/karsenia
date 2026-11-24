@@ -74,7 +74,7 @@ component TaskCard inherits Rectangle {
         WText { text: t.summary + (t.next != "" ? "   ·   " + T.tr("sc_next") + ": " + t.next : ""); fg: Theme.on-var; size: 13px; mono: true; }
         if t.paused-note != "": Rectangle {
             background: Theme.error.with-alpha(0.1); border-radius: 8px; border-width: 1px; border-color: Theme.error.with-alpha(0.35); height: pn.preferred-height;
-            pn := HorizontalLayout { padding: 10px; spacing: 8px; Text { text: "⚠"; color: Theme.error; font-size: 14px; vertical-alignment: top; } WText { horizontal-stretch: 1; text: t.paused-note; fg: Theme.primary-soft; size: 12px; } }
+            pn := HorizontalLayout { padding: 10px; spacing: 8px; Text { text: "⚠"; color: Theme.error; font-size: 14px; vertical-alignment: top; } WText { horizontal-stretch: 1; text: t.paused-note; fg: Theme.warn-soft; size: 12px; } }
         }
         Rectangle { height: 1px; background: Theme.hairline; }
         HorizontalLayout {
@@ -166,7 +166,7 @@ component SchedLeft inherits VerticalLayout {
         Text { text: T.tr("sc_registered"); color: Theme.on-surface; font-size: 18px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
         if Sched.head.available: Text { text: T.tr("sc_total_pre") + Sched.head.count + T.tr("sc_total_post"); color: Theme.outline; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; }
     }
-    if Sched.head.notice != "": WText { text: Sched.head.notice; fg: Theme.primary-soft; size: 13px; }
+    if Sched.head.notice != "": WText { text: Sched.head.notice; fg: Theme.warn-soft; size: 13px; }
     if Sched.head.available: HorizontalLayout {
         spacing: 10px;
         Toggle { checked: Sched.head.on; toggled(on) => { Sched.switch(on); } }
@@ -219,7 +219,7 @@ component SchedRight inherits VerticalLayout {
                 Text { text: T.tr("pref_title"); color: Theme.outline; font-size: 13px; vertical-alignment: center; width: 90px; }
                 SegTabs { horizontal-stretch: 1; items: ["한국어", "English"]; current: Prefs.lang; chosen(i) => { Prefs.lang-chosen(i); } }
             }
-            if Prefs.changed: WText { text: T.tr("pref_restart"); fg: Theme.primary-soft; size: 12px; }
+            if Prefs.changed: WText { text: T.tr("pref_restart"); fg: Theme.warn-soft; size: 12px; }
             HorizontalLayout {
                 spacing: 12px;
                 Text { text: T.tr("st_theme"); color: Theme.outline; font-size: 13px; vertical-alignment: center; width: 90px; }
@@ -245,7 +245,7 @@ component SchedRight inherits VerticalLayout {
                 LineEdit { horizontal-stretch: 1; text <=> Usage.budget-month; input-type: InputType.decimal; placeholder-text: "—"; }
                 Btn { text: T.tr("cost_budget_save"); height: 34px; primary: true; clicked => { Usage.budget-save(Usage.budget-day, Usage.budget-month); } }
             }
-            if Usage.budget-note != "": WText { text: Usage.budget-note; fg: Theme.primary-soft; size: 11px; }
+            if Usage.budget-note != "": WText { text: Usage.budget-note; fg: Theme.warn-soft; size: 11px; }
             Rectangle { height: 1px; background: Theme.hairline; }
             ProvidersCard { }
             Rectangle { height: 1px; background: Theme.hairline; }

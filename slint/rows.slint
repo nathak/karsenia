@@ -175,7 +175,7 @@ export component RowView inherits Rectangle {
             padding-bottom: 12px; padding-right: 24px;
             Rectangle {
                 background: Theme.low; border-radius: 8px; border-width: 1px;
-                border-color: r.state == "err" ? Theme.error.with-alpha(0.5) : r.state == "guard" ? Theme.primary : Theme.hairline;
+                border-color: r.state == "err" ? Theme.error.with-alpha(0.5) : r.state == "guard" ? Theme.warn : Theme.hairline;
                 clip: true;
                 VerticalLayout {
                     Rectangle {
@@ -192,8 +192,8 @@ export component RowView inherits Rectangle {
                                 show-icon: r.state == "done" || r.state == "err" || r.state == "guard";
                                 icon: r.state == "done" ? @image-url("icons/check.svg") : r.state == "err" ? @image-url("icons/x.svg") : @image-url("icons/shield.svg");
                                 pulse: r.state == "running";
-                                fg: r.state == "done" ? Theme.ok : r.state == "err" ? Theme.error : r.state == "guard" ? Theme.primary-soft : Theme.outline;
-                                fill: r.state == "done" ? Theme.ok.with-alpha(0.14) : r.state == "err" ? Theme.error.with-alpha(0.14) : r.state == "guard" ? Theme.primary.with-alpha(0.14) : Theme.container;
+                                fg: r.state == "done" ? Theme.ok : r.state == "err" ? Theme.error : r.state == "guard" ? Theme.warn-soft : Theme.outline;
+                                fill: r.state == "done" ? Theme.ok.with-alpha(0.14) : r.state == "err" ? Theme.error.with-alpha(0.14) : r.state == "guard" ? Theme.warn.with-alpha(0.14) : Theme.container;
                             }
                         }
                         steps-area := TouchArea { mouse-cursor: pointer; clicked => { root.toggle(r.key); } }
@@ -236,8 +236,8 @@ export component RowView inherits Rectangle {
                                 show-icon: r.state == "done" || r.state == "err" || r.state == "guard";
                                 icon: r.state == "done" ? @image-url("icons/check.svg") : r.state == "err" ? @image-url("icons/x.svg") : @image-url("icons/shield.svg");
                                 pulse: r.state == "running";
-                                fg: r.state == "done" ? Theme.ok : r.state == "err" ? Theme.error : r.state == "guard" ? Theme.primary-soft : Theme.outline;
-                                fill: r.state == "done" ? Theme.ok.with-alpha(0.14) : r.state == "err" ? Theme.error.with-alpha(0.14) : r.state == "guard" ? Theme.primary.with-alpha(0.14) : Theme.container;
+                                fg: r.state == "done" ? Theme.ok : r.state == "err" ? Theme.error : r.state == "guard" ? Theme.warn-soft : Theme.outline;
+                                fill: r.state == "done" ? Theme.ok.with-alpha(0.14) : r.state == "err" ? Theme.error.with-alpha(0.14) : r.state == "guard" ? Theme.warn.with-alpha(0.14) : Theme.container;
                             }
                             Image { source: r.open ? @image-url("icons/chevron-down.svg") : @image-url("icons/chevron-right.svg"); width: 13px; height: 13px; y: (parent.height - 13px) / 2; colorize: Theme.outline; }
                         }
@@ -276,7 +276,7 @@ export component RowView inherits Rectangle {
         if r.kind == "note-sys" || r.kind == "note-err" || r.kind == "note-warn": VerticalLayout {
             padding-bottom: 12px;
             card := Rectangle {
-                property <color> accent: r.kind == "note-err" ? Theme.error : r.kind == "note-warn" ? Theme.primary : Theme.info;
+                property <color> accent: r.kind == "note-err" ? Theme.error : r.kind == "note-warn" ? Theme.warn : Theme.info;
                 background: r.kind == "note-sys" ? Theme.container : accent.with-alpha(0.1); border-radius: 8px;
                 border-width: r.kind == "note-sys" ? 0px : 1px; border-color: accent.with-alpha(0.35);
                 height: nr.preferred-height;

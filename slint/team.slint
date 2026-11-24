@@ -54,7 +54,7 @@ export component TeamPage inherits Rectangle {
                             alignment: end;
                             Btn { text: T.tr("nt_apply"); height: 32px; primary: true; enabled: Team.can-send; clicked => { Team.nt-save(Team.nt-lead-effort, Team.nt-exp-model, Team.nt-exp-effort, Team.nt-adv-model, Team.nt-adv-effort); } }
                         }
-                        if !Team.can-send: WText { text: T.tr("team_wait"); size: 11px; fg: Theme.primary-soft; }
+                        if !Team.can-send: WText { text: T.tr("team_wait"); size: 11px; fg: Theme.warn-soft; }
                     }
                 }
             }
@@ -149,7 +149,7 @@ export component TeamPage inherits Rectangle {
                             Text { horizontal-stretch: 1; text: it.text + (it.tag != "" ? "  [" + it.tag + "]" : ""); color: it.on ? Theme.ok : Theme.on-surface; font-size: 12px; wrap: word-wrap; vertical-alignment: center; }
                             Btn { text: "×"; height: 24px; danger: true; enabled: !Team.wb-locked; clicked => { Team.wb-remove("d", it.id); } }
                         }
-                        if Team.wb-lint != "": Text { text: Team.wb-lint; color: Theme.primary-soft; font-size: 11px; wrap: word-wrap; }
+                        if Team.wb-lint != "": Text { text: Team.wb-lint; color: Theme.warn-soft; font-size: 11px; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 8px;
                             Btn { text: (Team.wb-stop-gate ? "☑ " : "☐ ") + T.tr("wb_stop_gate"); height: 28px; clicked => { Team.wb-stop-gate-set(!Team.wb-stop-gate); } }
@@ -193,7 +193,7 @@ export component TeamPage inherits Rectangle {
                         Btn { text: T.tr("swbp_refresh"); height: 26px; clicked => { Team.gf-reload(); } }
                     }
                     WText { text: T.tr("gf_note"); size: 12px; fg: Theme.on-var; }
-                    if Team.gf-note != "": WText { text: Team.gf-note; size: 12px; fg: Theme.primary-soft; }
+                    if Team.gf-note != "": WText { text: Team.gf-note; size: 12px; fg: Theme.warn-soft; }
                     for r[i] in Team.gf-rules: Rectangle {
                         background: Theme.container; border-radius: 8px; height: rl.preferred-height + 16px;
                         rl := HorizontalLayout {
