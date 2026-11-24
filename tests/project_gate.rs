@@ -108,7 +108,7 @@ async fn starting_without_the_project_settings_passes_user_only_sources() {
 
 #[tokio::test]
 async fn nothing_risky_never_asks_and_an_old_chat_meta_without_the_field_is_read() {
-    let r = rig(Some(r#"{"permissions":{"allow":["Bash(npm test)"]},"env":{"FOO":"1"}}"#)).await;
+    let r = rig(Some(r#"{"permissions":{"allow":["Bash(npm test)"]},"env":{"DISABLE_TELEMETRY":"1"}}"#)).await;
     let chat = r.server.registry.create_in(r.project.to_str().unwrap(), None, None, false, None).unwrap();
     let (_, mut rx) = chat.subscribe(0).await.unwrap();
     chat.send("hi".into(), vec![]).await.unwrap();
