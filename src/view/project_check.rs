@@ -43,7 +43,7 @@ mod tests {
 
     #[test]
     fn every_rule_and_severity_has_words_in_both_languages() {
-        for key in ["hooks", "env_redirect", "env_unknown", "env", "helper", "allow_broad", "allow_wide", "mode", "dirs", "mcp_all", "mcp_enabled", "mcp_command", "mcp_url", "status_line", "malformed", "too_big", "link"] {
+        for key in ["hooks", "env_redirect", "env_unknown", "env", "helper", "allow_broad", "allow_wide", "mode", "dirs", "mcp_all", "mcp_enabled", "mcp_command", "mcp_url", "plugins", "marketplaces", "status_line", "malformed", "too_big", "link"] {
             for lang in [Lang::Ko, Lang::En] {
                 let k = format!("proj_rule_{key}");
                 assert_ne!(tr(lang, &k), k, "{k}");

@@ -143,3 +143,25 @@ async fn a_linked_settings_file_is_never_trusted_only_left_out() {
     idle(&mut rx).await;
     assert!(r.starts()[0].contains("--setting-sources user"));
 }
+
+#[tokio::test]
+async fn leaving_the_settings_out_is_refused_while_the_process_runs_and_a_named_chat_waits_for_the_decision() {
+    let r = rig(Some(r#"{"permissions":{"allow":["Edit"]}}"#)).await;
+    // A named chat is warmed at once: the gate holds that back too, and the first send says why.
+    let named = r.server.registry.create_in(r.project.to_str().unwrap(), None, None, false, None).unwrap();
+    named.rename("n1".into()).await.unwrap();
+    assert!(named.warm().await.is_err());
+    assert!(r.starts().is_empty());
+    let (_, mut rx) = named.subscribe(0).await.unwrap();
+    named.project_decide(String::new(), true).await.unwrap();
+    named.send("hi".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+    assert_eq!(r.starts().len(), 1);
+    // The process runs now with whatever it read: a later "without" cannot change that.
+    let other = rig(Some("{}")).await;
+    let chat = other.server.registry.create_in(other.project.to_str().unwrap(), None, None, false, None).unwrap();
+    let (_, mut rx) = chat.subscribe(0).await.unwrap();
+    chat.send("hi".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+    assert!(chat.project_decide(String::new(), true).await.is_err());
+}

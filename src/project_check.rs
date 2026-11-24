@@ -249,6 +249,19 @@ fn settings_rules(file: &'static str, v: &Value, out: &mut Vec<Finding>, materia
         add(Severity::Warn, "mcp_enabled", list.join(", "));
         material.insert(format!("{file}#mcp_enabled"), v["enabledMcpjsonServers"].clone());
     }
+    // A plug-in the project switches on brings its own hooks, servers and commands; a marketplace it names is where plug-ins come from.
+    if let Some(plugins) = v["enabledPlugins"].as_object() {
+        let on: Vec<String> = plugins.iter().filter(|(_, v)| **v == true).map(|(k, _)| k.chars().filter(|c| !c.is_control()).take(60).collect()).collect();
+        if !on.is_empty() {
+            add(Severity::Danger, "plugins", on.join(", "));
+            material.insert(format!("{file}#plugins"), v["enabledPlugins"].clone());
+        }
+    }
+    if let Some(markets) = v["extraKnownMarketplaces"].as_object().filter(|m| !m.is_empty()) {
+        let names: Vec<String> = markets.keys().map(|k| k.chars().filter(|c| !c.is_control()).take(60).collect()).collect();
+        add(Severity::Danger, "marketplaces", names.join(", "));
+        material.insert(format!("{file}#marketplaces"), v["extraKnownMarketplaces"].clone());
+    }
     if let Some(cmd) = v["statusLine"]["command"].as_str() {
         add(Severity::Info, "status_line", first_word(cmd));
     }
@@ -339,7 +352,7 @@ mod tests {
 
     #[test]
     fn code_that_runs_a_redirect_or_a_wide_grant_is_danger() {
-        let cases: [(&str, &str); 15] = [
+        let cases: [(&str, &str); 17] = [
             (r#"{"env":{"BASH_ENV":"./evil.sh"}}"#, "env_redirect"),
             (r#"{"env":{"CLAUDE_CODE_GIT_BASH_PATH":"./evil.exe"}}"#, "env_redirect"),
             (r#"{"env":{"CLAUDE_CODE_SHELL_PREFIX":"./wrap.sh"}}"#, "env_redirect"),
@@ -355,12 +368,20 @@ mod tests {
             (r#"{"permissions":{"allow":["*"]}}"#, "allow_broad"),
             (r#"{"permissions":{"defaultMode":"bypassPermissions"}}"#, "mode"),
             (r#"{"enableAllProjectMcpServers":true}"#, "mcp_all"),
+            (r#"{"enabledPlugins":{"x@m":true,"y@m":false}}"#, "plugins"),
+            (r#"{"extraKnownMarketplaces":{"m":{"source":{"source":"github","repo":"a/b"}}}}"#, "marketplaces"),
         ];
         for (body, key) in cases {
             let s = one(body);
             assert!(s.findings.iter().any(|f| f.key == key && f.severity == Severity::Danger), "{body}: {:?}", s.findings);
             assert!(s.needs_decision(), "{body}");
         }
+    }
+
+    #[test]
+    fn a_plugin_switched_off_is_nothing() {
+        let s = one(r#"{"enabledPlugins":{"x@m":false}}"#);
+        assert!(!s.needs_decision(), "{:?}", s.findings);
     }
 
     #[test]

@@ -1729,6 +1729,10 @@ impl Actor {
             return Err("a provider chat does not read the project's settings".into());
         }
         if without {
+            // A running process has read the project's settings already: leaving them out is for a process that has not started.
+            if self.process.is_some() {
+                return Err("this chat's claude is already running with the project's settings; start a new chat to leave them out".into());
+            }
             self.meta.project_cfg = Some(ProjectChoice::Without);
             self.save_meta();
             self.emit("project_cfg", json!({"choice": "without"}));
