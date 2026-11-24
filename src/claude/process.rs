@@ -55,6 +55,9 @@ pub struct SpawnOpts {
     pub agents: Option<String>,
     /// The lead's effort (`--effort`); None leaves the CLI's own.
     pub effort: Option<String>,
+    /// Only the person's own (user) settings are read, not the project's (a decision the person made about this project's configuration,
+    /// see `project_check`): `--setting-sources user`, given once even with a provider's pinned address.
+    pub user_settings_only: bool,
 }
 
 #[derive(Debug)]
@@ -121,10 +124,12 @@ pub fn args(opts: &SpawnOpts) -> Vec<String> {
     }
     // One `--settings` value carries everything this app sets by value: the provider's address and the plug-ins it switches off.
     let mut settings = serde_json::Map::new();
-    if let Some(url) = &opts.pinned_url {
+    if opts.pinned_url.is_some() || opts.user_settings_only {
         // The project's own settings are not read: its `env` could point the address (and with it the token) somewhere else, and its
         // hooks and key helpers would run beside a third party's key. The address is also given by value, which wins over the rest.
         args.extend(["--setting-sources".to_owned(), "user".to_owned()]);
+    }
+    if let Some(url) = &opts.pinned_url {
         settings.insert("env".into(), serde_json::json!({"ANTHROPIC_BASE_URL": url}));
     }
     if opts.plugins_off {
@@ -350,12 +355,18 @@ mod tests {
 
     #[test]
     fn one_settings_value_carries_the_provider_address_and_the_plugins_that_are_off() {
-        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None };
+        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None, user_settings_only: false };
         assert!(args(&base).iter().all(|a| a != "--settings"));
         let off = args(&SpawnOpts { plugins_off: true, ..base.clone() });
         let value: serde_json::Value = serde_json::from_str(&off[off.iter().position(|a| a == "--settings").unwrap() + 1]).unwrap();
         assert_eq!(value["enabledPlugins"][SWB_PLUGIN], false);
         assert!(off.iter().all(|a| a != "--setting-sources"), "the project's settings stay when no provider is pinned");
+        // A decision to leave the project's configuration out gives the same argument, once, with or without a provider's address.
+        let only = args(&SpawnOpts { user_settings_only: true, ..base.clone() });
+        assert_eq!(only.iter().filter(|a| *a == "--setting-sources").count(), 1);
+        assert!(only.windows(2).any(|w| w == ["--setting-sources", "user"]));
+        let both_on = args(&SpawnOpts { user_settings_only: true, pinned_url: Some("https://gw.example.com/x".into()), ..base.clone() });
+        assert_eq!(both_on.iter().filter(|a| *a == "--setting-sources").count(), 1);
         let both = args(&SpawnOpts { plugins_off: true, pinned_url: Some("https://gw.example.com/x".into()), ..base });
         assert_eq!(both.iter().filter(|a| *a == "--settings").count(), 1, "one --settings only");
         let value: serde_json::Value = serde_json::from_str(&both[both.iter().position(|a| a == "--settings").unwrap() + 1]).unwrap();
@@ -365,7 +376,7 @@ mod tests {
 
     #[test]
     fn the_arguments_include_the_permission_prompt_tool_and_resume() {
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()), env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: Some("haiku".into()), resume: Some("abc".into()), mcp_config: Some("/d/run/x.mcp.json".into()), system_file: Some("/d/run/x.mem.txt".into()), plugin_dir: Some("/d/run/x.skills".into()), env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None, user_settings_only: false };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
         assert!(a.windows(2).any(|w| w == ["--model", "haiku"]));
@@ -380,7 +391,7 @@ mod tests {
     #[test]
     fn a_provider_chat_pins_its_address_and_skips_project_settings_and_no_secret_is_in_the_arguments() {
         let env = EnvPlan { set: vec![("ANTHROPIC_AUTH_TOKEN".into(), "tok-secret-xyz".into())], remove: vec![] };
-        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env, pinned_url: Some("https://gw.example.com/x".into()), container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None };
+        let opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env, pinned_url: Some("https://gw.example.com/x".into()), container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None, user_settings_only: false };
         let a = args(&opts);
         assert!(a.windows(2).any(|w| w == ["--setting-sources", "user"]));
         let settings = a.windows(2).find(|w| w[0] == "--settings").map(|w| w[1].clone()).unwrap();
@@ -401,7 +412,7 @@ mod tests {
 
     #[test]
     fn a_name_a_person_gave_is_passed_as_the_clis_own_session_name() {
-        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None };
+        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None, user_settings_only: false };
         assert!(!args(&base).iter().any(|a| a == "--name"));
         assert!(args(&SpawnOpts { name: Some(String::new()), ..base.clone() }).iter().all(|a| a != "--name"), "a blank name is none");
         assert!(args(&SpawnOpts { name: Some("내 작업".into()), ..base }).windows(2).any(|w| w == ["--name", "내 작업"]));
@@ -409,7 +420,7 @@ mod tests {
 
     #[test]
     fn a_chosen_permission_mode_is_passed_and_the_default_adds_nothing() {
-        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None };
+        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: PermMode::Default, name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None, user_settings_only: false };
         assert!(!args(&base).iter().any(|x| x == "--permission-mode" || x == "--dangerously-skip-permissions"), "a chat that never chose has the arguments it always had");
         let accept = args(&SpawnOpts { permission_mode: PermMode::AcceptEdits, ..base.clone() });
         assert!(accept.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
@@ -420,7 +431,7 @@ mod tests {
 
     #[test]
     fn the_stop_hook_is_set_beside_the_guard_hook_only_when_there_is_one() {
-        let mut opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: Some("guard-cmd".into()), stop_hook: Some("stop-cmd || exit 0".into()), debug_file: None, agents: None, effort: None };
+        let mut opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: Some("guard-cmd".into()), stop_hook: Some("stop-cmd || exit 0".into()), debug_file: None, agents: None, effort: None, user_settings_only: false };
         let settings = |opts: &SpawnOpts| -> serde_json::Value {
             let args = args(opts);
             let at = args.iter().position(|a| a == "--settings").expect("settings given");
@@ -439,7 +450,7 @@ mod tests {
 
     #[test]
     fn the_team_arguments_are_there_only_when_set() {
-        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None };
+        let base = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None, user_settings_only: false };
         let plain = args(&base);
         assert!(!plain.iter().any(|a| a == "--agents" || a == "--effort"), "{plain:?}");
         let team = args(&SpawnOpts { agents: Some("{\"explorer\":{}}".into()), effort: Some("high".into()), ..base });
@@ -451,7 +462,7 @@ mod tests {
 
     #[test]
     fn the_cli_debug_log_is_asked_for_only_when_a_file_is_given() {
-        let mut opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None };
+        let mut opts = SpawnOpts { bin: "claude".into(), cwd: ".".into(), model: None, resume: None, mcp_config: None, system_file: None, plugin_dir: None, env: EnvPlan::default(), pinned_url: None, container: None, permission_mode: Default::default(), name: None, plugins_off: false, guard_hook: None, stop_hook: None, debug_file: None, agents: None, effort: None, user_settings_only: false };
         assert!(!args(&opts).iter().any(|a| a.contains("debug")), "an ordinary chat has no debug flag");
         opts.debug_file = Some(PathBuf::from("/d/run/x.debug.log"));
         let list = args(&opts);

@@ -111,6 +111,19 @@ pub struct Meta {
     /// work in a terminal: the "/" menu offers them. Empty until the first message of the chat has started a process.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slash_commands: Vec<String>,
+    /// What the person decided about the risky parts of this project's own Claude Code configuration (see `project_check`); None: nothing
+    /// was asked yet (or nothing risky was there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_cfg: Option<ProjectChoice>,
+}
+
+/// The decision about a project's own configuration, kept per chat (as the git settings of a worktree are).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProjectChoice {
+    /// The configuration was seen as it is (`hash` of its risky parts) and accepted; a change of those parts asks again.
+    Trusted { hash: String },
+    /// The chat's `claude` reads only the person's own settings, never the project's.
+    Without,
 }
 
 impl Meta {
@@ -158,6 +171,8 @@ enum Cmd {
     /// Changes the permission mode of the chat (its next process starts with it; a running idle one is told over the control channel).
     /// `SetModel` by ending the process (the way that always works).
     SetModelSlow { model: Option<String>, reply: oneshot::Sender<Result<(), String>> },
+    /// The person's decision about the project's configuration the last `project_check` event showed (`hash`), or to leave it out.
+    ProjectDecide { hash: String, without: bool, reply: oneshot::Sender<Result<(), String>> },
     SetPermMode { mode: crate::claude::perm::PermMode, reply: oneshot::Sender<Result<(), String>> },
     /// Stops one background job of the chat's process (ids come from `background_tasks_changed`).
     StopTask { task_id: String, reply: oneshot::Sender<Result<(), String>> },
@@ -266,6 +281,11 @@ impl SessionHandle {
     /// (`--resume`), and the transcript says so; during a turn the change applies from the message after it.
     pub async fn team_changed(&self) -> Result<(), String> {
         ask(&self.tx, |reply| Cmd::TeamChanged { reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
+    /// Answers a `project_check` event: trust the configuration as it was shown (refused when it changed since), or start without it.
+    pub async fn project_decide(&self, hash: String, without: bool) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::ProjectDecide { hash, without, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
     }
 
     /// Changes the permission mode of the chat; between turns only.
@@ -377,7 +397,7 @@ fn now_ms() -> u64 {
 }
 
 pub fn new_meta(cwd: PathBuf, model: Option<String>, provider: Option<ProviderRef>, container: bool, account: Option<AccountRef>) -> Meta {
-    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider, container, worktree: None, account, imported_from: None, permission_mode: Default::default(), named: false, handed: None, slash_commands: Vec::new() }
+    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider, container, worktree: None, account, imported_from: None, permission_mode: Default::default(), named: false, handed: None, slash_commands: Vec::new(), project_cfg: None }
 }
 
 pub fn log_path(dir: &std::path::Path, sid: &str) -> PathBuf {
@@ -768,6 +788,9 @@ impl Actor {
                 return self.command(Cmd::SetModelSlow { model, reply });
             }
             Cmd::SetPermMode { mode, reply } => self.set_permission_mode(mode, reply),
+            Cmd::ProjectDecide { hash, without, reply } => {
+                let _ = reply.send(self.project_decide(&hash, without));
+            }
             Cmd::StopTask { task_id, reply } => {
                 if let Err(Ctl::StopTask { reply }) = self.control(|id| protocol::stop_task(id, &task_id), Ctl::StopTask { reply }) {
                     let _ = reply.send(Err("no process runs for this chat".into()));
@@ -990,6 +1013,9 @@ impl Actor {
                     return Err(message);
                 }
             };
+            if provider.is_none() {
+                self.project_gate()?;
+            }
             // A provider chat gets nothing of the account's side of the app: no notes, no skills, no history search. What the
             // account's chats know must not reach a third party, and what the third party writes must not reach them.
             let mut container = None;
@@ -1094,7 +1120,7 @@ impl Actor {
             let debug_file = self.debug_file();
             let team = self.team_now();
             let (agents, effort) = (team.as_ref().map(crate::workbench::team::agents_json), team.as_ref().and_then(|t| t.lead_effort).map(|e| e.as_str().to_owned()));
-            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.cli_name(), plugins_off: self.plugins_off(), guard_hook, stop_hook, debug_file, agents, effort };
+            let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.cli_name(), plugins_off: self.plugins_off(), guard_hook, stop_hook, debug_file, agents, effort, user_settings_only: matches!(self.meta.project_cfg, Some(ProjectChoice::Without)) };
             match ClaudeProcess::spawn(&opts) {
                 Ok((process, rx)) => {
                     self.process = Some(process);
@@ -1673,6 +1699,49 @@ impl Actor {
                 }
             }
         }
+    }
+
+    /// A normal chat does not start its `claude` in a project whose own configuration can run code, redirect the program or widen what
+    /// it may do until the person has decided (provider chats never read it). The findings go out as a transient event the window draws.
+    fn project_gate(&mut self) -> Result<(), String> {
+        if matches!(self.meta.project_cfg, Some(ProjectChoice::Without)) {
+            return Ok(());
+        }
+        let scan = crate::project_check::scan(&self.meta.cwd);
+        if !scan.needs_decision() {
+            return Ok(());
+        }
+        if matches!(&self.meta.project_cfg, Some(ProjectChoice::Trusted { hash }) if *hash == scan.hash) {
+            return Ok(());
+        }
+        self.emit_project_check(&scan);
+        Err(format!("this project's Claude Code settings need a decision before claude starts (decide in the desktop app): {}", scan.summary()))
+    }
+
+    fn emit_project_check(&self, scan: &crate::project_check::Scan) {
+        let findings: Vec<Value> = scan.findings.iter().map(|f| json!({"severity": f.severity.name(), "file": f.file, "key": f.key, "text": f.text})).collect();
+        self.emit_transient("project_check", json!({"hash": scan.hash, "findings": findings}));
+    }
+
+    fn project_decide(&mut self, hash: &str, without: bool) -> Result<(), String> {
+        if self.meta.provider.is_some() {
+            return Err("a provider chat does not read the project's settings".into());
+        }
+        if without {
+            self.meta.project_cfg = Some(ProjectChoice::Without);
+            self.save_meta();
+            self.emit("project_cfg", json!({"choice": "without"}));
+            return Ok(());
+        }
+        let scan = crate::project_check::scan(&self.meta.cwd);
+        if scan.needs_decision() && scan.hash != hash {
+            self.emit_project_check(&scan);
+            return Err("the settings changed again; look at them again".into());
+        }
+        self.meta.project_cfg = Some(ProjectChoice::Trusted { hash: scan.hash });
+        self.save_meta();
+        self.emit("project_cfg", json!({"choice": "trusted"}));
+        Ok(())
     }
 
     fn set_permission_mode(&mut self, mode: crate::claude::perm::PermMode, reply: oneshot::Sender<Result<(), String>>) {

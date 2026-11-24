@@ -329,7 +329,7 @@ fn risky_key(key: &str) -> bool {
         || ["core.attributesfile", "core.fsmonitor", "core.hookspath", "core.sshcommand", "core.pager", "core.editor", "core.askpass", "core.worktree", "core.gitproxy"].contains(&k.as_str())
 }
 
-fn fnv(bytes: &[u8]) -> String {
+pub(crate) fn fnv(bytes: &[u8]) -> String {
     format!("{:016x}", bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)))
 }
 
