@@ -13,6 +13,7 @@ pub mod import;
 pub mod notify;
 pub mod palette;
 pub mod panels;
+pub mod project_check;
 pub mod sched;
 pub mod slash;
 pub mod swb;
