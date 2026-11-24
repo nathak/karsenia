@@ -145,3 +145,12 @@ async fn a_task_is_stopped_with_its_id_and_the_commands_of_init_are_kept_without
     assert!(line.contains("\"task_id\":\"task-7\""), "{line}");
     assert_eq!(r.meta().await.slash_commands, ["compact", "my-skill", "plug:go"]);
 }
+
+#[tokio::test]
+async fn a_request_that_the_process_never_answers_because_it_ended_keeps_the_asked_model_and_the_exit_state() {
+    let r = rig(&[r#"{"$wait":"control_request"}"#, r#"{"$exit":3}"#]).await;
+    r.chat.set_model(Some("opus".into())).await.unwrap();
+    assert_eq!(r.meta().await.model.as_deref(), Some("opus"));
+    let info = r.server.registry.list().await.into_iter().find(|i| i.meta.sid == r.chat.sid).unwrap();
+    assert!(matches!(info.state, tenrec::session::State::Exited { code: Some(3) }), "{:?}", info.state);
+}

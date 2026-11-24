@@ -1032,6 +1032,8 @@ fn open_chat(app: &Arc<App>, sid: String) {
                 }
             }
             ui.set_draft(d.remove(&sid).unwrap_or_default().into());
+            // A restored draft is not being typed: the "/" menu stays shut until the person types.
+            ui.global::<Slash>().set_open(false);
         });
     }
     SHOWN.with(|s| s.borrow_mut().clear());

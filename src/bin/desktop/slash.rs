@@ -36,6 +36,10 @@ fn refresh(ui: &AppWindow, app: &App, draft: &str) {
 fn pick(ui: &AppWindow, app: &Arc<App>, index: i32) {
     let Some(entry) = SHOWN.with(|s| usize::try_from(index).ok().and_then(|i| s.borrow().get(i).cloned())) else { return };
     ui.global::<Slash>().set_open(false);
+    if ui.get_state() == "running" {
+        crate::toast(ui, tr(app.lang, "slash_busy"));
+        return;
+    }
     let text = format!("/{}", entry.name);
     if entry.arg {
         ui.set_draft(format!("{text} ").into());

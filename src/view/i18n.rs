@@ -537,7 +537,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("us_m", "{m}분", "{m}m"),
     ("us_seen", "{t} 기준", "as of {t}"),
     ("us_none", "아직 정보 없음", "No data yet"),
-    ("us_none_hint", "이 계정으로 대화를 한 번 실행하면 Claude가 알려 준 한도가 표시됩니다. Karsenia 밖에서 쓴 양은 다음 실행 때 반영됩니다.", "Run one chat with this account and the limits Claude reports are shown here. Use outside Tenrec shows after the next run."),
+    ("us_none_hint", "이 계정으로 대화를 한 번 실행하면 Claude가 알려 준 한도가 표시됩니다. Karsenia 밖에서 쓴 양은 다음 실행 때 반영됩니다.", "Run one chat with this account and the limits Claude reports are shown here. Use outside Karsenia shows after the next run."),
     ("us_assume", "모델별 주간 한도의 이름은 추정입니다.", "The name of the per-model weekly limit is a guess."),
     ("us_chip_none", "한도 —", "Limit —"),
     ("tab_manage", "계정 관리", "Accounts"),

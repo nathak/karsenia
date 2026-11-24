@@ -640,7 +640,7 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             if Slash.rows.length == 0: Rectangle { height: 40px; Text { x: 14px; text: T.tr("pal_none"); color: Theme.outline; font-size: 13px; vertical-alignment: center; } }
                             slist := ListView {
-                                height: menu.shown * 36px + 12px;
+                                height: menu.shown == 0 ? 0px : menu.shown * 36px + 12px;
                                 for r[i] in Slash.rows: Rectangle {
                                     height: 36px;
                                     Rectangle {
@@ -751,7 +751,7 @@ export component AppWindow inherits Window {
                                         }
                                     }
                                     if Files.term-enabled && root.has-chat: Btn { y: 7px; text: "!  " + T.tr("shell_chip"); primary: root.shell-mode; clicked => { root.shell-mode = !root.shell-mode; } }
-                                    if root.has-chat: Btn { y: 7px; text: "/  " + T.tr("slash_btn"); enabled: root.state != "running" && !root.shell-mode; clicked => { root.draft = "/"; composer.focus(); } }
+                                    if root.has-chat: Btn { y: 7px; text: "/  " + T.tr("slash_btn"); enabled: root.state != "running" && !root.shell-mode; clicked => { root.draft = "/"; Slash.draft-changed("/"); composer.focus(); } }
                                     Btn { y: 7px; text: T.tr("att_add"); show-icon: true; icon: @image-url("icons/image.svg"); enabled: root.has-chat; clicked => { Att.pick(); } }
                                     Rectangle { horizontal-stretch: 1; }
                                     Text { text: T.hint; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }

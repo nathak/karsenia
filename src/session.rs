@@ -800,6 +800,7 @@ impl Actor {
                     // A running-but-idle `claude` is ended so the next message starts it with `--resume` and the new `--name`.
                     if self.state != State::Running && self.pending.is_empty() && self.process.is_some() {
                         self.forget_background();
+                        self.ctl_drop();
                         if let Some(process) = self.process.take() {
                             process.stop();
                         }
@@ -828,6 +829,7 @@ impl Actor {
                     let _ = reply.send(Err("a turn is running or a permission waits in that chat".to_owned()));
                 } else {
                     self.forget_background();
+                    self.ctl_drop();
                     if let Some(process) = self.process.take() {
                         process.stop();
                         if let Some(gate) = &self.mcp {
@@ -1151,6 +1153,7 @@ impl Actor {
         // guard hook, so it is ended and the message starts a new one.
         if self.process.is_some() && (self.native_spawned != self.plugins_off() || self.team_spawned != self.team_now()) {
             self.forget_background();
+            self.ctl_drop();
             if let Some(process) = self.process.take() {
                 process.stop();
             }
@@ -1512,6 +1515,7 @@ impl Actor {
         if self.meta.worktree.as_ref().is_some_and(|w| !w.removed) {
             return Err("this chat has a worktree: remove it from the chat's header first".into());
         }
+        self.ctl_drop();
         if let Some(process) = self.process.take() {
             process.stop();
         }
@@ -1552,6 +1556,7 @@ impl Actor {
             return (Ok(()), false);
         }
         self.forget_background();
+        self.ctl_drop();
         if let Some(process) = self.process.take() {
             process.stop();
         }
@@ -1646,10 +1651,27 @@ impl Actor {
         }
     }
 
-    /// Every request still waiting fails (the process is gone).
-    fn ctl_fail_all(&mut self, why: &str) {
+    /// The process is gone (ended, replaced or exited): what still waits for its answer is settled without it. A model or a mode that was
+    /// asked for is kept (the next process starts with it); a job stop cannot be done.
+    fn ctl_drop(&mut self) {
         for (_, waiting) in std::mem::take(&mut self.ctl) {
-            self.ctl_done(waiting, Err(why.to_owned()));
+            match waiting {
+                Ctl::SetModel { model, reply } => {
+                    self.meta.model = model.clone();
+                    self.save_meta();
+                    self.emit("model", json!({"model": model}));
+                    let _ = reply.send(Ok(()));
+                }
+                Ctl::PermMode { mode, reply } => {
+                    self.meta.permission_mode = mode;
+                    self.save_meta();
+                    self.emit("perm_mode", json!({"mode": mode.name()}));
+                    let _ = reply.send(Ok(()));
+                }
+                Ctl::StopTask { reply } => {
+                    let _ = reply.send(Err("the process ended".into()));
+                }
+            }
         }
     }
 
@@ -1693,6 +1715,7 @@ impl Actor {
         if self.meta.model == model {
             return (Ok(()), false);
         }
+        self.ctl_drop();
         let had = self.process.take();
         let restarted = had.is_some();
         if had.is_some() {
@@ -1747,6 +1770,7 @@ impl Actor {
         if self.meta.provider.as_ref().map(|p| &p.id) == new_ref.as_ref().map(|p| &p.id) {
             return (Ok(()), false);
         }
+        self.ctl_drop();
         let had = self.process.take();
         let restarted = had.is_some();
         if had.is_some() {
@@ -1778,7 +1802,7 @@ impl Actor {
         let _ = std::fs::remove_dir_all(self.skills_path());
         self.process = None;
         self.bg_live = 0;
-        self.ctl_fail_all("the process ended");
+        self.ctl_drop();
         self.set_state(State::Exited { code });
         if let Some(reply) = self.retire_reply.take() {
             let _ = reply.send(Ok(()));
