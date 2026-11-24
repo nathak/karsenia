@@ -2,6 +2,9 @@
 //!
 //! FAKE_SCENARIO: a file of lines. A line is printed to stdout as it is, unless it is a directive:
 //!   {"$wait":"user"|"control_response"|"interrupt"}  read stdin until such a line arrives
+//!   {"$reply":"<subtype>","response":{..}}           read stdin until a control_request of that subtype arrives, then answer it with a
+//!                                                    success carrying `response` (or, with "error":"text", an error); `$wait` on
+//!                                                    "control_request" waits for any control request without answering
 //!   {"$sleep":ms}                                    wait
 //!   {"$exit":code}                                   end the process
 //! FAKE_ENV_LOG: one JSON line per start, `{"argv": [...], "env": {...}}`, with the variables a credential could ride in (test values only).
@@ -43,6 +46,7 @@ fn matches(line: &str, wanted: &str) -> bool {
         "user" => kind == "user",
         "control_response" => kind == "control_response",
         "interrupt" => kind == "control_request" && v["request"]["subtype"] == "interrupt",
+        "control_request" => kind == "control_request",
         _ => false,
     }
 }
@@ -130,6 +134,28 @@ fn main() {
                 match rx.recv_timeout(Duration::from_secs(20)) {
                     Ok(got) if matches(&got, wanted) => break,
                     Ok(_) => continue,
+                    Err(_) => std::process::exit(9),
+                }
+            }
+        } else if let Some(subtype) = directive.as_ref().and_then(|d| d["$reply"].as_str()) {
+            let d = directive.as_ref().unwrap();
+            loop {
+                match rx.recv_timeout(Duration::from_secs(20)) {
+                    Ok(got) => {
+                        let Ok(v) = serde_json::from_str::<serde_json::Value>(&got) else { continue };
+                        if v["type"] != "control_request" || v["request"]["subtype"] != subtype {
+                            continue;
+                        }
+                        let id = v["request_id"].as_str().unwrap_or_default();
+                        let response = match d["error"].as_str() {
+                            Some(error) => serde_json::json!({"subtype": "error", "request_id": id, "error": error}),
+                            None => serde_json::json!({"subtype": "success", "request_id": id, "response": d["response"].clone()}),
+                        };
+                        let mut out = stdout.lock();
+                        let _ = writeln!(out, "{}", serde_json::json!({"type": "control_response", "response": response}));
+                        let _ = out.flush();
+                        break;
+                    }
                     Err(_) => std::process::exit(9),
                 }
             }

@@ -1,4 +1,5 @@
-//! Changing the model of a chat between turns: the `claude` process is ended, and the next message starts it again with
+//! Changing the model of a chat between turns when the program refuses the live change (the stand-in answers `set_model` with an
+//! error): the `claude` process is ended, and the next message starts it again with
 //! `--resume <session id> --model <new>` (measured with Claude Code 2.1.325: same session, other model, conversation kept).
 use std::time::Duration;
 
@@ -30,7 +31,7 @@ async fn starts_reach(log: &std::path::Path, n: usize) {
 async fn the_next_message_after_a_model_change_resumes_the_same_session_with_the_new_model() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
-    let scenario = "{\"$wait\":\"user\"}\n{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"S1\",\"cwd\":\"/p\",\"model\":\"haiku\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}\n{\"$wait\":\"user\"}\n";
+    let scenario = "{\"$wait\":\"user\"}\n{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"S1\",\"cwd\":\"/p\",\"model\":\"haiku\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}\n{\"$reply\":\"set_model\",\"error\":\"unsupported\"}\n{\"$wait\":\"user\"}\n";
     std::fs::write(root.join("scenario.jsonl"), scenario).unwrap();
     let log = root.join("fake.log");
     let wrapper = root.join("claude");

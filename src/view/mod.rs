@@ -14,6 +14,7 @@ pub mod notify;
 pub mod palette;
 pub mod panels;
 pub mod sched;
+pub mod slash;
 pub mod swb;
 pub mod team;
 pub mod term;

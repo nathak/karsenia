@@ -77,14 +77,14 @@ async fn a_sub_agent_frame_after_the_result_does_not_make_the_chat_running() {
     assert_eq!(states, ["running", "idle"], "{states:?}");
 }
 
-/// Ending the process to start it again (here a model change) ends its background jobs: the list is cleared and the transcript says so.
+/// Ending the process to start it again (here a model change the program refused to take live) ends its background jobs: the list is cleared and the transcript says so.
 #[tokio::test]
 async fn restarting_the_process_says_that_its_background_jobs_ended() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let jobs = "{\"type\":\"system\",\"subtype\":\"background_tasks_changed\",\"tasks\":[{\"task_id\":\"a\",\"task_type\":\"local_bash\",\"description\":\"make\"}]}\n";
     let result = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}\n";
-    std::fs::write(root.join("scenario.jsonl"), format!("{{\"$wait\":\"user\"}}\n{jobs}{result}{{\"$sleep\":20000}}\n")).unwrap();
+    std::fs::write(root.join("scenario.jsonl"), format!("{{\"$wait\":\"user\"}}\n{jobs}{result}{{\"$reply\":\"set_model\",\"error\":\"unsupported\"}}\n{{\"$sleep\":20000}}\n")).unwrap();
     let wrapper = root.join("claude");
     std::fs::write(&wrapper, format!("#!/bin/sh\nFAKE_SCENARIO='{}' exec '{}' \"$@\"\n", root.join("scenario.jsonl").display(), FAKE)).unwrap();
     use std::os::unix::fs::PermissionsExt;

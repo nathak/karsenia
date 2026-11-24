@@ -330,6 +330,39 @@ pub fn interrupt(request_id: &str) -> String {
     one_line(&json!({"type": "control_request", "request_id": request_id, "request": {"subtype": "interrupt"}}))
 }
 
+/// A control request the host sends on stdin (checked live against Claude Code 2.1.x: `set_model`, `set_permission_mode`,
+/// `stop_task`, `get_context_usage`); the answer is a `control_response` carrying the same `request_id`.
+pub fn control(request_id: &str, request: Value) -> String {
+    one_line(&json!({"type": "control_request", "request_id": request_id, "request": request}))
+}
+
+pub fn set_model(request_id: &str, model: &str) -> String {
+    control(request_id, json!({"subtype": "set_model", "model": model}))
+}
+
+pub fn set_permission_mode(request_id: &str, mode: &str) -> String {
+    control(request_id, json!({"subtype": "set_permission_mode", "mode": mode}))
+}
+
+pub fn stop_task(request_id: &str, task_id: &str) -> String {
+    control(request_id, json!({"subtype": "stop_task", "task_id": task_id}))
+}
+
+pub fn get_context_usage(request_id: &str) -> String {
+    control(request_id, json!({"subtype": "get_context_usage"}))
+}
+
+/// What a `control_response` says: its payload on success, its error text otherwise. Both shapes of an error are read
+/// (`response.error` as text, or a missing success), since only the success shape was seen live.
+pub fn control_outcome(raw: &Value) -> Result<Value, String> {
+    let response = &raw["response"];
+    if response["subtype"] == "success" {
+        return Ok(response.get("response").cloned().unwrap_or(Value::Null));
+    }
+    let text = response.get("error").and_then(|e| e.as_str().map(str::to_owned).or_else(|| e["message"].as_str().map(str::to_owned)));
+    Err(text.unwrap_or_else(|| "the program refused the request".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +402,23 @@ mod tests {
     fn a_control_response_names_its_request() {
         let line = r#"{"type":"control_response","response":{"subtype":"success","request_id":"c1","response":{"still_queued":[]}}}"#;
         assert!(matches!(parse_line(line), Event::ControlResponse { ref request_id, .. } if request_id == "c1"));
+    }
+
+    #[test]
+    fn control_lines_carry_the_subtype_and_the_answer_is_read_either_way() {
+        let v: Value = serde_json::from_str(&set_model("c1", "haiku")).unwrap();
+        assert_eq!((v["type"].as_str(), v["request_id"].as_str(), v["request"]["subtype"].as_str(), v["request"]["model"].as_str()), (Some("control_request"), Some("c1"), Some("set_model"), Some("haiku")));
+        let v: Value = serde_json::from_str(&set_permission_mode("c2", "plan")).unwrap();
+        assert_eq!((v["request"]["subtype"].as_str(), v["request"]["mode"].as_str()), (Some("set_permission_mode"), Some("plan")));
+        let v: Value = serde_json::from_str(&stop_task("c3", "t9")).unwrap();
+        assert_eq!((v["request"]["subtype"].as_str(), v["request"]["task_id"].as_str()), (Some("stop_task"), Some("t9")));
+        assert!(!set_model("c1", "haiku").contains('\n'));
+        let ok = json!({"type": "control_response", "response": {"subtype": "success", "request_id": "c1", "response": {"model": "claude-haiku-5-5"}}});
+        assert_eq!(control_outcome(&ok).unwrap()["model"], "claude-haiku-5-5");
+        let bad = json!({"type": "control_response", "response": {"subtype": "error", "request_id": "c1", "error": "no such model"}});
+        assert_eq!(control_outcome(&bad), Err("no such model".into()));
+        let odd = json!({"type": "control_response", "response": {"subtype": "weird", "request_id": "c1"}});
+        assert!(control_outcome(&odd).is_err());
     }
 
     #[test]

@@ -107,6 +107,10 @@ pub struct Meta {
     /// this one was made: coming back is a fast-forward of that chat only while its file is still what it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handed: Option<Handed>,
+    /// The command names the program listed in its last `init` (skills, plug-in and custom commands, built-ins) minus the ones that only
+    /// work in a terminal: the "/" menu offers them. Empty until the first message of the chat has started a process.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slash_commands: Vec<String>,
 }
 
 impl Meta {
@@ -151,6 +155,14 @@ enum Cmd {
     Permission { request_id: String, allow: bool, message: Option<String>, grant: Grant, reply: oneshot::Sender<Result<(), String>> },
     Interrupt { reply: oneshot::Sender<Result<(), String>> },
     SetModel { model: Option<String>, reply: oneshot::Sender<Result<(), String>> },
+    /// Changes the permission mode of the chat (its next process starts with it; a running idle one is told over the control channel).
+    /// `SetModel` by ending the process (the way that always works).
+    SetModelSlow { model: Option<String>, reply: oneshot::Sender<Result<(), String>> },
+    SetPermMode { mode: crate::claude::perm::PermMode, reply: oneshot::Sender<Result<(), String>> },
+    /// Stops one background job of the chat's process (ids come from `background_tasks_changed`).
+    StopTask { task_id: String, reply: oneshot::Sender<Result<(), String>> },
+    /// A control request got no answer in time.
+    CtlExpired { id: String },
     /// The chat's team settings were changed (in its workbench file): a running idle process is ended so the next message starts it with them.
     TeamChanged { reply: oneshot::Sender<Result<(), String>> },
     /// Turns the gateway of an account's chat on (a provider that uses an account's login) or off (None), between turns.
@@ -256,6 +268,16 @@ impl SessionHandle {
         ask(&self.tx, |reply| Cmd::TeamChanged { reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
     }
 
+    /// Changes the permission mode of the chat; between turns only.
+    pub async fn set_permission_mode(&self, mode: crate::claude::perm::PermMode) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::SetPermMode { mode, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
+    /// Stops one background job of the chat.
+    pub async fn stop_task(&self, task_id: String) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::StopTask { task_id, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
     /// Changes the model the chat runs with (None: Claude Code's default). Only between turns: the running `claude` is ended and the
     /// next message starts it again with `--resume` and the new `--model`, so the conversation goes on with the other model.
     pub async fn set_model(&self, model: Option<String>) -> Result<(), String> {
@@ -355,7 +377,7 @@ fn now_ms() -> u64 {
 }
 
 pub fn new_meta(cwd: PathBuf, model: Option<String>, provider: Option<ProviderRef>, container: bool, account: Option<AccountRef>) -> Meta {
-    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider, container, worktree: None, account, imported_from: None, permission_mode: Default::default(), named: false, handed: None }
+    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider, container, worktree: None, account, imported_from: None, permission_mode: Default::default(), named: false, handed: None, slash_commands: Vec::new() }
 }
 
 pub fn log_path(dir: &std::path::Path, sid: &str) -> PathBuf {
@@ -371,7 +393,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -418,7 +440,22 @@ struct Actor {
     cost_chat: f64,
     /// Who waits for the process to end before the worktree is removed.
     retire_reply: Option<oneshot::Sender<Result<(), String>>>,
+    /// Control requests sent to the process and not answered yet, by request id.
+    ctl: HashMap<String, Ctl>,
+    /// The chat's own command channel (weak: it must not keep the chat alive once every handle is gone): a control request that gets no
+    /// answer expires through it.
+    me: mpsc::WeakUnboundedSender<Cmd>,
 }
+
+/// What waits for the answer of a control request.
+enum Ctl {
+    SetModel { model: Option<String>, reply: oneshot::Sender<Result<(), String>> },
+    PermMode { mode: crate::claude::perm::PermMode, reply: oneshot::Sender<Result<(), String>> },
+    StopTask { reply: oneshot::Sender<Result<(), String>> },
+}
+
+/// How long a control request may wait for its answer before the slower path is taken.
+const CTL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Actor {
     async fn run(mut self, mut commands: mpsc::UnboundedReceiver<Cmd>) {
@@ -684,6 +721,17 @@ impl Actor {
     fn command(&mut self, command: Cmd) -> Option<mpsc::UnboundedReceiver<ProcEvent>> {
         match command {
             Cmd::Send { text, images, reply } => {
+                // `/model name` is done by the app itself (the header and the saved model stay right), not left to the program.
+                if images.is_empty() {
+                    if let crate::view::slash::Routed::Model(name) = crate::view::slash::route(&text) {
+                        if let Some(why) = self.model_refusal() {
+                            let _ = reply.send(Err(why.into()));
+                            return None;
+                        }
+                        self.emit("user", json!({"text": text, "images": [], "files": []}));
+                        return self.command(Cmd::SetModel { model: Some(name), reply });
+                    }
+                }
                 let (result, events) = self.send(text, images);
                 let _ = reply.send(result);
                 return events;
@@ -708,6 +756,29 @@ impl Actor {
                 }
             }
             Cmd::SetModel { model, reply } => {
+                // A running idle process takes the new model over the control channel: no restart, the conversation goes on at once.
+                if model.is_some() && self.meta.model != model && self.process.is_some() && self.model_refusal().is_none() {
+                    let name = model.clone().unwrap_or_default();
+                    match self.control(|id| protocol::set_model(id, &name), Ctl::SetModel { model, reply }) {
+                        Ok(()) => return None,
+                        Err(Ctl::SetModel { model, reply }) => return self.command(Cmd::SetModelSlow { model, reply }),
+                        Err(_) => return None,
+                    }
+                }
+                return self.command(Cmd::SetModelSlow { model, reply });
+            }
+            Cmd::SetPermMode { mode, reply } => self.set_permission_mode(mode, reply),
+            Cmd::StopTask { task_id, reply } => {
+                if let Err(Ctl::StopTask { reply }) = self.control(|id| protocol::stop_task(id, &task_id), Ctl::StopTask { reply }) {
+                    let _ = reply.send(Err("no process runs for this chat".into()));
+                }
+            }
+            Cmd::CtlExpired { id } => {
+                if let Some(waiting) = self.ctl.remove(&id) {
+                    self.ctl_done(waiting, Err("no answer in time".into()));
+                }
+            }
+            Cmd::SetModelSlow { model, reply } => {
                 let (result, restarted) = self.set_model(model);
                 let _ = reply.send(result);
                 if restarted {
@@ -1197,8 +1268,17 @@ impl Actor {
     fn event(&mut self, event: ProcEvent) {
         match event {
             ProcEvent::Line(Event::Init { session_id, raw, .. }) => {
+                let mut changed = false;
                 if self.meta.claude_session_id.as_deref() != Some(session_id.as_str()) {
                     self.meta.claude_session_id = Some(session_id);
+                    changed = true;
+                }
+                let names = crate::view::slash::init_names(&raw);
+                if !names.is_empty() && names != self.meta.slash_commands {
+                    self.meta.slash_commands = names;
+                    changed = true;
+                }
+                if changed {
                     self.save_meta();
                 }
                 self.emit("claude", raw);
@@ -1230,7 +1310,10 @@ impl Actor {
                     }
                 }
             }
-            ProcEvent::Line(Event::ControlResponse { raw, .. }) => self.emit("claude", raw),
+            ProcEvent::Line(Event::ControlResponse { request_id, raw }) => match self.ctl.remove(&request_id) {
+                Some(waiting) => self.ctl_done(waiting, protocol::control_outcome(&raw)),
+                None => self.emit("claude", raw),
+            },
             ProcEvent::Line(Event::Raw(raw)) => {
                 self.note_skill_use(&raw);
                 self.note_usage(&raw);
@@ -1483,19 +1566,117 @@ impl Actor {
         (Ok(()), true)
     }
 
-    /// See `SessionHandle::set_model`. The second value is true when a process was ended.
-    fn set_model(&mut self, model: Option<String>) -> (Result<(), String>, bool) {
+    fn model_refusal(&self) -> Option<&'static str> {
         if self.state == State::Running || !self.pending.is_empty() {
-            return (Err("the model can be changed between turns, not while one runs or a question waits".into()), false);
+            return Some("the model can be changed between turns, not while one runs or a question waits");
         }
         if self.meta.provider.as_ref().is_some_and(|p| !p.login) {
-            return (Err("a provider chat's models are set by its provider".into()), false);
+            return Some("a provider chat's models are set by its provider");
         }
         if self.realm.as_ref().is_some_and(|r| r.is_retired()) {
-            return (Err("this chat's account is not available; make a new chat".into()), false);
+            return Some("this chat's account is not available; make a new chat");
         }
         if self.meta.worktree.as_ref().is_some_and(|w| w.removed) {
-            return (Err("this chat's worktree was removed; the chat can only be read".into()), false);
+            return Some("this chat's worktree was removed; the chat can only be read");
+        }
+        None
+    }
+
+    /// Sends a control request to the process and remembers what waits for its answer; false when there is no process to ask.
+    fn control(&mut self, build: impl FnOnce(&str) -> String, waiting: Ctl) -> Result<(), Ctl> {
+        let id = random_hex(16);
+        let sent = self.process.as_ref().map(|p| p.send_line(build(&id))).unwrap_or(false);
+        if !sent {
+            return Err(waiting);
+        }
+        self.ctl.insert(id.clone(), waiting);
+        let me = self.me.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(CTL_TIMEOUT).await;
+            if let Some(me) = me.upgrade() {
+                let _ = me.send(Cmd::CtlExpired { id });
+            }
+        });
+        Ok(())
+    }
+
+    /// The answer of a control request (or its failure: a refusal, no answer in time, the process ended).
+    fn ctl_done(&mut self, waiting: Ctl, outcome: Result<Value, String>) {
+        match waiting {
+            Ctl::SetModel { model, reply } => match outcome {
+                Ok(_) => {
+                    self.meta.model = model.clone();
+                    self.save_meta();
+                    self.emit("model", json!({"model": model, "live": true}));
+                    let _ = reply.send(Ok(()));
+                }
+                Err(why) => {
+                    // The slower way, which always works: the process is ended and the next message starts it with the new model.
+                    tracing::info!("set_model was not taken live ({why}); restarting at the next message");
+                    let (result, _restarted) = self.set_model(model);
+                    let _ = reply.send(result);
+                }
+            },
+            Ctl::PermMode { mode, reply } => match outcome {
+                Ok(_) => {
+                    self.meta.permission_mode = mode;
+                    self.save_meta();
+                    self.emit("perm_mode", json!({"mode": mode.name()}));
+                    let _ = reply.send(Ok(()));
+                }
+                Err(why) => {
+                    let _ = reply.send(Err(why));
+                }
+            },
+            Ctl::StopTask { reply } => {
+                let _ = reply.send(outcome.map(|_| ()));
+            }
+        }
+    }
+
+    /// Every request still waiting fails (the process is gone).
+    fn ctl_fail_all(&mut self, why: &str) {
+        for (_, waiting) in std::mem::take(&mut self.ctl) {
+            self.ctl_done(waiting, Err(why.to_owned()));
+        }
+    }
+
+    fn set_permission_mode(&mut self, mode: crate::claude::perm::PermMode, reply: oneshot::Sender<Result<(), String>>) {
+        if self.state == State::Running || !self.pending.is_empty() {
+            let _ = reply.send(Err("the permission mode can be changed between turns, not while one runs or a question waits".into()));
+            return;
+        }
+        if self.meta.worktree.as_ref().is_some_and(|w| w.removed) || self.realm.as_ref().is_some_and(|r| r.is_retired()) {
+            let _ = reply.send(Err("this chat can only be read".into()));
+            return;
+        }
+        if self.meta.permission_mode == mode {
+            let _ = reply.send(Ok(()));
+            return;
+        }
+        // Everything-without-asking is only open to a chat that was made with it (the program may refuse it otherwise).
+        if mode == crate::claude::perm::PermMode::Bypass && self.meta.permission_mode != mode {
+            let _ = reply.send(Err("bypassing every question can only be chosen when a chat is made".into()));
+            return;
+        }
+        let name = mode.name();
+        match self.control(|id| protocol::set_permission_mode(id, name), Ctl::PermMode { mode, reply }) {
+            Ok(()) => {}
+            // No process yet: the next one starts with it.
+            Err(Ctl::PermMode { mode, reply }) => {
+                self.meta.permission_mode = mode;
+                self.save_meta();
+                self.emit("perm_mode", json!({"mode": mode.name()}));
+                let _ = reply.send(Ok(()));
+            }
+            Err(_) => {}
+        }
+    }
+
+    /// See `SessionHandle::set_model`. The second value is true when a process was ended.
+    fn set_model(&mut self, model: Option<String>) -> (Result<(), String>, bool) {
+        if let Some(why) = self.model_refusal() {
+            return (Err(why.into()), false);
         }
         if self.meta.model == model {
             return (Ok(()), false);
@@ -1585,6 +1766,7 @@ impl Actor {
         let _ = std::fs::remove_dir_all(self.skills_path());
         self.process = None;
         self.bg_live = 0;
+        self.ctl_fail_all("the process ended");
         self.set_state(State::Exited { code });
         if let Some(reply) = self.retire_reply.take() {
             let _ = reply.send(Ok(()));
