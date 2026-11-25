@@ -100,22 +100,19 @@ export component Btn inherits Rectangle {
 // given a one-line height inside the transcript rows, and bold is the widest the styled text can be.
 export component Rich inherits Rectangle {
     in property <styled-text> rich;
+    // The same words as plain text: measured (hidden) so that the height follows the wrapping.
     in property <string> plain;
     in property <length> size;
     in property <color> fg;
-    // Whether a drag selects the text (see below); false where the paragraph is styled or has a link.
-    in property <bool> selectable: false;
     callback link(string);
     height: measure.preferred-height;
     measure := Text { width: parent.width; text: root.plain; wrap: word-wrap; font-size: root.size; font-weight: 600; opacity: 0; }
-    StyledText { width: parent.width; height: parent.height; text: root.rich; default-color: root.fg; default-font-size: root.size; link-color: Theme.primary-soft; link-clicked(url) => { root.link(url); } }
-    // The same words as plain, read-only, invisible text over the styled text: a drag selects them (the highlight shows through) and
-    // Ctrl+C copies them. Only over a paragraph that is neither styled (the plain text has other glyph widths than bold, italic or code,
-    // so the highlight would be on the wrong letters) nor has a link (the styled text takes every mouse event, it needs the clicks of a
-    // link, so a drag there cannot reach a field under it, and a field over it would take the link's clicks).
-    if root.selectable: TextInput {
-        width: parent.width; height: parent.height; text: root.plain; read-only: true; single-line: false; wrap: TextWrap.word-wrap; font-size: root.size;
-        color: transparent; selection-foreground-color: transparent; selection-background-color: Theme.primary.with-alpha(0.4);
+    // A drag selects (also where the text is bold, code or holds a link), a double click selects a word, a triple click the paragraph, and
+    // Ctrl+C copies; a click that does not drag still follows a link. A selection stays inside one paragraph (Slint 1.19).
+    StyledText {
+        width: parent.width; height: parent.height; text: root.rich; default-color: root.fg; default-font-size: root.size; link-color: Theme.primary-soft;
+        selectable: true; selection-background-color: Theme.primary.with-alpha(0.4); selection-foreground-color: root.fg;
+        link-clicked(url) => { root.link(url); }
     }
 }
 

@@ -46,7 +46,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 pulldown-cmark = { version = "0.13.6", default-features = false }
 sys-locale = "0.3.2"
-slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-software", "accessibility", "raw-window-handle-06"], optional = true }
+slint = { version = "=1.19.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-software", "accessibility", "raw-window-handle-06"], optional = true }
 arboard = { version = "3.7.0", default-features = false, features = ["image-data"], optional = true }
 # Thumbnails of attached images and the PNG of a pasted one; the same pure-Rust crate Slint already uses.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"], optional = true }
@@ -54,7 +54,7 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 rfd = { version = "=0.18.0", default-features = false, features = ["xdg-portal"], optional = true }
 
 [build-dependencies]
-slint-build = { version = "=1.18.1", optional = true }
+slint-build = { version = "=1.19.1", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # The window's own handle (to bring it to the front from the tray).
@@ -81,4 +81,9 @@ opt-level = 3
 [[example]]
 name = "shots"
 path = "examples/shots.rs"
+required-features = ["desktop"]
+
+[[example]]
+name = "drag"
+path = "examples/drag.rs"
 required-features = ["desktop"]

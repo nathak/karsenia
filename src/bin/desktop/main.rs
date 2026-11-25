@@ -1460,9 +1460,6 @@ fn to_slint(row: &Row) -> ChatRow {
         text: row.text.clone().into(),
         rich,
         plain: plain_of(&row.md).into(),
-        // Not selectable by a drag where the visible text is styled (bold, italic, code: other glyph widths than the plain text the
-        // selection works on, so the highlight would be on the wrong letters) or has a link (the styled text needs the clicks).
-        no_select: row.md.contains("](") || unescape(&row.md) != plain_of(&row.md),
         label: row.label.clone().into(),
         extra: row.extra.clone().into(),
         status: row.status.clone().into(),
