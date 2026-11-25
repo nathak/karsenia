@@ -193,6 +193,10 @@ export component AppWindow inherits Window {
     property <bool> in-cont: root.hw >= 900px;
     property <bool> more-shown: !root.in-copy || !root.in-dbg || (root.gw-shown && !root.in-gw) || (Acct.names.length > 1 && !root.in-cont);
     changed more-shown => { if (!root.more-shown) { root.more-open = false; } }
+    // The menu's gateway box takes the keyboard focus when it is used: a menu that goes away (a click outside, Esc, a wider window) or a box
+    // that leaves the row hands it back, or the window's keys would not work until the next click.
+    changed more-open => { if (!root.more-open && !root.perm.visible && !Dialog.visible) { root.refocus(); } }
+    changed in-gw => { if (!root.in-gw && !root.perm.visible && !Dialog.visible) { root.refocus(); } }
     callback continue-chat(int, string);
     // The chat as one selectable text (the header's "View as text"): a snapshot made when it is opened or refreshed, a note when the
     // beginning was left out, and whether the chat has changed since.
@@ -248,7 +252,7 @@ export component AppWindow inherits Window {
     changed debug-view => { if (!root.debug-view && !root.perm.visible && !Dialog.visible) { root.refocus(); } }
     changed new-open => { if (root.new-open) { root.panel-open(100); } else { root.new-perm = 0; root.new-name = ""; root.refocus(); } }
     // A panel that goes away takes focus with it.
-    changed side => { root.more-open = false; Team.open = false; Usage.open = false; Know.adding = false; root.panel-open(root.side); root.refocus(); }
+    changed side => { root.more-open = false; root.cont-open = false; Team.open = false; Usage.open = false; Know.adding = false; root.panel-open(root.side); root.refocus(); }
 
     // Every element sits in here: capture-key-pressed runs from the window down the focused element's parents, so the zoom
     // keys work whatever holds focus, before the composer or a dialog sees them; everything else is passed on.
@@ -261,7 +265,7 @@ export component AppWindow inherits Window {
             if (event.text == Key.Escape && root.text-view && root.side == 0 && !root.new-open && !root.zoom-open && !root.perm.visible && !Dialog.visible && !Pal.open && !(Team.open || Usage.open || root.cont-open || root.more-open)) { root.text-view = false; root.text-view-set(false); return accept; }
             if (event.text == Key.Escape && root.zoom-open && !root.perm.visible && !Dialog.visible) { root.zoom-close(); return accept; }
             // Esc closes the team card; a dialog that waits for an answer keeps its own Esc.
-            if (event.text == Key.Escape && (Team.open || Usage.open || root.cont-open || root.more-open) && !root.perm.visible && !Dialog.visible) { Team.open = false; Usage.open = false; root.cont-open = false; root.more-open = false; return accept; }
+            if (event.text == Key.Escape && (Team.open || Usage.open || root.cont-open || root.more-open) && !root.perm.visible && !Dialog.visible && !Pal.open) { Team.open = false; Usage.open = false; root.cont-open = false; root.more-open = false; return accept; }
             if ((event.modifiers.alt || event.modifiers.control) && !event.modifiers.shift && !event.modifiers.meta && !root.perm.visible && !Dialog.visible) {
                 if (event.text == "1") { root.side = 0; root.new-open = false; return accept; }
                 if (event.text == "2") { root.side = 1; root.new-open = false; return accept; }
