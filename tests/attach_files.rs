@@ -58,3 +58,40 @@ async fn pdf_text_and_other_files_reach_the_model_and_the_transcript_holds_no_co
     server.registry.delete(&chat.sid).await.unwrap();
     assert!(!root.join("data").join("attachments").join(&chat.sid).exists());
 }
+
+#[tokio::test]
+async fn a_file_that_cannot_be_saved_leaves_the_chat_able_to_send() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::write(root.join("scenario.jsonl"), "{\"$wait\":\"user\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}\n").unwrap();
+    let wrapper = root.join("claude");
+    std::fs::write(&wrapper, format!("#!/bin/sh\nFAKE_SCENARIO='{}' FAKE_LOG='{}' exec '{}' \"$@\"\n", root.join("scenario.jsonl").display(), root.join("fake.log").display(), FAKE)).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let project = root.join("p");
+    std::fs::create_dir_all(&project).unwrap();
+    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: Some(wrapper.clone()), extract: Default::default(), propose: Default::default(), sched: Default::default() }).await.unwrap();
+    let chat = server.registry.create_in(project.to_str().unwrap(), None, None, false, None).unwrap();
+    let (_, mut rx) = chat.subscribe(0).await.unwrap();
+    // A plain file where the attachments folder has to be: saving cannot work (whoever runs this).
+    std::fs::write(root.join("data").join("attachments"), b"x").unwrap();
+    let failed = chat.send("first".into(), vec![file(b"\x00\x01 zip", "a.zip")]).await;
+    assert!(failed.is_err_and(|e| e.contains("could not save the attached file")), "the attachment cannot be saved");
+    // The chat is not stuck: the next message goes through and the turn ends.
+    chat.send("second".into(), vec![]).await.unwrap();
+    loop {
+        let got = tokio::time::timeout(Duration::from_secs(8), rx.recv()).await.expect("the chat did not come back to idle").unwrap();
+        if got.kind == "state" && got.data["state"] == "idle" && got.seq > 1 {
+            let (replay, _) = chat.subscribe(0).await.unwrap();
+            if replay.iter().any(|e| e.kind == "user") {
+                break;
+            }
+        }
+    }
+    let log = std::fs::read_to_string(root.join("fake.log")).unwrap();
+    assert!(log.lines().any(|l| l.starts_with("IN ") && l.contains("second")), "{log}");
+    assert!(!log.lines().any(|l| l.starts_with("IN ") && l.contains("first")), "the refused message never reached the program");
+    let (replay, _) = chat.subscribe(0).await.unwrap();
+    let texts: Vec<_> = replay.iter().filter(|e| e.kind == "user").map(|e| e.data["text"].as_str().unwrap_or_default().to_owned()).collect();
+    assert_eq!(texts, ["second"]);
+}

@@ -1211,7 +1211,9 @@ impl Actor {
             Ok(made) => made,
             Err(message) => {
                 self.emit("error", json!({"message": message}));
-                return (Err(message), None);
+                // The process was started above: its event stream goes back to the actor, or nothing would read what it says (the chat
+                // would stay running for good).
+                return (Err(message), events);
             }
         };
         self.emit("user", json!({"text": text, "images": shown, "files": files}));
