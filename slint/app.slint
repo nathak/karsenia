@@ -57,7 +57,7 @@ component NavItem inherits Rectangle {
 component AcctTab inherits Rectangle {
     in property <string> text;
     in property <bool> active;
-    // The widest a tab gets (shorter when there are many accounts or the window is narrow).
+    // The widest a tab gets.
     in property <length> cap: 120px;
     callback clicked;
     y: 12px;
@@ -292,7 +292,7 @@ export component AppWindow inherits Window {
                         }
                         VerticalLayout { alignment: center; Badge { text: "● " + T.tr("app_running"); tone: "ok"; } }
                     }
-                    // the account the window shows (the same choice as the header tabs)
+                    // the account the window shows (the same choice as the header's select box)
                     Rectangle {
                         height: ctx.preferred-height;
                         border-radius: 8px; background: Theme.container; border-width: 1px; border-color: Theme.hairline;
@@ -305,7 +305,7 @@ export component AppWindow inherits Window {
                             // One choice whatever the number of accounts (a row of tabs, or a segment per account, ran out of room).
                             HorizontalLayout {
                                 spacing: 8px;
-                                ComboBox { horizontal-stretch: 1; model: Acct.labels; current-index <=> Acct.view; selected(v) => { Acct.view-chosen(self.current-index); root.refocus(); } }
+                                ComboBox { horizontal-stretch: 1; model: Acct.labels; current-index <=> Acct.view; selected(v) => { Acct.view-chosen(self.current-index); root.new-open = false; root.refocus(); } }
                                 if Acct.away != "": VerticalLayout { alignment: center; Badge { text: Acct.away; tone: "warn"; mono: false; } }
                             }
                         }
@@ -445,8 +445,8 @@ export component AppWindow inherits Window {
                         width: parent.width; height: parent.height;
                         padding-left: 16px; padding-right: 16px; spacing: 10px; alignment: start;
                         // The account choice: one box however many accounts there are (what waits elsewhere is the badge beside it).
-                        VerticalLayout { alignment: center; ComboBox { width: root.hw < 600px ? 140px : root.hw < 900px ? 170px : 230px; model: Acct.labels; current-index <=> Acct.view; selected(v) => { Acct.view-chosen(self.current-index); root.new-open = false; root.refocus(); } } }
-                        if Acct.away != "": VerticalLayout { alignment: center; Badge { text: Acct.away; tone: "warn"; mono: false; } }
+                        if Acct.labels.length > 1: VerticalLayout { alignment: center; ComboBox { width: root.hw < 600px ? 140px : root.hw < 900px ? 170px : 230px; model: Acct.labels; current-index <=> Acct.view; selected(v) => { Acct.view-chosen(self.current-index); root.new-open = false; root.refocus(); } } }
+                        if Acct.away != "" && Acct.labels.length > 1: VerticalLayout { alignment: center; Badge { text: Acct.away; tone: "warn"; mono: false; } }
                         AcctTab { text: T.tr("tab_manage"); cap: 120px; active: root.new-open; clicked => { root.new-acct = Acct.pre-acct; root.new-prov = 0; Imp.open = false; root.new-open = true; } }
                         Rectangle { y: 16px; width: 1px; height: 24px; background: Theme.hairline; }
                         // breadcrumb: workspace / project, or the page's name when no chat is open

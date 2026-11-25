@@ -1686,8 +1686,6 @@ async fn refresh_sessions(app: &Arc<App>) {
     });
 }
 
-/// The chat list on screen: the chats under the account shown (see `in_context`), from the last list the host sent. Called when that
-/// list came and when the account shown changed, so a switch needs no round trip. It never switches the account itself.
 /// The chats as the list shows them: a row per project folder (in the order of its newest chat) with its chats under it unless it is closed.
 fn grouped(chats: &[SessionItem]) -> Vec<SessionItem> {
     let mut order: Vec<String> = Vec::new();
@@ -1725,6 +1723,8 @@ fn grouped(chats: &[SessionItem]) -> Vec<SessionItem> {
     out
 }
 
+/// The chat list on screen: the chats under the account shown (see `in_context`), from the last list the host sent. Called when that
+/// list came and when the account shown changed, so a switch needs no round trip. It never switches the account itself.
 pub(crate) fn show_sessions(ui: &AppWindow, app: &App) {
     let view = accounts::ctx(app);
     let known_accounts = accounts::known();
