@@ -1304,7 +1304,8 @@ function doJump() {
 }
 
 // ---- memory ----
-const curCwd = () => (S.sessions.find(s => s.sid === S.cur) || {}).cwd
+// The Memory panel's "this project": a worktree chat shares the notes of the folder it was made from (the server drops a Windows `\\?\` prefix).
+const curCwd = () => { const s = S.sessions.find(x => x.sid === S.cur) || {}; return (s.worktree && s.worktree.repo) || s.cwd }
 function askMemory() { wsSend({ op: 'memory_list', cwd: curCwd() }) }
 // Every request carries an id the answer brings back, so two requests in flight are never mixed up.
 function memSend(op, tag) {

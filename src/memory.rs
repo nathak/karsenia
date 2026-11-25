@@ -227,6 +227,7 @@ impl MemoryStore {
         };
         let store = Self { conn: Mutex::new(conn), path: path.to_owned() };
         store.purge(now_ms());
+        store.strip_verbatim_folders();
         Ok((store, notice))
     }
 
@@ -460,6 +461,33 @@ impl MemoryStore {
         conn.execute("UPDATE mem SET status = COALESCE(prev_status, 'active'), prev_status = NULL, deleted_at = NULL WHERE id = ?1 AND status = 'deleted'", [id]).map(|n| n > 0).unwrap_or(false)
     }
 
+    /// Moves the project notes filed under the folder `from` to the project `to` (a chat in a worktree files under the project it was made
+    /// from, but a note saved before that was filed under the worktree's folder). A note that `to` already has the same of stays where it was,
+    /// so nothing is lost or doubled. Returns how many moved; 0 (a cheap indexed look) once there is nothing left to move.
+    pub fn rehome(&self, from: &str, to: &str) -> usize {
+        if from == to || from.is_empty() || to.is_empty() {
+            return 0;
+        }
+        let moved = self.lock().execute("UPDATE OR IGNORE mem SET cwd = ?2, updated = ?3 WHERE scope = 'project' AND cwd = ?1 AND status != 'deleted'", params![from, to, now_ms() as i64]);
+        moved.unwrap_or(0)
+    }
+
+    /// Notes filed before the project's folder was written without Windows' `\\?\` are filed again under the plain text, once (nothing is
+    /// left to do afterwards). A note that would clash with one already there stays under its old name, still listed with the other
+    /// projects; an error leaves the file as it was, it never fails the opening.
+    fn strip_verbatim_folders(&self) {
+        let conn = self.lock();
+        let Ok(mut statement) = conn.prepare(r"SELECT DISTINCT cwd FROM mem WHERE substr(cwd, 1, 4) = '\\?\'") else { return };
+        let folders: Vec<String> = statement.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().collect()).unwrap_or_default();
+        drop(statement);
+        for old in folders {
+            let plain = crate::platform::strip_verbatim(&old);
+            if plain.len() != old.len() {
+                let _ = conn.execute("UPDATE OR IGNORE mem SET cwd = ?2 WHERE cwd = ?1", params![old, plain]);
+            }
+        }
+    }
+
     /// Removes notes deleted more than seven days before `now`.
     pub fn purge(&self, now: u64) {
         let cutoff = now.saturating_sub(UNDO_DAYS * 86_400_000) as i64;
@@ -531,6 +559,43 @@ mod tests {
 
     fn new(text: &str) -> NewMem {
         NewMem { scope: "project", cwd: Some("/p".into()), kind: "fact".into(), text: text.into(), source: "manual", sid: None, seq: None, status: "active", instr: false, allow_secret: false }
+    }
+
+    #[test]
+    fn rehome_moves_notes_of_a_folder_to_the_project_and_keeps_what_would_clash() {
+        let (_dir, store) = store();
+        let at = |text: &str, cwd: &str| NewMem { cwd: Some(cwd.into()), ..new(text) };
+        saved(store.add(at("alpha", "/w/x")));
+        saved(store.add(at("beta", "/w/x")));
+        saved(store.add(at("alpha", "/p")));
+        let mut user = new("mine");
+        user.scope = "user";
+        user.cwd = None;
+        saved(store.add(user));
+        assert_eq!(store.rehome("/w/x", "/p"), 1, "beta moves; the alpha that is already in /p stays where it was");
+        let project: Vec<String> = store.overview(Some("/p")).project.into_iter().map(|m| m.text).collect();
+        assert!(project.contains(&"alpha".to_owned()) && project.contains(&"beta".to_owned()), "{project:?}");
+        assert!(store.overview(Some("/w/x")).project.iter().any(|m| m.text == "alpha"), "the clash is not lost");
+        assert_eq!(store.rehome("/w/x", "/p"), 0, "the second time there is nothing to do");
+        assert_eq!(store.rehome("/p", "/p"), 0, "a folder is not moved onto itself");
+        assert_eq!(store.recall("/anywhere").iter().filter(|m| m.text == "mine").count(), 1, "a note of the user has no folder and is left alone");
+    }
+
+    #[test]
+    fn opening_the_file_drops_the_windows_prefix_from_the_folders_of_notes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("memory.sqlite");
+        {
+            let (store, _) = MemoryStore::open(&path).unwrap();
+            saved(store.add(NewMem { cwd: Some(r"\\?\C:\p".into()), ..new("verbatim") }));
+            saved(store.add(NewMem { cwd: Some(r"\\?\C:\q".into()), ..new("same text") }));
+            saved(store.add(NewMem { cwd: Some(r"C:\q".into()), ..new("same text") }));
+        }
+        let (store, notice) = MemoryStore::open(&path).unwrap();
+        assert!(notice.is_none(), "the file is not given up on: {notice:?}");
+        assert!(store.recall(r"C:\p").iter().any(|m| m.text == "verbatim"));
+        assert_eq!(store.overview(Some(r"C:\q")).project.iter().filter(|m| m.text == "same text").count(), 1, "a clash stays under its old name");
+        assert!(store.overview(Some(r"\\?\C:\q")).project.iter().any(|m| m.text == "same text"));
     }
 
     fn saved(added: Added) -> Mem {

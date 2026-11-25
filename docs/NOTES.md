@@ -86,6 +86,16 @@ Short notes the app keeps between chats, in `<data>/memory.sqlite` (`0600`; unli
 rebuilt: a file that cannot be read is renamed `.broken` and you are told). A note is at most 300 characters, either about a
 **project folder** or about **you**, and has a source: you, Claude (through a tool you approved), or auto-save.
 
+- **Which folder a project note is filed under** (`Meta::project_key`): the project, not the folder the chat runs in. A chat in a git worktree is
+  filed under the folder the worktree was made from (`worktree.repo`, the same rule the desktop sidebar groups chats by), any other chat under its own
+  folder, so a worktree chat starts with, searches, saves and auto-saves to its project's notes (and its project's skills; the history search keeps
+  the folder the chat ran in). The key is worked out where it is needed, never stored, and has Windows' `\\?\` prefix left out (a plain chat's folder
+  comes from `canonicalize` and has it, the worktree's `repo` does not); the Memory panel and the MCP tools take the same key, and the file drops the
+  prefix from notes filed earlier when it is opened (a note that would clash stays under its old name, listed with the other projects). A note
+  saved before this under a worktree's folder moves to the project when a chat in that worktree starts (`MemoryStore::rehome`; one that would
+  clash stays). Notes filed under a worktree that was removed before then stay under "other projects". A chat opened in a subfolder of a repo is
+  the project of that subfolder, and a worktree chat made from it is the project of the repo's top folder.
+
 - **Checks every save goes through**: size, caps (200 notes / 32 KB per project, 100 / 16 KB for you, 50 waiting; a full store refuses,
   nothing is evicted), a secret filter (keys, tokens, `password is ...`, 32+ hex digits, long mixed strings: refused, never redacted; a manual note can be
   kept after a confirmation), duplicates (the same words, and for automatic sources near-duplicates), and an order-like check

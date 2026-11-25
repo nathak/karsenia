@@ -189,11 +189,13 @@ async fn answer(request: &Value, gate: &McpGate, registry: &Registry) -> Value {
         return fail("this account is not available");
     }
     let cwd = info.meta.cwd.to_string_lossy().into_owned();
+    // Notes are filed under the project (a worktree chat shares its project's notes); the history search keeps the folder the chat runs in.
+    let project = info.meta.project_key();
     let params = &request["params"];
     match request["method"].as_str().unwrap_or_default() {
         crate::mcp::TOOL_NAME => search_history(params, &cwd, &realm, registry).await,
-        crate::mcp::MEMORY_SEARCH => memory_search(params, &cwd, &realm),
-        crate::mcp::MEMORY_SAVE => memory_save(params, &sid, &cwd, gate, &realm, registry),
+        crate::mcp::MEMORY_SEARCH => memory_search(params, &project, &realm),
+        crate::mcp::MEMORY_SAVE => memory_save(params, &sid, &project, gate, &realm, registry),
         _ => fail("unknown method"),
     }
 }

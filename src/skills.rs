@@ -579,7 +579,7 @@ impl SkillStore {
 
     /// The active skills a chat in `cwd` gets: the person's own (user scope) and this folder's.
     pub fn active_for(&self, cwd: &str) -> Vec<SkillInfo> {
-        self.overview().active.into_iter().filter(|s| s.status == "active" && (s.scope == "user" || s.cwd.as_deref() == Some(cwd))).collect()
+        self.overview().active.into_iter().filter(|s| s.status == "active" && (s.scope == "user" || s.cwd.as_deref().map(crate::platform::strip_verbatim) == Some(crate::platform::strip_verbatim(cwd)))).collect()
     }
 
     /// Writes a one-off plugin folder for one chat: `.claude-plugin/plugin.json` and `skills/<name>/SKILL.md` for its active skills
@@ -795,6 +795,17 @@ mod tests {
         let p = full.propose(new("a-replacement-skill")).unwrap();
         full.approve(p.id, Edit::default(), false).unwrap();
         assert!(!full.undo_delete(first.unwrap()), "thirty skills exist again: the old one cannot come back beside them");
+    }
+
+    #[test]
+    fn a_skill_filed_under_a_windows_verbatim_folder_is_the_skill_of_the_plain_folder_too() {
+        let (_dir, store) = store();
+        let old = store.propose(NewProposal { cwd: Some(r"\\?\C:\p".into()), ..new("old-skill") }).unwrap();
+        store.approve(old.id, Edit::default(), false).unwrap();
+        let names = |cwd: &str| store.active_for(cwd).into_iter().map(|s| s.name).collect::<Vec<_>>();
+        assert_eq!(names(r"C:\p"), ["old-skill"], "a chat that is keyed without the prefix finds it");
+        assert_eq!(names(r"\\?\C:\p"), ["old-skill"]);
+        assert!(names(r"C:\q").is_empty());
     }
 
     #[test]

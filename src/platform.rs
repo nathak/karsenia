@@ -22,13 +22,25 @@ pub fn canon(path: &Path) -> std::io::Result<PathBuf> {
 /// An already canonical path in the form other programs take (see `canon`); unchanged except on Windows.
 pub fn plain(real: PathBuf) -> PathBuf {
     #[cfg(windows)]
-    if let Some(rest) = real.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
-        let bytes = rest.as_bytes();
-        if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\' && rest.len() < 260 {
-            return PathBuf::from(rest);
+    if let Some(s) = real.to_str() {
+        let plain = strip_verbatim(s);
+        if plain.len() != s.len() {
+            return PathBuf::from(plain);
         }
     }
     real
+}
+
+/// A path without the `\\?\` that `canonicalize` puts before a plain drive path on Windows (a share or a path of 260 characters or more
+/// keeps it). A path that has no such prefix is returned as it is, on every system, so the same text can be compared wherever it came from.
+pub fn strip_verbatim(path: &str) -> &str {
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\' && rest.len() < 260 {
+            return rest;
+        }
+    }
+    path
 }
 
 /// Whether a candidate for the `claude` program is one this build will run. On Windows only a real executable is run:
@@ -73,6 +85,16 @@ pub fn data_dir_in_profile(data: &Path, profile: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_verbatim_only_short_drive_paths() {
+        assert_eq!(strip_verbatim(r"\\?\C:\p"), r"C:\p");
+        assert_eq!(strip_verbatim(r"\\?\UNC\srv\x"), r"\\?\UNC\srv\x", "a share keeps the prefix");
+        let long = format!(r"\\?\C:\{}", "a".repeat(260));
+        assert_eq!(strip_verbatim(&long), long, "a path that is too long keeps the prefix");
+        assert_eq!(strip_verbatim("/p"), "/p");
+        assert_eq!(strip_verbatim(r"C:\p"), r"C:\p");
+    }
 
     #[test]
     fn data_folder_must_be_inside_the_profile() {

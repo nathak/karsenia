@@ -134,7 +134,7 @@ fn set_counts(ui: &AppWindow) {
 }
 
 fn list_memory(app: &App) {
-    let cwd = app.cwd.lock().expect("cwd").clone();
+    let cwd = app.project.lock().expect("project").clone();
     app.bus.send(json!({"op": "memory_list", "cwd": cwd}));
 }
 
@@ -452,7 +452,7 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
             }
             a.bus.post_quiet(json!({"op": "provider_list"}));
             a.bus.post_quiet(json!({"op": "sched_list"}));
-            a.bus.post_quiet(json!({"op": "memory_list", "cwd": a.cwd.lock().expect("cwd").clone()}));
+            a.bus.post_quiet(json!({"op": "memory_list", "cwd": a.project.lock().expect("project").clone()}));
             a.bus.post_quiet(json!({"op": "skill_list"}));
         }
         // The Files page: the open chat's folder is listed.
@@ -521,7 +521,7 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
     });
     let a = app.clone();
     mem.on_add(move |text, scope| {
-        let cwd = a.cwd.lock().expect("cwd").clone();
+        let cwd = a.project.lock().expect("project").clone();
         a.bus.ask(json!({"op": "memory_add", "text": text.as_str(), "scope": scope.as_str(), "cwd": cwd}));
     });
     let (a, weak) = (app.clone(), ui.as_weak());

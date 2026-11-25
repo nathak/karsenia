@@ -65,11 +65,12 @@ pub fn handle(state: &AppState, name: &str, op: &Value, out: &UnboundedSender<St
     let confirm = op["confirm"].as_bool() == Some(true);
     match name {
         "memory_list" => {
-            let _ = out.send(plain("memory", None, listing(state, &realm, op["cwd"].as_str())));
+            let _ = out.send(plain("memory", None, listing(state, &realm, op["cwd"].as_str().map(crate::platform::strip_verbatim))));
         }
         "memory_add" => {
             let scope: &'static str = if op["scope"].as_str() == Some("user") { "user" } else { "project" };
-            let cwd = op["cwd"].as_str().map(str::to_owned);
+            // The page may send the folder with the `\\?\` Windows puts before it; notes are filed without it.
+            let cwd = op["cwd"].as_str().map(|c| crate::platform::strip_verbatim(c).to_owned());
             if scope == "project" && cwd.is_none() {
                 return result(out, &rid, false, json!({"error": "open a chat first: a project note belongs to its folder"}));
             }

@@ -421,6 +421,21 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
+impl Meta {
+    /// The project this chat belongs to: the folder a worktree was made from, else the chat's own folder (as the sidebar groups chats). Not
+    /// stored; worked out where it is needed. `cwd` itself is what the chat runs in and is never changed by this.
+    pub fn project_dir(&self) -> PathBuf {
+        let dir = self.worktree.as_ref().map_or(&self.cwd, |w| &w.repo);
+        dir.to_str().map_or_else(|| dir.clone(), |s| PathBuf::from(crate::platform::strip_verbatim(s)))
+    }
+
+    /// `project_dir` as the text the notes and skills of a project are filed under (the `\\?\` of Windows is left out, so a plain chat and a
+    /// worktree chat of one project file under the same text).
+    pub fn project_key(&self) -> String {
+        self.project_dir().to_string_lossy().into_owned()
+    }
+}
+
 pub fn new_meta(cwd: PathBuf, model: Option<String>, provider: Option<ProviderRef>, container: bool, account: Option<AccountRef>) -> Meta {
     Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider, container, worktree: None, account, imported_from: None, permission_mode: Default::default(), named: false, handed: None, slash_commands: Vec::new(), project_cfg: None }
 }
@@ -684,7 +699,12 @@ impl Actor {
     /// It is rebuilt at every start, so a resumed chat gets the notes as they are now.
     fn write_recall(&mut self) -> Option<PathBuf> {
         let store = self.realm.as_ref()?.memory.clone()?;
-        let notes = store.recall(&self.meta.cwd.to_string_lossy());
+        let project = self.meta.project_key();
+        // A note saved before worktree chats shared their project's notes is filed under the worktree's folder: it moves to the project.
+        if self.meta.worktree.is_some() {
+            store.rehome(&self.meta.cwd.to_string_lossy(), &project);
+        }
+        let notes = store.recall(&project);
         let block = recall_block(&notes)?;
         let path = self.recall_path();
         crate::private::create_dir(path.parent()?).ok()?;
@@ -1388,7 +1408,7 @@ impl Actor {
                 self.set_state(State::Idle);
                 // A provider chat is never read by auto-save or skill proposals: their runs go to the account.
                 if subtype == "success" && self.meta.provider.is_none() {
-                    let turn = TurnEnd { sid: self.meta.sid.clone(), cwd: self.meta.cwd.to_string_lossy().into_owned() };
+                    let turn = TurnEnd { sid: self.meta.sid.clone(), cwd: self.meta.project_key() };
                     if let Some(realm) = &self.realm {
                         if let Some(turns) = &realm.turns {
                             let _ = turns.send(turn.clone());
@@ -1494,7 +1514,7 @@ impl Actor {
     fn write_skills(&mut self) -> Option<PathBuf> {
         let store = self.realm.as_ref()?.skills.clone()?;
         let path = self.skills_path();
-        let names = store.materialize(&self.meta.cwd.to_string_lossy(), &path).ok()?;
+        let names = store.materialize(&self.meta.project_key(), &path).ok()?;
         if names.is_empty() {
             return None;
         }
@@ -1551,7 +1571,7 @@ impl Actor {
         if lines.len() > 40 {
             lines.drain(..lines.len() - 40);
         }
-        ProposalInput { cwd: self.meta.cwd.to_string_lossy().into_owned(), user_texts: texts, tool_lines: lines, last_turn_tools: turn_tools, external_used: external, last_seq: self.seq, provider: self.meta.provider.is_some(), login: self.meta.provider.as_ref().is_some_and(|p| p.login), via_gateway: self.log.iter().any(|e| e.data["via_gateway"] == true), account: self.meta.account.clone() }
+        ProposalInput { cwd: self.meta.project_key(), user_texts: texts, tool_lines: lines, last_turn_tools: turn_tools, external_used: external, last_seq: self.seq, provider: self.meta.provider.is_some(), login: self.meta.provider.as_ref().is_some_and(|p| p.login), via_gateway: self.log.iter().any(|e| e.data["via_gateway"] == true), account: self.meta.account.clone() }
     }
 
     /// The model speaks with no message of ours before it (a background job ended and the program told it, so it goes on by itself): the
@@ -1988,6 +2008,29 @@ pub fn is_slash(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn in_worktree(cwd: &str, repo: &str) -> Meta {
+        let mut meta = new_meta(PathBuf::from(cwd), None, None, false, None);
+        meta.worktree = Some(crate::worktree::WorktreeRef { repo: PathBuf::from(repo), branch: "tenrec/x".into(), base_branch: "main".into(), base_commit: "c".into(), removed: false, root: None, config_hash: String::new() });
+        meta
+    }
+
+    #[test]
+    fn the_project_of_a_worktree_chat_is_the_folder_it_was_made_from() {
+        assert_eq!(in_worktree("/w/k/sid", "/p").project_key(), "/p");
+        assert_eq!(in_worktree("/w/k/sid", "/p").project_dir(), PathBuf::from("/p"));
+        let plain = new_meta(PathBuf::from("/p"), None, None, false, None);
+        assert_eq!(plain.project_key(), "/p", "a chat without a worktree is the project of its own folder");
+        assert_eq!(plain.project_key(), in_worktree("/w/k/sid", "/p").project_key(), "so both read and write the same notes");
+    }
+
+    #[test]
+    fn on_windows_a_plain_chat_and_a_worktree_chat_of_one_project_have_one_key() {
+        // `canonicalize` leaves `\\?\` on a plain chat's folder; the worktree's repo went through `platform::canon`, which does not.
+        let plain = new_meta(PathBuf::from(r"\\?\C:\proj"), None, None, false, None);
+        assert_eq!(plain.project_key(), in_worktree(r"C:\w\sid", r"C:\proj").project_key());
+        assert_eq!(plain.cwd, PathBuf::from(r"\\?\C:\proj"), "the folder the chat is stored with is not touched");
+    }
 
     #[test]
     fn a_command_is_not_a_topic() {

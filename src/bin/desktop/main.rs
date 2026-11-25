@@ -57,8 +57,10 @@ struct App {
     data: PathBuf,
     /// The in-process link the panels speak over (the web page's operations).
     bus: bus::Bus,
-    /// The open chat's project folder as the core writes it: the Memory panel's "this project".
+    /// The folder the open chat runs in (a worktree chat: the worktree's folder).
     cwd: Mutex<Option<String>>,
+    /// The open chat's project (a worktree chat: the folder the worktree was made from) as notes are filed: the Memory panel's "this project".
+    project: Mutex<Option<String>>,
     /// The open chat's account (None: the default one); a skill proposed from the chat belongs to it.
     chat_acct: Mutex<Option<String>>,
     /// The command names the open chat's program listed (its skills and custom commands): the "/" menu offers them.
@@ -167,7 +169,7 @@ fn main() {
     let zoom_pct = zoom::saved(&data);
     let zoom_data = data.clone();
     let (bus_tx, bus_rx, term_rx) = tenrec::server::local_with_terminal(registry.clone(), term::enabled());
-    let app = Arc::new(App { registry: registry.clone(), lang, current: Mutex::new(Current { sid: None, transcript: Transcript::new(lang), epoch: 0, follow: None }), weak: ui.as_weak(), data, bus: bus::Bus::new(bus_tx), cwd: Mutex::new(None), chat_acct: Mutex::new(None), slash_names: Mutex::new(Vec::new()) });
+    let app = Arc::new(App { registry: registry.clone(), lang, current: Mutex::new(Current { sid: None, transcript: Transcript::new(lang), epoch: 0, follow: None }), weak: ui.as_weak(), data, bus: bus::Bus::new(bus_tx), cwd: Mutex::new(None), project: Mutex::new(None), chat_acct: Mutex::new(None), slash_names: Mutex::new(Vec::new()) });
     wire(&ui, &app);
     panels::wire(&ui, &app);
     team::wire(&ui, &app);
@@ -1559,6 +1561,7 @@ async fn refresh_sessions(app: &Arc<App>) {
     notify::check_budget(&app.data, app.lang, &app.registry.costs().snapshot(), budgets.budget_daily_usd, budgets.budget_monthly_usd);
     let active = list.iter().find(|i| current.as_deref() == Some(i.meta.sid.as_str()));
     *app.cwd.lock().expect("cwd") = active.map(|i| i.meta.cwd.to_string_lossy().into_owned());
+    *app.project.lock().expect("project") = active.map(|i| i.meta.project_key());
     *app.slash_names.lock().expect("slash names") = active.map(|i| i.meta.slash_commands.clone()).unwrap_or_default();
     let chat_acct = active.and_then(|i| i.meta.account.as_ref().map(|a| a.id.clone()));
     // The gateway picker: whether this chat may switch (it belongs to an account, has no container, and its provider is none or one that uses
@@ -1595,7 +1598,7 @@ async fn refresh_sessions(app: &Arc<App>) {
             let m = &info.meta;
             let state = serde_json::to_value(&info.state).ok().and_then(|v| v["state"].as_str().map(str::to_owned)).unwrap_or_else(|| "idle".into());
             // A chat in a worktree is listed under the project the worktree was made from.
-            let home_dir = m.worktree.as_ref().map(|w| w.repo.clone()).unwrap_or_else(|| m.cwd.clone());
+            let home_dir = m.project_dir();
             let group = home_dir.display().to_string();
             let folder = home_dir.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| group.clone());
             let mut tags = Vec::new();
