@@ -679,8 +679,8 @@ mod tests {
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
         let (store, notice) = ProviderStore::open(path.clone());
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        if let Some(notice) = notice {
-            assert!(notice.contains("could not be removed"), "{notice}");
+        // As root the rewrite succeeds and the notice (about the removed token) is a different one: only a failed rewrite is checked here.
+        if notice.is_some_and(|n| n.contains("could not be removed")) {
             assert_eq!(store.list_views().len(), 1, "the list is kept");
             assert!(std::fs::read_to_string(&path).unwrap().contains("sk-ant-oat01"), "the file is as it was");
             store.save(Form { id: Some("a".into()), name: "A".into(), base_url: "https://a.example".into(), ..Default::default() }, 2).unwrap();
