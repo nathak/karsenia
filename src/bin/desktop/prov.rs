@@ -7,7 +7,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use slint::{ComponentHandle, SharedString};
 use tenrec::view::i18n::{fill, tr};
-use tenrec::view::sched::{login_choice, prov_op, prov_view, LoginPick, ProvForm};
+use tenrec::view::sched::{in_account_choice, login_choice, prov_op, prov_view, LoginPick, ProvForm};
 
 use crate::{App, AppWindow, Prov, ProvRowV};
 
@@ -229,21 +229,33 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         // The account is judged only for an account-login provider; a mismatch or a gone account is refused, never the default account.
         let account = if p.get_f_auth() == 4 {
             let (opened, opened_index) = OPENED.with(|o| o.borrow().clone());
-            let touched = p.get_f_login_acct() != opened_index;
-            let shown = crate::accounts::id_at(p.get_f_login_acct(), &login_name);
-            match login_choice(opened.as_deref(), touched, shown.clone(), &crate::accounts::ids()) {
-                Ok(account) => account,
-                Err(why) => {
-                    // The person is told once; what the picker shows (or nothing, for an account that is gone) is the start of the next try.
-                    let (key, start) = match (why, shown) {
-                        (LoginPick::Stale, Some(now)) => ("pv_login_stale", (now, p.get_f_login_acct())),
-                        (LoginPick::Stale, None) => ("pv_login_stale", (None, -1)),
-                        (LoginPick::Gone, _) => ("pv_login_gone", (opened, -1)),
-                    };
-                    p.set_f_login_acct(start.1);
-                    OPENED.with(|o| *o.borrow_mut() = start);
-                    crate::toast(&ui, tr(a.lang, key));
-                    return;
+            if p.get_form_from() != "settings" {
+                // Opened from an account's card: no picker is shown, the card names the account.
+                match in_account_choice(opened.as_deref(), &crate::accounts::ids()) {
+                    Ok(account) => account,
+                    Err(_) => {
+                        crate::toast(&ui, tr(a.lang, "pv_login_gone_card"));
+                        return;
+                    }
+                }
+            } else {
+                let touched = p.get_f_login_acct() != opened_index;
+                let shown = crate::accounts::id_at(p.get_f_login_acct(), &login_name);
+                match login_choice(opened.as_deref(), touched, shown.clone(), &crate::accounts::ids()) {
+                    Ok(account) => account,
+                    Err(why) => {
+                        // The person is told once. What the picker shows is the start of the next try; a picker that shows nothing stays
+                        // empty (and refuses again) until an account is picked.
+                        let (key, start) = match (why, shown) {
+                            (LoginPick::Stale, Some(now)) => ("pv_login_stale", (now, p.get_f_login_acct())),
+                            (LoginPick::Stale, None) => ("pv_login_stale", (opened, -1)),
+                            (LoginPick::Gone, _) => ("pv_login_gone", (opened, -1)),
+                        };
+                        p.set_f_login_acct(start.1);
+                        OPENED.with(|o| *o.borrow_mut() = start);
+                        crate::toast(&ui, tr(a.lang, key));
+                        return;
+                    }
                 }
             }
         } else {

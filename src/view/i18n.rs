@@ -98,6 +98,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("gw_none", "게이트웨이 없음", "No gateway"),
     ("gw_stale", "게이트웨이 목록이 바뀌었습니다. 다시 선택해 주세요.", "The list of gateways changed. Pick again."),
     ("pv_login_gone", "이 게이트웨이의 계정이 없어졌습니다. 계정을 다시 고르거나 폼을 닫고 다시 여세요.", "The account of this gateway is gone. Pick an account again, or close the form and open it again."),
+    ("pv_login_gone_card", "이 계정이 없어졌습니다. 폼을 닫아 주세요.", "This account is gone. Close the form."),
     ("pv_login_stale", "계정 목록이 바뀌어 선택창이 다른 계정을 보여 줍니다. 계정을 확인하고 다시 저장하세요.", "The list of accounts changed, so the picker shows another account now. Check the account and save again."),
     ("gw_confirm", "이 대화를 게이트웨이로 계속하면, 지금까지의 대화 내용(이전에 쓴 이력 검색 결과와 스킬 내용 포함)이 이 계정의 로그인 토큰과 함께 게이트웨이로 전송됩니다. 계속할까요?", "If this chat goes on through the gateway, the conversation so far (including earlier history-search results and skill text) is sent to it, together with this account's login token. Continue?"),
     ("gw_confirm_btn", "게이트웨이로 계속", "Continue through the gateway"),

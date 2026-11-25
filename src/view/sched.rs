@@ -397,6 +397,17 @@ pub fn login_choice(opened: Option<&str>, touched: bool, picked: Option<Option<S
     }
 }
 
+/// The account of a gateway whose form was opened from an account's card (there is no picker: the card names the account): that account,
+/// whatever the list does meanwhile, or `Gone` when it was deleted.
+pub fn in_account_choice(opened: Option<&str>, ids: &[Option<String>]) -> Result<Option<String>, LoginPick> {
+    let opened = opened.map(str::to_owned);
+    if ids.is_empty() || ids.contains(&opened) {
+        Ok(opened)
+    } else {
+        Err(LoginPick::Gone)
+    }
+}
+
 /// The `provider_save` operation. An empty key field puts no "token" in it at all (the saved key stays); an empty id is a new
 /// provider.
 pub fn prov_op(f: &ProvForm) -> Value {
@@ -569,6 +580,16 @@ mod tests {
         let now = ids(&[None, Some("b"), Some("c")]);
         assert_eq!(login_choice(Some("b"), false, Some(Some("c".into())), &now), Err(LoginPick::Stale));
         assert_eq!(login_choice(Some("b"), false, None, &now), Err(LoginPick::Stale), "an index out of the list");
+    }
+
+    #[test]
+    fn a_form_opened_from_an_accounts_card_keeps_that_account_whatever_the_list_does() {
+        // The picker is not there (the card names the account), so a list that slid cannot change which account is saved.
+        let now = ids(&[None, Some("b"), Some("c")]);
+        assert_eq!(in_account_choice(Some("b"), &now), Ok(Some("b".to_owned())));
+        assert_eq!(in_account_choice(None, &now), Ok(None));
+        assert_eq!(in_account_choice(Some("x"), &now), Err(LoginPick::Gone), "an account that is gone is refused");
+        assert_eq!(in_account_choice(Some("x"), &[]), Ok(Some("x".to_owned())), "a list that has not come yet cannot say it is gone");
     }
 
     #[test]

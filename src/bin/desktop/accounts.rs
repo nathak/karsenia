@@ -251,7 +251,8 @@ pub fn follow_chat(ui: &AppWindow, app: &App, sid: &str, account: Option<String>
 
 /// The account id at an index of the account picker (None outside the list; Some(None) is the default account), with the name it showed.
 pub fn id_at(index: i32, name: &str) -> Option<Option<String>> {
-    let i = index.max(0) as usize;
+    // Below zero the picker shows nothing: that is no account, not the first one (the default account).
+    let i = usize::try_from(index).ok()?;
     let same = NAMES.with(|n| n.borrow().get(i).map(String::as_str) == Some(name));
     same.then(|| IDS.with(|ids| ids.borrow().get(i).cloned().flatten()))
 }
@@ -508,4 +509,19 @@ fn open_login(bin: &str, kind: tenrec::accounts::AccountKind, wait: &str, accoun
     }
     cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE);
     cmd.spawn()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_picker_index_below_zero_is_no_account_not_the_first_one() {
+        NAMES.with(|n| *n.borrow_mut() = vec!["Default".into(), "Work".into()]);
+        IDS.with(|i| *i.borrow_mut() = vec![None, Some("w".into())]);
+        assert_eq!(id_at(-1, "Default"), None, "-1 is an empty picker, not the default account");
+        assert_eq!(id_at(0, "Default"), Some(None));
+        assert_eq!(id_at(1, "Work"), Some(Some("w".to_owned())));
+        assert_eq!(id_at(1, "Default"), None, "the name it showed must still agree");
+    }
 }
