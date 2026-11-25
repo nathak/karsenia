@@ -375,18 +375,25 @@ pub enum LoginPick {
 
 /// The account an account-login provider is saved with (`None` is the default account). `opened` is the account the form was opened
 /// with, `touched` whether the person changed the picker since, `picked` what the picker's entry stands for now (`None`: it matches no
-/// entry of the list) and `ids` the list now (`None` entries are the default account). A form that was not touched keeps the account it
-/// was opened with whatever happened to the list (an index slides when an account before it is deleted); an account that is gone or an
-/// entry that matches nothing is refused, never quietly turned into the default account (whose login would go to the gateway).
+/// entry of the list) and `ids` the list now (`None` entries are the default account). A person's pick is taken as it is. A form that
+/// was not touched keeps the account it was opened with while the picker still shows it; when the list slid under the picker (an
+/// account before it was deleted) the picker shows another account than the form started with, so neither is saved until the person
+/// has been told (`Stale`: the caller takes what is shown as the new start). An account that is gone is refused (`Gone`). Nothing is
+/// ever quietly turned into another account, the default one least of all (its login would go to the gateway).
 pub fn login_choice(opened: Option<&str>, touched: bool, picked: Option<Option<String>>, ids: &[Option<String>]) -> Result<Option<String>, LoginPick> {
     if touched {
         return picked.ok_or(LoginPick::Stale);
     }
     let opened = opened.map(str::to_owned);
-    if ids.is_empty() || ids.contains(&opened) {
-        Ok(opened)
-    } else {
-        Err(LoginPick::Gone)
+    if ids.is_empty() {
+        return Ok(opened);
+    }
+    if !ids.contains(&opened) {
+        return Err(LoginPick::Gone);
+    }
+    match picked {
+        Some(shown) if shown == opened => Ok(opened),
+        _ => Err(LoginPick::Stale),
     }
 }
 
@@ -548,12 +555,20 @@ mod tests {
     }
 
     #[test]
-    fn an_untouched_picker_keeps_the_account_the_form_opened_with() {
-        // The form was opened for account "b" (at index 2); an account before it was deleted, so "b" is at index 1 now.
+    fn an_untouched_picker_that_still_shows_the_opening_account_keeps_it() {
         let now = ids(&[None, Some("b"), Some("c")]);
-        assert_eq!(login_choice(Some("b"), false, Some(Some("c".into())), &now), Ok(Some("b".to_owned())), "not the account that slid into its index");
+        assert_eq!(login_choice(Some("b"), false, Some(Some("b".into())), &now), Ok(Some("b".to_owned())));
         // The default account (None) is an account too.
         assert_eq!(login_choice(None, false, Some(None), &now), Ok(None));
+    }
+
+    #[test]
+    fn a_list_that_slid_under_the_picker_is_told_not_saved_in_silence() {
+        // Opened for "b"; an account before it was deleted, so the picker's entry (the same index) now shows "c": neither account is saved
+        // until the person has been told (the caller then takes what is shown as the new start).
+        let now = ids(&[None, Some("b"), Some("c")]);
+        assert_eq!(login_choice(Some("b"), false, Some(Some("c".into())), &now), Err(LoginPick::Stale));
+        assert_eq!(login_choice(Some("b"), false, None, &now), Err(LoginPick::Stale), "an index out of the list");
     }
 
     #[test]

@@ -230,10 +230,19 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         let account = if p.get_f_auth() == 4 {
             let (opened, opened_index) = OPENED.with(|o| o.borrow().clone());
             let touched = p.get_f_login_acct() != opened_index;
-            match login_choice(opened.as_deref(), touched, crate::accounts::id_at(p.get_f_login_acct(), &login_name), &crate::accounts::ids()) {
+            let shown = crate::accounts::id_at(p.get_f_login_acct(), &login_name);
+            match login_choice(opened.as_deref(), touched, shown.clone(), &crate::accounts::ids()) {
                 Ok(account) => account,
                 Err(why) => {
-                    crate::toast(&ui, tr(a.lang, if why == LoginPick::Gone { "pv_login_gone" } else { "pv_login_stale" }));
+                    // The person is told once; what the picker shows (or nothing, for an account that is gone) is the start of the next try.
+                    let (key, start) = match (why, shown) {
+                        (LoginPick::Stale, Some(now)) => ("pv_login_stale", (now, p.get_f_login_acct())),
+                        (LoginPick::Stale, None) => ("pv_login_stale", (None, -1)),
+                        (LoginPick::Gone, _) => ("pv_login_gone", (opened, -1)),
+                    };
+                    p.set_f_login_acct(start.1);
+                    OPENED.with(|o| *o.borrow_mut() = start);
+                    crate::toast(&ui, tr(a.lang, key));
                     return;
                 }
             }
