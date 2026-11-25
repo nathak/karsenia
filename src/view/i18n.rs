@@ -361,6 +361,8 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("nc_title", "새 대화 · 계정 관리", "New chat · Accounts"),
     ("nc_sub", "프로젝트 폴더를 고르고, 쓸 로그인 계정을 정해 대화를 시작합니다.", "Pick a project folder and the login account to use, then start a chat."),
     ("nc_card", "새 대화", "New chat"),
+    ("nc_defaults_used", "이 프로젝트의 마지막 대화 설정을 채웠습니다.", "Filled in from the last chat in this project."),
+    ("nc_defaults_reset", "기본값으로", "Use defaults"),
     ("nc_folder_hint", "폴더의 경로를 쓰거나 찾아보기로 고르세요.", "Type the folder's path or pick it with Browse."),
     ("nc_model", "모델 선택", "Model"),
     ("nc_provider", "프로바이더", "Provider"),

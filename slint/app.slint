@@ -14,9 +14,9 @@ import { TeamPage } from "team.slint";
 import { NewChatCard, AccountsManage } from "newchat.slint";
 import { VhdbPage, Vh, VhDecision } from "vhdb.slint";
 import { ImportPanel, Imp, ImpRow } from "import.slint";
-import { MemPanel, SkillsPanel, SettingsPanel, WtCard, UsageCard, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, Proj, ProjCard, SwbDone, SwbEvidence, Pal, PalRow, Slash, SlashRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole } from "panels.slint";
+import { MemPanel, SkillsPanel, SettingsPanel, WtCard, UsageCard, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, NewForm, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, Proj, ProjCard, SwbDone, SwbEvidence, Pal, PalRow, Slash, SlashRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole } from "panels.slint";
 export { Sched, SchedHeadV, SchedTask, SchedRun, Files, FsRow, FsCrumb, HlLine, HlTok, Imp, ImpRow, ChatRow, ChatImg, TRow }
-export { Vh, VhDecision, Theme, T, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, Proj, SwbDone, SwbEvidence, Pal, PalRow, Slash, SlashRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole }
+export { Vh, VhDecision, Theme, T, Usage, UsageWin, Prefs, Know, Mem, Sk, Search, About, Dialog, Acct, NewForm, Team, Prov, ProvRowV, Att, AttV, Wt, WtLine, WtRow, Proj, SwbDone, SwbEvidence, Pal, PalRow, Slash, SlashRow, MemRow, MemHead, SkillRow, SkVerV, SkHead, HitRow, AcctRow, PlugRow, GfRule, WbItem, TeamRole }
 
 
 // One row of the chat list: a project folder (head) or a chat under it. A chat in a git worktree is listed under the project it came from.
@@ -250,7 +250,7 @@ export component AppWindow inherits Window {
     // The text view's field held the keyboard focus and is gone when it closes: the composer (or the key scope) takes it back.
     changed text-view => { if (!root.text-view && !root.perm.visible && !Dialog.visible) { root.refocus(); } }
     changed debug-view => { if (!root.debug-view && !root.perm.visible && !Dialog.visible) { root.refocus(); } }
-    changed new-open => { if (root.new-open) { root.panel-open(100); } else { root.new-perm = 0; root.new-name = ""; root.refocus(); } }
+    changed new-open => { if (root.new-open) { NewForm.touched-model = false; NewForm.touched-acct = false; NewForm.touched-perm = false; NewForm.touched-wt = false; NewForm.used = false; if (root.new-cwd != "") { NewForm.cwd-settled(root.new-cwd); } root.panel-open(100); } else { root.new-perm = 0; root.new-name = ""; root.refocus(); } }
     // A panel that goes away takes focus with it.
     changed side => { root.more-open = false; root.cont-open = false; Team.open = false; Usage.open = false; Know.adding = false; root.panel-open(root.side); root.refocus(); }
 

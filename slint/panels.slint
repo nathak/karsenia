@@ -22,6 +22,21 @@ export struct AcctRow { gws: [GwRow], id: string, name: string, sub: string, sta
 export struct UsageAcct { name: string, five: string, five-level: string, week: string, week-level: string, shown: bool, stale: bool }
 export struct UsageWin { label: string, pct: string, frac: float, level: string, reset: string }
 
+// What the new-chat form takes from what is remembered for a folder (see `view::new_form`). A field the person set by hand in this form is
+// `touched` and is not filled in again; `used` says that something was filled in (the form then tells, with a button to go back).
+export global NewForm {
+    // The model box's index (see `new_form::MODELS`).
+    in-out property <int> model;
+    in-out property <bool> touched-model;
+    in-out property <bool> touched-acct;
+    in-out property <bool> touched-perm;
+    in-out property <bool> touched-wt;
+    in-out property <bool> used;
+    // The folder is settled (picked, typed and accepted, the field left, or the form opened on it): ask what is remembered for it.
+    callback cwd-settled(string);
+    callback reset-defaults();
+}
+
 // The Claude logins (personal, work...). Each has its own notes, skills and history; the panels show one of them.
 export global Acct {
     in property <[AcctRow]> rows;

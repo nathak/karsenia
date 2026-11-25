@@ -222,6 +222,17 @@ fn scenes(ui: &AppWindow, window: &MinimalSoftwareWindow, out: &std::path::Path)
     // One account, a window wide enough for the gateway and copy but not for debug: the menu has debug only.
     open_chat(ui, &["기본 계정"]);
     save(window, &out.join("16-1160x800-1acct-dark.png"), 1160, 800);
+    // The new-chat form with what was remembered for the folder filled in (the line that says so, and the way back).
+    ui.set_new_open(true);
+    ui.set_new_cwd("/home/me/work/karsenia".into());
+    // Opening the form clears what was filled in (and then asks for the folder's); the picture is taken after that.
+    save(window, &out.join("17a-newchat-open-dark.png"), 1280, 1000);
+    ui.global::<NewForm>().set_model(1);
+    ui.set_new_perm(2);
+    ui.global::<NewForm>().set_used(true);
+    save(window, &out.join("17-1280x800-newchat-defaults-dark.png"), 1280, 1000);
+    ui.global::<NewForm>().set_used(false);
+    ui.set_new_open(false);
     open_chat(ui, &many);
     ui.global::<Theme>().set_mode(1);
     save(window, &out.join("11-1280x800-12acct-light.png"), 1280, 800);

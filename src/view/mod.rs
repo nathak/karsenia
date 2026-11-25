@@ -10,6 +10,7 @@ pub mod git;
 pub mod highlight;
 pub mod guardfile;
 pub mod import;
+pub mod new_form;
 pub mod notify;
 pub mod palette;
 pub mod panels;

@@ -1,7 +1,7 @@
 // The new-chat page with the accounts beside it (Stitch "새 대화 · 계정 관리"): the left card starts a chat, the right one manages the logins.
 import { ComboBox, CheckBox, LineEdit } from "std-widgets.slint";
 import { Theme, T, Btn, Label, Badge, WText, SelText, IconBtn, Pill } from "base.slint";
-import { Acct, AcctRow, PlugRow, Prov, ProvForm, Usage } from "panels.slint";
+import { Acct, AcctRow, NewForm, PlugRow, Prov, ProvForm, Usage } from "panels.slint";
 
 // The left card: folder, model, provider, account, options, start.
 export component NewChatCard inherits Rectangle {
@@ -35,7 +35,11 @@ export component NewChatCard inherits Rectangle {
         Text { text: T.folder; color: Theme.on-var; font-size: 13px; font-weight: 600; }
         HorizontalLayout {
             spacing: 8px;
-            LineEdit { horizontal-stretch: 1; text <=> root.cwd; placeholder-text: T.folder-ph; font-size: 14px; }
+            LineEdit {
+                horizontal-stretch: 1; text <=> root.cwd; placeholder-text: T.folder-ph; font-size: 14px;
+                accepted(t) => { NewForm.cwd-settled(root.cwd); }
+                changed has-focus => { if (!self.has-focus && root.cwd != "") { NewForm.cwd-settled(root.cwd); } }
+            }
             Btn { text: T.tr("folder_pick"); height: 34px; show-icon: true; icon: @image-url("icons/folder.svg"); enabled: !root.picking; clicked => { root.pick-folder(); } }
         }
         WText { text: T.tr("nc_folder_hint"); size: 11px; fg: Theme.outline; }
@@ -46,7 +50,7 @@ export component NewChatCard inherits Rectangle {
             VerticalLayout {
                 horizontal-stretch: 1; spacing: 6px;
                 Text { text: T.tr("nc_model"); color: Theme.on-var; font-size: 13px; font-weight: 600; }
-                model-box := ComboBox { model: ["default", "haiku", "sonnet", "opus"]; current-index: 0; }
+                model-box := ComboBox { model: ["default", "haiku", "sonnet", "opus"]; current-index <=> NewForm.model; selected(v) => { NewForm.touched-model = true; } }
             }
             if Prov.new-names.length > 1: VerticalLayout {
                 horizontal-stretch: 1; spacing: 6px;
@@ -84,15 +88,20 @@ export component NewChatCard inherits Rectangle {
                         Rectangle { width: 20px; height: 20px; border-radius: 10px; background: Theme.primary; Image { source: @image-url("icons/check.svg"); width: 12px; height: 12px; colorize: Theme.on-primary; } }
                     }
                 }
-                ta := TouchArea { mouse-cursor: pointer; clicked => { root.acct = i; } }
+                ta := TouchArea { mouse-cursor: pointer; clicked => { root.acct = i; NewForm.touched-acct = true; } }
             }
         }
-        CheckBox { text: T.tr("new_worktree"); enabled: !root.container; checked <=> root.worktree; }
+        CheckBox { text: T.tr("new_worktree"); enabled: !root.container; checked <=> root.worktree; toggled => { NewForm.touched-wt = true; } }
         if root.worktree: WText { text: T.tr("new_wt_note"); size: 11px; fg: Theme.outline; }
         if Prov.new-names.length > 1: CheckBox { text: T.tr("new_container"); enabled: root.prov > 0 && !root.worktree; checked <=> root.container; }
         Text { text: T.tr("perm_label"); color: Theme.on-var; font-size: 13px; font-weight: 600; }
-        ComboBox { model: [T.tr("perm_m_default"), T.tr("perm_m_acceptEdits"), T.tr("perm_m_plan"), T.tr("perm_m_auto"), T.tr("perm_m_dontAsk"), T.tr("perm_m_bypassPermissions")]; current-index <=> root.perm; }
+        ComboBox { model: [T.tr("perm_m_default"), T.tr("perm_m_acceptEdits"), T.tr("perm_m_plan"), T.tr("perm_m_auto"), T.tr("perm_m_dontAsk"), T.tr("perm_m_bypassPermissions")]; current-index <=> root.perm; selected(v) => { NewForm.touched-perm = true; } }
         WText { text: [T.tr("perm_n_default"), T.tr("perm_n_acceptEdits"), T.tr("perm_n_plan"), T.tr("perm_n_auto"), T.tr("perm_n_dontAsk"), T.tr("perm_n_bypassPermissions")][root.perm]; size: 11px; fg: root.perm == 5 ? Theme.error : Theme.outline; }
+        if NewForm.used: HorizontalLayout {
+            spacing: 8px;
+            WText { horizontal-stretch: 1; text: T.tr("nc_defaults_used"); size: 11px; fg: Theme.info; }
+            Btn { text: T.tr("nc_defaults_reset"); height: 26px; clicked => { NewForm.reset-defaults(); } }
+        }
         Btn {
             text: "▶  " + T.start; primary: true; height: 46px; enabled: root.cwd != "";
             clicked => { root.start(root.cwd, model-box.current-value, root.acct, Acct.names.length > 1 && root.prov == 0 ? Acct.names[root.acct] : "", root.prov, Prov.new-names.length > 1 ? Prov.new-names[root.prov] : "", root.container && root.prov > 0, root.worktree, root.perm); }

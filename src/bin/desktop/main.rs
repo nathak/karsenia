@@ -37,6 +37,7 @@ use std::time::Duration;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, StyledText, VecModel};
 use tenrec::registry::Registry;
 use tenrec::view::i18n::{fill, tr, Lang};
+use tenrec::view::new_form::{prefill, Touched};
 use tenrec::view::panels::{ago, attention, in_context, Known, Mark, View};
 use tenrec::view::transcript::{model_label, Row, Transcript};
 
@@ -530,6 +531,10 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
                         toast_later(&a.weak, tr(a.lang, "new_wt_below_top"));
                     }
                     remember_folder(&a.data, &cwd);
+                    // What the chat was made with is what the next form for this project starts with.
+                    if let Some(info) = handle.info().await {
+                        a.registry.remember_defaults(&info.meta);
+                    }
                     let sid = handle.sid.clone();
                     let b = a.clone();
                     let _ = a.weak.upgrade_in_event_loop(move |ui| {
@@ -651,12 +656,57 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
         }));
     });
 
+    // The folder of the new-chat form is settled: what is remembered for it fills the fields the person has not set by hand.
+    let a = app.clone();
+    ui.global::<NewForm>().on_cwd_settled(move |cwd| {
+        let Some(ui) = a.weak.upgrade() else { return };
+        let cwd = cwd.trim().to_owned();
+        if cwd.is_empty() {
+            return;
+        }
+        let form = ui.global::<NewForm>();
+        let touched = Touched { model: form.get_touched_model(), account: form.get_touched_acct(), permission: form.get_touched_perm(), worktree: form.get_touched_wt() };
+        let fill = prefill(&a.registry.project_defaults(&cwd), &cwd, touched, &accounts::ids());
+        if let Some(i) = fill.model {
+            form.set_model(i);
+        }
+        if let Some(i) = fill.account {
+            ui.set_new_acct(i);
+        }
+        if let Some(i) = fill.permission {
+            ui.set_new_perm(i);
+        }
+        if let Some(on) = fill.worktree {
+            ui.set_new_worktree(on);
+            // A worktree chat never runs in a container.
+            if on {
+                ui.set_new_container(false);
+            }
+        }
+        form.set_used(fill.any());
+    });
+    // "Use defaults": the form's own starting values, and the fields stay as they are even if the folder is settled again.
+    let a = app.clone();
+    ui.global::<NewForm>().on_reset_defaults(move || {
+        let Some(ui) = a.weak.upgrade() else { return };
+        let form = ui.global::<NewForm>();
+        form.set_model(0);
+        ui.set_new_perm(0);
+        ui.set_new_worktree(false);
+        ui.set_new_acct(ui.global::<Acct>().get_pre_acct());
+        (form.set_touched_model(true), form.set_touched_acct(true), form.set_touched_perm(true), form.set_touched_wt(true));
+        form.set_used(false);
+    });
+
     // "Browse…": the system's folder picker, over the window.
     let (lang, weak) = (app.lang, ui.as_weak());
     ui.on_pick_folder(move || {
         let Some(ui) = weak.upgrade() else { return };
         let start = ui.get_new_cwd().to_string();
-        pick_folder(&ui, lang, start, |ui, busy| ui.set_picking(busy), |ui, path| ui.set_new_cwd(path.into()));
+        pick_folder(&ui, lang, start, |ui, busy| ui.set_picking(busy), |ui, path| {
+            ui.set_new_cwd(path.clone().into());
+            ui.global::<NewForm>().invoke_cwd_settled(path.into());
+        });
     });
 
     let a = app.clone();
