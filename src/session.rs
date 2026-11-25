@@ -413,7 +413,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), cli_key: None, seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -432,6 +432,8 @@ struct Actor {
     /// The key of this chat's provider while its process runs: whatever the chat shows or stores has it replaced.
     /// The key and the subscription token of this chat's provider: replaced wherever the chat would show or store them.
     secrets: Vec<String>,
+    /// Which `claude` program the chat last started (see `cli_version::key`), so its `init` can say what version it is.
+    cli_key: Option<String>,
     seq: u64,
     bcast: broadcast::Sender<Envelope>,
     state: State,
@@ -1075,6 +1077,9 @@ impl Actor {
                         };
                         crate::claude::env::plan(&inherited, Some(provider), &config_dir)
                     };
+                    // The program's own version (from an earlier `init` of the same program) lets the app's name follow its User-Agent.
+                    let cli_key = crate::claude::cli_version::key(&self.bin, container.as_ref());
+                    let env = crate::claude::env::with_user_agent(env, Some(provider), crate::claude::cli_version::known(&cli_key).as_deref());
                     self.secrets = provider.secrets();
                     (None, None, None, env, Some(provider.base_url.clone()), self.meta.model.clone().or_else(|| provider.model.clone()))
                 }
@@ -1120,6 +1125,7 @@ impl Actor {
             let debug_file = self.debug_file();
             let team = self.team_now();
             let (agents, effort) = (team.as_ref().map(crate::workbench::team::agents_json), team.as_ref().and_then(|t| t.lead_effort).map(|e| e.as_str().to_owned()));
+            self.cli_key = Some(crate::claude::cli_version::key(&self.bin, container.as_ref()));
             let opts = SpawnOpts { bin: self.bin.clone(), cwd: self.meta.cwd.clone(), model, resume: self.meta.claude_session_id.clone(), mcp_config, system_file, plugin_dir, env, pinned_url, container, permission_mode: self.meta.permission_mode, name: self.meta.cli_name(), plugins_off: self.plugins_off(), guard_hook, stop_hook, debug_file, agents, effort, user_settings_only: matches!(self.meta.project_cfg, Some(ProjectChoice::Without)) };
             match ClaudeProcess::spawn(&opts) {
                 Ok((process, rx)) => {
@@ -1297,6 +1303,9 @@ impl Actor {
     fn event(&mut self, event: ProcEvent) {
         match event {
             ProcEvent::Line(Event::Init { session_id, raw, .. }) => {
+                if let (Some(key), Some(version)) = (&self.cli_key, crate::claude::cli_version::from_init(&raw)) {
+                    crate::claude::cli_version::remember(key, version);
+                }
                 let mut changed = false;
                 if self.meta.claude_session_id.as_deref() != Some(session_id.as_str()) {
                     self.meta.claude_session_id = Some(session_id);

@@ -108,6 +108,35 @@ pub fn account_plan(inherited: &[String], config_dir: &Path) -> EnvPlan {
     EnvPlan { set: vec![("CLAUDE_CONFIG_DIR".into(), config_dir.display().to_string())], remove }
 }
 
+/// What the app calls itself to a provider.
+pub const APP_UA: &str = concat!("Karsenia/", env!("CARGO_PKG_VERSION"));
+
+/// Appends the app's name to the program's own User-Agent for a provider chat. The program replaces its whole User-Agent with one given in
+/// `ANTHROPIC_CUSTOM_HEADERS` (measured with 2.1.326: `claude-cli/2.1.326 (external, sdk-cli)`), so the program's own part is written
+/// back first and left as it was. With no provider, no (clean) program version yet, or a `User-Agent` line the person wrote in the
+/// provider's header lines, the plan is returned as it is. The line is added after the `{key}` of the header lines was filled in, so it
+/// never goes through that, and it holds nothing but a clean version and a constant.
+pub fn with_user_agent(mut plan: EnvPlan, provider: Option<&Provider>, cli_version: Option<&str>) -> EnvPlan {
+    let Some(provider) = provider else { return plan };
+    let own = provider.headers.as_deref().unwrap_or_default().lines().any(|line| line.split_once(':').is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case("user-agent")));
+    let Some(version) = cli_version.and_then(super::cli_version::clean) else { return plan };
+    if own {
+        return plan;
+    }
+    let line = format!("User-Agent: claude-cli/{version} (external, sdk-cli) {APP_UA}");
+    match plan.set.iter_mut().find(|(name, _)| name == "ANTHROPIC_CUSTOM_HEADERS") {
+        Some((_, value)) => {
+            value.push('\n');
+            value.push_str(&line);
+        }
+        None => {
+            plan.set.push(("ANTHROPIC_CUSTOM_HEADERS".into(), line));
+            plan.remove.retain(|name| name != "ANTHROPIC_CUSTOM_HEADERS");
+        }
+    }
+    plan
+}
+
 /// The names of this process's variables, for `plan` and `account_plan`.
 pub fn inherited_names() -> Vec<String> {
     std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()).collect()
@@ -305,5 +334,55 @@ mod tests {
         let extra = login_plan(&inherited, &p, Some(Path::new("/data/accounts/0123456789abcdef")));
         assert_eq!(value(&extra, "CLAUDE_CONFIG_DIR"), Some("/data/accounts/0123456789abcdef"));
         assert_eq!(value(&extra, "ANTHROPIC_AUTH_TOKEN"), None);
+    }
+
+    fn ua(plan: &EnvPlan) -> Option<&str> {
+        value(plan, "ANTHROPIC_CUSTOM_HEADERS")
+    }
+
+    #[test]
+    fn a_provider_chat_gets_the_apps_name_after_the_programs_own_user_agent() {
+        let mut p = provider(Auth::Bearer, Some("airkey-123456"));
+        p.headers = Some("AIR-Api-Key: {key}".into());
+        let with = with_user_agent(plan(&[], Some(&p), Path::new("/cfg")), Some(&p), Some("2.1.326"));
+        let expected = format!("AIR-Api-Key: airkey-123456\nUser-Agent: claude-cli/2.1.326 (external, sdk-cli) Karsenia/{}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(ua(&with), Some(expected.as_str()));
+        // Without header lines the line stands alone, and an inherited value of the variable is not also removed.
+        let none = provider(Auth::Bearer, Some("airkey-123456"));
+        let alone = with_user_agent(plan(&names(&["ANTHROPIC_CUSTOM_HEADERS"]), Some(&none), Path::new("/cfg")), Some(&none), Some("2.1.326"));
+        assert_eq!(ua(&alone), Some(format!("User-Agent: claude-cli/2.1.326 (external, sdk-cli) Karsenia/{}", env!("CARGO_PKG_VERSION")).as_str()));
+        assert!(!alone.remove.contains(&"ANTHROPIC_CUSTOM_HEADERS".to_owned()));
+        // The key is only where the header lines put it, never in the User-Agent line.
+        let line = ua(&alone).unwrap();
+        assert!(!line.contains("airkey-123456"));
+    }
+
+    #[test]
+    fn a_chat_without_a_provider_and_one_without_a_known_version_are_left_as_they_were() {
+        assert!(with_user_agent(plan(&[], None, Path::new("/cfg")), None, Some("2.1.326")).set.is_empty());
+        let p = provider(Auth::Bearer, Some("airkey-123456"));
+        let base = plan(&[], Some(&p), Path::new("/cfg"));
+        assert!(ua(&with_user_agent(base.clone(), Some(&p), None)).is_none());
+        for bad in ["2.1.326\r\nX-Evil: 1", "2.1.326 (x)", "", &"1".repeat(33), "{key}", "２.１"] {
+            assert!(ua(&with_user_agent(base.clone(), Some(&p), Some(bad))).is_none(), "{bad:?}");
+        }
+        assert!(ua(&with_user_agent(base, Some(&p), Some("2.1.326-beta+3"))).is_some());
+    }
+
+    #[test]
+    fn a_user_agent_the_person_wrote_wins_whatever_its_case() {
+        let mut p = provider(Auth::Bearer, Some("airkey-123456"));
+        p.headers = Some("user-agent: Mine/1".into());
+        let plan = with_user_agent(plan(&[], Some(&p), Path::new("/cfg")), Some(&p), Some("2.1.326"));
+        assert_eq!(ua(&plan), Some("user-agent: Mine/1"));
+    }
+
+    #[test]
+    fn an_account_login_provider_gets_it_too() {
+        let p = provider(Auth::AccountLogin, None);
+        for dir in [None, Some(Path::new("/data/accounts/0123456789abcdef"))] {
+            let plan = with_user_agent(login_plan(&[], &p, dir), Some(&p), Some("2.1.326"));
+            assert!(ua(&plan).is_some_and(|v| v.starts_with("User-Agent: claude-cli/2.1.326 (external, sdk-cli) Karsenia/")));
+        }
     }
 }
