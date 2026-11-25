@@ -31,6 +31,9 @@ pub enum Event {
     CanUseTool(CanUseTool),
     /// A reply to a control request the host sent (an interrupt, for one).
     ControlResponse { request_id: String, raw: Value },
+    /// A request of the program that this app has no answer for (a permission request it cannot show, or another kind such as a hook
+    /// callback or an elicitation): the program waits for an answer, so it is refused with `control_error`.
+    UnhandledControl { request_id: Option<String>, subtype: String, raw: Value },
     /// The end of a turn.
     Result { subtype: String, is_error: bool, total_cost_usd: Option<f64>, duration_ms: Option<u64>, raw: Value },
     /// Anything else that parsed as JSON.
@@ -74,7 +77,7 @@ pub fn parse_line(line: &str) -> Event {
                     });
                 }
             }
-            Event::Raw(value)
+            Event::UnhandledControl { request_id: text(&value, "request_id"), subtype: text(request, "subtype").unwrap_or_default(), raw: value }
         }
         ("control_response", _) => match value["response"].get("request_id").and_then(Value::as_str) {
             Some(request_id) => Event::ControlResponse { request_id: request_id.to_owned(), raw: value },
@@ -330,6 +333,11 @@ pub fn interrupt(request_id: &str) -> String {
     one_line(&json!({"type": "control_request", "request_id": request_id, "request": {"subtype": "interrupt"}}))
 }
 
+/// The refusal of a control request of the program that the app does not handle (the program stops waiting for it).
+pub fn control_error(request_id: &str, error: &str) -> String {
+    one_line(&json!({"type": "control_response", "response": {"subtype": "error", "request_id": request_id, "error": error}}))
+}
+
 /// A control request the host sends on stdin (checked live against Claude Code 2.1.x: `set_model`, `set_permission_mode`,
 /// `stop_task`, `get_context_usage`); the answer is a `control_response` carrying the same `request_id`.
 pub fn control(request_id: &str, request: Value) -> String {
@@ -422,12 +430,34 @@ mod tests {
     }
 
     #[test]
+    fn a_control_request_the_host_does_not_handle_is_named_not_raw() {
+        let unhandled = |line: &str| match parse_line(line) {
+            Event::UnhandledControl { request_id, subtype, .. } => (request_id, subtype),
+            other => panic!("not an unhandled control request: {other:?}"),
+        };
+        for subtype in ["hook_callback", "elicitation", "mcp_message"] {
+            let line = format!(r#"{{"type":"control_request","request_id":"r9","request":{{"subtype":"{subtype}"}}}}"#);
+            assert_eq!(unhandled(&line), (Some("r9".to_owned()), subtype.to_owned()));
+        }
+        // A permission request without a tool is not one the app can show: it is refused like the others.
+        assert_eq!(unhandled(r#"{"type":"control_request","request_id":"r","request":{"subtype":"can_use_tool"}}"#), (Some("r".to_owned()), "can_use_tool".to_owned()));
+        // Without an id nothing can be answered: the request is still named.
+        assert_eq!(unhandled(r#"{"type":"control_request","request":{"subtype":"elicitation"}}"#), (None, "elicitation".to_owned()));
+    }
+
+    #[test]
+    fn control_error_answers_with_the_same_id() {
+        let v: Value = serde_json::from_str(&control_error("r7", "not handled by this app")).unwrap();
+        assert_eq!((v["type"].as_str(), v["response"]["subtype"].as_str(), v["response"]["request_id"].as_str(), v["response"]["error"].as_str()), (Some("control_response"), Some("error"), Some("r7"), Some("not handled by this app")));
+    }
+
+    #[test]
     fn unknown_broken_and_malformed_lines_never_panic() {
         assert!(matches!(parse_line(r#"{"type":"brand_new","x":1}"#), Event::Raw(_)));
         assert!(matches!(parse_line("not json at all"), Event::Unparsed(_)));
         assert!(matches!(parse_line(""), Event::Unparsed(_)));
         assert!(matches!(parse_line(r#"{"type":"system","subtype":"init"}"#), Event::Raw(_)));
-        assert!(matches!(parse_line(r#"{"type":"control_request","request_id":"r","request":{"subtype":"can_use_tool"}}"#), Event::Raw(_)));
+        assert!(matches!(parse_line(r#"{"type":"control_request","request_id":"r","request":{"subtype":"can_use_tool"}}"#), Event::UnhandledControl { .. }));
         assert!(matches!(parse_line("[1,2]"), Event::Raw(_)));
     }
 

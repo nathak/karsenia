@@ -1363,6 +1363,15 @@ impl Actor {
                 Some(waiting) => self.ctl_done(waiting, protocol::control_outcome(&raw)),
                 None => self.emit("claude", raw),
             },
+            ProcEvent::Line(Event::UnhandledControl { request_id, subtype, raw }) => {
+                // The program waits for an answer to this, for good: it is refused (the app approves nothing it cannot show) and the person
+                // is told what was asked, so a turn never hangs in silence when a newer program asks for something new.
+                if let (Some(id), Some(process)) = (&request_id, self.process.as_ref()) {
+                    process.send_line(protocol::control_error(id, "not handled by this app"));
+                }
+                self.emit("claude", raw);
+                self.emit("error", json!({"message": format!("Claude Code asked for '{subtype}', which this app does not handle; it was refused"), "control": subtype}));
+            }
             ProcEvent::Line(Event::Raw(raw)) => {
                 self.note_skill_use(&raw);
                 self.note_usage(&raw);

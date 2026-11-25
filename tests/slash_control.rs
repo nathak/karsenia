@@ -154,3 +154,22 @@ async fn a_request_that_the_process_never_answers_because_it_ended_keeps_the_ask
     let info = r.server.registry.list().await.into_iter().find(|i| i.meta.sid == r.chat.sid).unwrap();
     assert!(matches!(info.state, tenrec::session::State::Exited { code: Some(3) }), "{:?}", info.state);
 }
+
+#[tokio::test]
+async fn an_unhandled_control_request_is_refused_and_the_turn_ends() {
+    let r = rig(&[
+        r#"{"$wait":"user"}"#,
+        r#"{"type":"control_request","request_id":"x1","request":{"subtype":"elicitation"}}"#,
+        r#"{"$wait":"control_response"}"#,
+        DONE,
+    ])
+    .await;
+    let (_, mut rx) = r.chat.subscribe(0).await.unwrap();
+    r.chat.send("two".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+    let line = r.log().lines().find(|l| l.starts_with("IN ") && l.contains("\"request_id\":\"x1\"")).map(str::to_owned).expect("the request was answered");
+    let v: serde_json::Value = serde_json::from_str(line.trim_start_matches("IN ")).unwrap();
+    assert_eq!((v["type"].as_str(), v["response"]["subtype"].as_str(), v["response"]["request_id"].as_str()), (Some("control_response"), Some("error"), Some("x1")));
+    let (replay, _) = r.chat.subscribe(0).await.unwrap();
+    assert!(replay.iter().any(|e| e.kind == "error" && e.data["control"] == "elicitation"), "the person is told what was refused");
+}
