@@ -463,13 +463,29 @@ impl MemoryStore {
 
     /// Moves the project notes filed under the folder `from` to the project `to` (a chat in a worktree files under the project it was made
     /// from, but a note saved before that was filed under the worktree's folder). A note that `to` already has the same of stays where it was,
-    /// so nothing is lost or doubled. Returns how many moved; 0 (a cheap indexed look) once there is nothing left to move.
+    /// so nothing is lost or doubled, and the project's caps are kept (what does not fit stays). Returns how many moved; 0 (a cheap indexed look) once there is nothing left to move.
     pub fn rehome(&self, from: &str, to: &str) -> usize {
         if from == to || from.is_empty() || to.is_empty() {
             return 0;
         }
-        let moved = self.lock().execute("UPDATE OR IGNORE mem SET cwd = ?2, updated = ?3 WHERE scope = 'project' AND cwd = ?1 AND status != 'deleted'", params![from, to, now_ms() as i64]);
-        moved.unwrap_or(0)
+        let conn = self.lock();
+        let (mut count, mut bytes): (i64, i64) = conn
+            .query_row("SELECT count(*), COALESCE(sum(length(text)), 0) FROM mem WHERE scope = 'project' AND cwd = ?1 AND status != 'deleted'", [to], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap_or((0, 0));
+        let Ok(mut statement) = conn.prepare("SELECT id, length(text) FROM mem WHERE scope = 'project' AND cwd = ?1 AND status != 'deleted' ORDER BY pinned DESC, updated DESC") else { return 0 };
+        let notes: Vec<(i64, i64)> = statement.query_map([from], |r| Ok((r.get(0)?, r.get(1)?))).map(|rows| rows.flatten().collect()).unwrap_or_default();
+        drop(statement);
+        let (mut moved, now) = (0, now_ms() as i64);
+        for (id, len) in notes {
+            // The caps hold for a project however its notes got there: what does not fit stays under its old folder.
+            if count >= PROJECT_MAX.0 || bytes + len > PROJECT_MAX.1 {
+                continue;
+            }
+            if conn.execute("UPDATE OR IGNORE mem SET cwd = ?2, updated = ?3 WHERE id = ?1", params![id, to, now]).unwrap_or(0) == 1 {
+                (moved, count, bytes) = (moved + 1, count + 1, bytes + len);
+            }
+        }
+        moved
     }
 
     /// Notes filed before the project's folder was written without Windows' `\\?\` are filed again under the plain text, once (nothing is
@@ -579,6 +595,21 @@ mod tests {
         assert_eq!(store.rehome("/w/x", "/p"), 0, "the second time there is nothing to do");
         assert_eq!(store.rehome("/p", "/p"), 0, "a folder is not moved onto itself");
         assert_eq!(store.recall("/anywhere").iter().filter(|m| m.text == "mine").count(), 1, "a note of the user has no folder and is left alone");
+    }
+
+    #[test]
+    fn rehome_never_takes_a_project_past_its_caps() {
+        let (_dir, store) = store();
+        for i in 0..(PROJECT_MAX.0 - 1) {
+            saved(store.add(NewMem { cwd: Some("/p".into()), ..new(&format!("project note number {i}")) }));
+        }
+        for i in 0..3 {
+            saved(store.add(NewMem { cwd: Some("/w/x".into()), ..new(&format!("worktree note number {i}")) }));
+        }
+        assert_eq!(store.rehome("/w/x", "/p"), 1, "room for one more note, so one moves");
+        assert_eq!(store.overview(Some("/p")).project.len() as i64, PROJECT_MAX.0, "the project is full, not past full");
+        assert_eq!(store.overview(Some("/w/x")).project.len(), 2, "what did not fit stays where it was, listed with the other projects");
+        assert_eq!(store.rehome("/w/x", "/p"), 0);
     }
 
     #[test]

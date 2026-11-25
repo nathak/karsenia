@@ -577,6 +577,19 @@ impl SkillStore {
         self.overview().active.into_iter().map(|s| (s.name, s.description)).collect()
     }
 
+    /// Files the project skills and the waiting proposals of the folder `from` under the project `to` (a chat in a git worktree is of the project
+    /// the worktree was made from; a skill approved before that was filed under the worktree's folder). Names are unique in the store, so
+    /// nothing can clash. Returns how many rows moved; 0 once there is nothing left. An error leaves things as they were.
+    pub fn rehome(&self, from: &str, to: &str) -> usize {
+        if from == to || from.is_empty() || to.is_empty() {
+            return 0;
+        }
+        let conn = self.lock();
+        let skills = conn.execute("UPDATE skill SET cwd = ?2 WHERE scope = 'project' AND cwd = ?1 AND status != 'deleted'", params![from, to]).unwrap_or(0);
+        let proposals = conn.execute("UPDATE proposal SET cwd = ?2 WHERE scope = 'project' AND cwd = ?1 AND status = 'pending'", params![from, to]).unwrap_or(0);
+        skills + proposals
+    }
+
     /// The active skills a chat in `cwd` gets: the person's own (user scope) and this folder's.
     pub fn active_for(&self, cwd: &str) -> Vec<SkillInfo> {
         self.overview().active.into_iter().filter(|s| s.status == "active" && (s.scope == "user" || s.cwd.as_deref().map(crate::platform::strip_verbatim) == Some(crate::platform::strip_verbatim(cwd)))).collect()
@@ -795,6 +808,24 @@ mod tests {
         let p = full.propose(new("a-replacement-skill")).unwrap();
         full.approve(p.id, Edit::default(), false).unwrap();
         assert!(!full.undo_delete(first.unwrap()), "thirty skills exist again: the old one cannot come back beside them");
+    }
+
+    #[test]
+    fn rehome_moves_the_skills_and_proposals_of_a_worktree_folder_to_its_project() {
+        let (_dir, store) = store();
+        let active = store.propose(NewProposal { cwd: Some("/w/x".into()), ..new("worktree-skill") }).unwrap();
+        store.approve(active.id, Edit::default(), false).unwrap();
+        let waiting = store.propose(NewProposal { cwd: Some("/w/x".into()), ..new("waiting-skill") }).unwrap();
+        let other = store.propose(NewProposal { cwd: Some("/other".into()), ..new("other-skill") }).unwrap();
+        store.approve(other.id, Edit::default(), false).unwrap();
+        let names = |cwd: &str| store.active_for(cwd).into_iter().map(|s| s.name).collect::<Vec<_>>();
+        assert_eq!(names("/p"), Vec::<String>::new());
+        assert!(store.rehome("/w/x", "/p") >= 1);
+        assert_eq!(names("/p"), ["worktree-skill"], "the chat's approved skill follows it to the project");
+        assert!(names("/w/x").is_empty() && names("/other") == ["other-skill"], "other folders are left alone");
+        assert!(store.overview().proposals.iter().any(|p| p.id == waiting.id && p.cwd.as_deref() == Some("/p")), "so does a proposal that waits");
+        assert_eq!(store.rehome("/w/x", "/p"), 0);
+        assert_eq!(store.rehome("/p", "/p"), 0);
     }
 
     #[test]

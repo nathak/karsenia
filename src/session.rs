@@ -1514,6 +1514,10 @@ impl Actor {
     fn write_skills(&mut self) -> Option<PathBuf> {
         let store = self.realm.as_ref()?.skills.clone()?;
         let path = self.skills_path();
+        // A skill approved before worktree chats shared their project's skills is filed under the worktree's folder: it moves to the project.
+        if self.meta.worktree.is_some() {
+            store.rehome(&self.meta.cwd.to_string_lossy(), &self.meta.project_key());
+        }
         let names = store.materialize(&self.meta.project_key(), &path).ok()?;
         if names.is_empty() {
             return None;

@@ -93,7 +93,7 @@ rebuilt: a file that cannot be read is renamed `.broken` and you are told). A no
   comes from `canonicalize` and has it, the worktree's `repo` does not); the Memory panel and the MCP tools take the same key, and the file drops the
   prefix from notes filed earlier when it is opened (a note that would clash stays under its old name, listed with the other projects). A note
   saved before this under a worktree's folder moves to the project when a chat in that worktree starts (`MemoryStore::rehome`; one that would
-  clash stays). Notes filed under a worktree that was removed before then stay under "other projects". A chat opened in a subfolder of a repo is
+  clash stays, and so does what would take the project past its caps), and so do the skills and waiting proposals of that folder (`SkillStore::rehome`). Notes filed under a worktree that was removed before then stay under "other projects". A chat opened in a subfolder of a repo is
   the project of that subfolder, and a worktree chat made from it is the project of the repo's top folder.
 
 - **Checks every save goes through**: size, caps (200 notes / 32 KB per project, 100 / 16 KB for you, 50 waiting; a full store refuses,
