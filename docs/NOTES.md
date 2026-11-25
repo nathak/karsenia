@@ -227,7 +227,7 @@ a provider chat gets no notes, no skills and no history-search tool, is not read
 account), and is not put into the history index (so it is not found by search, and the account's chats cannot pull its text across).
 Scheduled tasks always use the default account (see Accounts).
 
-**The key.** Stored in `<data>/providers.json` (`0600`). The page is never sent it again (`has_token` and the host only), it is passed to
+**The key.** Stored in `<data>/providers.json` (`0600`). A save cut short leaves its text in a `.providers.json.<hex>-<hex>.tmp` file beside it (`0600`); the app removes such files older than ten minutes when it starts. The page is never sent it again (`has_token` and the host only), it is passed to
 the process in the environment (never in the arguments, which any user can read), and anything of the chat that would be shown or stored
 is scrubbed of it (`[provider key]`; it catches the key as one piece of text, not an encoded or split one; a key must be at least 8 characters). Providers are made and
 changed only by you in the page: there is no MCP tool for it. An `https://` address is required, except for this computer (`localhost`,

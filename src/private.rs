@@ -68,6 +68,43 @@ pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     }
 }
 
+/// How old a file `write_atomic` left behind must be before it is removed: another instance writing now is milliseconds old.
+pub const STALE_TMP_AGE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Files `write_atomic` left beside `path` when the app stopped between writing and renaming (they hold the whole text, keys perhaps)
+/// are removed: only regular files named exactly as it names them for this `path`, older than `min_age`. Links, folders and every
+/// other name are left; nothing fails (a file another process holds open is skipped).
+pub fn remove_stale_tmp(path: &Path, min_age: std::time::Duration) {
+    if let Some(cutoff) = std::time::SystemTime::now().checked_sub(min_age) {
+        remove_tmp_older_than(path, cutoff);
+    }
+}
+
+fn remove_tmp_older_than(path: &Path, cutoff: std::time::SystemTime) {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else { return };
+    let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let prefix = format!(".{name}.");
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        if !file_name.to_str().is_some_and(|n| is_tmp_name(n, &prefix)) {
+            continue;
+        }
+        let tmp = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&tmp) else { continue };
+        if meta.file_type().is_file() && meta.modified().is_ok_and(|m| m <= cutoff) {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+}
+
+/// `.{name}.{pid:x}-{nonce:x}.tmp` as `write_atomic` makes it: lowercase hex only, so no other store's name (it has a dot) matches.
+fn is_tmp_name(file_name: &str, prefix: &str) -> bool {
+    let Some((pid, nonce)) = file_name.strip_prefix(prefix).and_then(|r| r.strip_suffix(".tmp")).and_then(|r| r.split_once('-')) else { return false };
+    let hex = |s: &str, max: usize| !s.is_empty() && s.len() <= max && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    hex(pid, 8) && hex(nonce, 32)
+}
+
 pub fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
     unlink_if_link(path);
     let mut file = options().append(true).open(path)?;
@@ -99,5 +136,64 @@ mod tests {
         write(&config, "new").unwrap();
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep", "a link is replaced, not written through");
         assert_eq!(std::fs::read_to_string(&config).unwrap(), "new");
+    }
+}
+
+#[cfg(test)]
+mod stale_tmp_tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn age(path: &Path, by: Duration) {
+        std::fs::File::options().write(true).open(path).unwrap().set_modified(SystemTime::now() - by).unwrap();
+    }
+
+    #[test]
+    fn only_an_old_tmp_of_this_file_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.json");
+        let stale = dir.path().join(".providers.json.1a2b-17f0c3d2e4a5b6c7.tmp");
+        let fresh = dir.path().join(".providers.json.1a2c-17f0c3d2e4a5b6c8.tmp");
+        let others = [".providers.json.notes", "providers.json.tmp", ".other.json.1-2.tmp", ".providers.json.1-2.tmp.bak", ".providers.json.1A-2.tmp", ".providers.json.1-.tmp", ".providers.json.1-2-3.tmp", "providers.json"];
+        for name in others {
+            std::fs::write(dir.path().join(name), "keep").unwrap();
+            age(&dir.path().join(name), Duration::from_secs(3600));
+        }
+        std::fs::write(&stale, "secret").unwrap();
+        age(&stale, Duration::from_secs(3600));
+        std::fs::write(&fresh, "being written").unwrap();
+        remove_stale_tmp(&path, STALE_TMP_AGE);
+        assert!(!stale.exists(), "an old tmp is removed");
+        assert!(fresh.exists(), "another instance's tmp being written is kept");
+        for name in others {
+            assert_eq!(std::fs::read_to_string(dir.path().join(name)).unwrap(), "keep", "{name}");
+        }
+    }
+
+    #[test]
+    fn a_folder_or_link_named_like_a_tmp_is_left_however_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.json");
+        let control = dir.path().join(".providers.json.1-1.tmp");
+        std::fs::write(&control, "x").unwrap();
+        let folder = dir.path().join(".providers.json.1-2.tmp");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("inside"), "keep").unwrap();
+        #[cfg(unix)]
+        let (link, victim) = (dir.path().join(".providers.json.1-3.tmp"), dir.path().join("victim.txt"));
+        #[cfg(unix)]
+        {
+            std::fs::write(&victim, "keep").unwrap();
+            std::os::unix::fs::symlink(&victim, &link).unwrap();
+        }
+        // Everything here counts as old: only its kind keeps it.
+        remove_tmp_older_than(&path, SystemTime::now() + Duration::from_secs(3600));
+        assert!(!control.exists(), "the cutoff did reach");
+        assert_eq!(std::fs::read_to_string(folder.join("inside")).unwrap(), "keep");
+        #[cfg(unix)]
+        {
+            assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+            assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        }
     }
 }

@@ -386,6 +386,30 @@ mod tests {
     }
 
     #[test]
+    fn a_user_agent_with_spaces_around_its_name_is_the_persons_own() {
+        let mut p = provider(Auth::Bearer, Some("airkey-123456"));
+        p.headers = Some(" User-Agent : x".into());
+        let plan = with_user_agent(plan(&[], Some(&p), Path::new("/cfg")), Some(&p), Some("2.1.326"));
+        assert_eq!(ua(&plan), Some(" User-Agent : x"));
+    }
+
+    #[test]
+    fn a_user_agent_line_between_other_header_lines_is_the_persons_own() {
+        let mut p = provider(Auth::Bearer, Some("airkey-123456"));
+        p.headers = Some("AIR-Api-Key: {key}\nUser-Agent: Mine/1\nX-Other: y".into());
+        let plan = with_user_agent(plan(&[], Some(&p), Path::new("/cfg")), Some(&p), Some("2.1.326"));
+        assert_eq!(ua(&plan), Some("AIR-Api-Key: airkey-123456\nUser-Agent: Mine/1\nX-Other: y"));
+    }
+
+    #[test]
+    fn a_user_agent_line_without_a_colon_is_not_the_persons_own() {
+        let mut p = provider(Auth::Bearer, Some("airkey-123456"));
+        p.headers = Some("User-Agent".into());
+        let plan = with_user_agent(plan(&[], Some(&p), Path::new("/cfg")), Some(&p), Some("2.1.326"));
+        assert_eq!(ua(&plan), Some("User-Agent\nUser-Agent: claude-cli/2.1.326 (external, sdk-cli) Karsenia"));
+    }
+
+    #[test]
     fn an_account_login_provider_gets_it_too() {
         let p = provider(Auth::AccountLogin, None);
         for dir in [None, Some(Path::new("/data/accounts/0123456789abcdef"))] {

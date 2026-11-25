@@ -299,6 +299,8 @@ pub struct ProviderStore {
 impl ProviderStore {
     /// An unreadable file opens as an empty list and is left where it is (never overwritten by opening); the notice says so.
     pub fn open(path: PathBuf) -> (Self, Option<String>) {
+        // A save cut short (the app stopped between writing and renaming) leaves its whole text, keys and all, beside the file.
+        crate::private::remove_stale_tmp(&path, crate::private::STALE_TMP_AGE);
         let (list, notice) = match std::fs::read_to_string(&path) {
             Ok(text) => match read_file(&text) {
                 Ok((file, Cleanup { touched: false, .. })) => (file.providers, None),
@@ -500,6 +502,17 @@ mod tests {
         for other in ["gw.example.com", "gw.example.com:443", "localhost.evil.com", "127.0.0.2", "10.0.0.1:80", "[::2]"] {
             assert!(!is_local_host(other), "{other}");
         }
+    }
+
+    #[test]
+    fn opening_removes_an_old_cut_short_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp = dir.path().join(".providers.json.1-2.tmp");
+        std::fs::write(&tmp, "{\"v\":1,\"providers\":[]}").unwrap();
+        std::fs::File::options().write(true).open(&tmp).unwrap().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600)).unwrap();
+        let (_store, notice) = ProviderStore::open(dir.path().join("providers.json"));
+        assert!(notice.is_none());
+        assert!(!tmp.exists());
     }
 
     #[test]
