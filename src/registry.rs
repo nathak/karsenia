@@ -66,6 +66,8 @@ pub struct Registry {
     bin: String,
     gate: Option<Arc<McpGate>>,
     settings: Arc<SettingsStore>,
+    /// What the new-chat form starts with for each project (see `project_defaults`).
+    defaults: Arc<crate::project_defaults::DefaultsStore>,
     /// Messages every page should hear (a note changed, an auto-save happened): `{v, kind, data}`.
     pub events: tokio::sync::broadcast::Sender<serde_json::Value>,
     /// The default account's notes, skills and history, and one realm for every extra account. `realm()` is the only way to one:
@@ -219,7 +221,8 @@ impl Registry {
             }
         };
         let (providers, providers_notice) = ProviderStore::open(dir.join("providers.json"));
-        let registry = Self { dir: dir.clone(), bin, gate, settings, events, default_realm, realms: RwLock::new(realms), shared, accounts, accounts_notice, sched_notice, sched, providers: Arc::new(providers), providers_notice, instance, sessions };
+        let defaults = Arc::new(crate::project_defaults::DefaultsStore::open(dir.join("project_defaults.json")));
+        let registry = Self { dir: dir.clone(), bin, gate, settings, defaults, events, default_realm, realms: RwLock::new(realms), shared, accounts, accounts_notice, sched_notice, sched, providers: Arc::new(providers), providers_notice, instance, sessions };
         let mut metas: Vec<(String, Option<String>, bool)> = Vec::new();
         for entry in std::fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
@@ -896,6 +899,31 @@ impl Registry {
 
     pub fn gate(&self) -> Option<Arc<McpGate>> {
         self.gate.clone()
+    }
+
+    /// Remembers what a chat made from the new-chat form was made with, for the next form of the same project. Not for a chat on a provider
+    /// or in a container (not put on a third party or in a box by what was chosen last time), and never the mode that skips every check.
+    pub fn remember_defaults(&self, meta: &Meta) {
+        if meta.provider.is_some() || meta.container {
+            return;
+        }
+        let key = crate::project_defaults::key_of(&meta.project_dir()).unwrap_or_else(|| meta.project_key());
+        let entry = crate::project_defaults::Entry {
+            model: meta.model.clone(),
+            account: meta.account.as_ref().map(|a| a.id.clone()),
+            permission: Some(meta.permission_mode.name().to_owned()),
+            worktree: meta.worktree.is_some(),
+            used: 0,
+        };
+        self.defaults.record(&key, entry);
+    }
+
+    /// What the form starts with for the folder `cwd` (see `project_defaults::form_json`); `found: false` for a folder that is not there, not
+    /// absolute, or never made a chat from the form.
+    pub fn project_defaults(&self, cwd: &str) -> serde_json::Value {
+        let path = std::path::Path::new(cwd);
+        let entry = path.is_absolute().then(|| crate::project_defaults::key_of(path)).flatten().and_then(|key| self.defaults.get(&key));
+        crate::project_defaults::form_json(cwd, entry, |id| self.accounts.get(id).is_some_and(|a| a.kind.has_realm()))
     }
 
     pub fn get(&self, sid: &str) -> Option<SessionHandle> {

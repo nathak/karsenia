@@ -405,6 +405,9 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
                         let _ = handle.rename(name).await;
                     }
                     let info = handle.info().await;
+                    if let Some(info) = &info {
+                        state.registry.remember_defaults(&info.meta);
+                    }
                     let mut data = serde_json::to_value(info).unwrap_or(Value::Null);
                     if let (Some(map), Some(notice)) = (data.as_object_mut(), notice) {
                         map.insert("notice".into(), json!(notice));
@@ -416,6 +419,11 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
                 }
                 Err(message) => fail(&message),
             }
+        }
+        // What the new-chat form starts with for a folder (the answer says which folder it is for, so a late one can be told).
+        "project_defaults" => {
+            let cwd = op["cwd"].as_str().unwrap_or_default();
+            let _ = out.send(plain("project_defaults", None, state.registry.project_defaults(cwd)));
         }
         "attach" => match (state.registry.get(&sid), attached) {
             (_, None) => fail("this connection does not follow chats"),

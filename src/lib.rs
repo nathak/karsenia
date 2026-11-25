@@ -12,6 +12,7 @@ pub mod live;
 pub mod mcp;
 pub mod view;
 pub mod platform;
+pub mod project_defaults;
 pub mod project_check;
 pub mod plugins;
 pub mod proc_group;
