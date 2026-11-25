@@ -485,8 +485,7 @@ async fn skills_do_not_cross_between_accounts_in_either_direction_even_in_the_sa
                 description: "Runs the project's checks. Use when the user asks to run the checklist.".into(),
                 body: "1. Run cargo test --all.".into(),
                 sid: None,
-                seq: None,
-            })
+                seq: None, from_gateway: false })
             .unwrap();
         store.approve(proposal.id, Default::default(), false).unwrap();
     };

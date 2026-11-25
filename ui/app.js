@@ -46,7 +46,7 @@ const TEXT = {
     memCardText: '자동 저장을 켜면 앱이 내가 쓴 메시지에서 오래 기억할 사실과 선호를 골라 저장합니다. Claude의 답이나 도구 결과는 읽지 않고, 키·비밀번호처럼 보이는 것은 저장하지 않으며, 명령처럼 보이는 것은 승인을 기다립니다. 언제든 끄거나 삭제할 수 있습니다.',
     memCardOn: '이 프로젝트만 켜기', memCardLater: '나중에', memAutoSaved: '자동 저장', memNoChat: '프로젝트 메모는 대화를 연 뒤에 추가할 수 있습니다.', memEmpty: '아직 메모가 없습니다.', memUsed: 'Claude에게 메모를 전달했습니다',
     tabSkills: '스킬', skAuto: '자동 제안 켜기: 도구를 8번 이상 쓴 긴 작업이 끝난 뒤, 하루 5번까지. 제안은 언제나 내 승인을 기다립니다.', skScopeProject: '이 프로젝트', skScopeUser: '모든 프로젝트', skNewSkill: '새 스킬', skImprove: '개선: ',
-    skHint: '무엇에 대한 스킬인가요? (선택)', skPropose: '이 대화로 스킬 제안', skNext: '새 스킬은 새 대화나 다시 시작한 대화부터 적용됩니다.', skStarted: '스킬 제안을 만드는 중입니다. 잠시 걸립니다.',
+    skHint: '무엇에 대한 스킬인가요? (선택)', skPropose: '이 대화로 스킬 제안', skNext: '새 스킬은 새 대화나 다시 시작한 대화부터 적용됩니다.', skStarted: '스킬 제안을 만드는 중입니다. 잠시 걸립니다.', skGatewayConfirm: '이 대화는 게이트웨이를 거쳤습니다. 제안을 만들려면 이 대화에서 내가 쓴 메시지와 성공한 명령의 한 줄 요약(게이트웨이 쪽 모델이 고른 명령 포함)을 내 Claude 계정으로 Anthropic에 보냅니다. 모델의 답변과 도구 결과는 보내지 않습니다. 제안을 승인하기 전에 꼼꼼히 읽어 주세요. 보낼까요?', skGatewayTag: '게이트웨이 대화에서 나옴',
     skPending: '승인 대기 제안', skActive: '사용 중인 스킬', skDeleted: '삭제됨 (7일 안에 되돌리기)', skApprove: '승인', skEditApprove: '수정 후 승인', skReject: '거절', skEnable: '켜기', skDisable: '끄기', skDelete: '삭제', skHistory: '이력',
     skRollback: '이 버전으로', skBlocked: '고쳐야 할 문제', skWarn: '읽어야 할 경고', skAck: '경고를 모두 읽었고, 이 내용을 Claude가 따라도 괜찮습니다', skFull: 'SKILL.md 전문 (그대로 저장됩니다)', skDiff: '현재 버전과 비교',
     skLastUsed: '마지막 사용', skNever: '아직 쓰이지 않음', skProposed: '스킬 제안이 도착했습니다', skImproveTag: '개선', skDisabledTag: '꺼짐', skSaveApprove: '저장하고 승인', skName: '이름', skDescription: '설명 (한 줄)', skBody: '본문',
@@ -133,7 +133,7 @@ const TEXT = {
     memCardText: 'With auto-save on, the app picks lasting facts and preferences out of the messages you write. It does not read Claude\'s answers or tool results, never saves what looks like a key or a password, and holds anything that reads like an order for your approval. You can turn it off or delete notes any time.',
     memCardOn: 'Turn on for this project', memCardLater: 'Later', memAutoSaved: 'Auto-saved', memNoChat: 'Open a chat first: a project note belongs to its folder.', memEmpty: 'No notes yet.', memUsed: 'Claude was given notes',
     tabSkills: 'Skills', skAuto: 'Automatic proposals: after a long task that used 8 or more tools, up to 5 a day. A proposal always waits for your approval.', skScopeProject: 'This project', skScopeUser: 'All projects', skNewSkill: 'New skill', skImprove: 'Improve: ',
-    skHint: 'What is the skill about? (optional)', skPropose: 'Propose a skill from this chat', skNext: 'A new skill applies from a new or restarted chat.', skStarted: 'Making a skill proposal. It takes a moment.',
+    skHint: 'What is the skill about? (optional)', skPropose: 'Propose a skill from this chat', skNext: 'A new skill applies from a new or restarted chat.', skStarted: 'Making a skill proposal. It takes a moment.', skGatewayConfirm: 'This chat went through a gateway. To make a proposal, your messages in it and one-line summaries of the commands that succeeded (including ones the gateway\'s model chose) are sent to Anthropic under your Claude account; replies and tool results are not. Read the proposal carefully before approving it. Send?', skGatewayTag: 'From a gateway chat',
     skPending: 'Proposals waiting', skActive: 'Skills in use', skDeleted: 'Deleted (undo within 7 days)', skApprove: 'Approve', skEditApprove: 'Edit, then approve', skReject: 'Reject', skEnable: 'Turn on', skDisable: 'Turn off', skDelete: 'Delete', skHistory: 'History',
     skRollback: 'Back to this version', skBlocked: 'Problems to fix', skWarn: 'Warnings to read', skAck: 'I read the warnings, and Claude may follow this', skFull: 'The whole SKILL.md (saved exactly like this)', skDiff: 'Compare with the current version',
     skLastUsed: 'Last used', skNever: 'not used yet', skProposed: 'A skill proposal arrived', skImproveTag: 'improvement', skDisabledTag: 'off', skSaveApprove: 'Save and approve', skName: 'Name', skDescription: 'Description (one line)', skBody: 'Body',
@@ -1513,6 +1513,11 @@ function skResult(d) {
   const last = S.memOps.get(d.rid)
   S.memOps.delete(d.rid)
   if (!d.ok) {
+    // A chat that went through a gateway goes to the account's run only after the person said so: the same request is sent again.
+    if (d.needs_confirm === 'gateway' && last && last.op === 'skill_propose') {
+      if (confirm(t('skGatewayConfirm'))) skSend({ ...last, confirm_gateway: true })
+      return
+    }
     if (d.error) toast(d.error)
     // A refused approval brings the findings of the text that would have been written.
     if (last && last.op === 'skill_approve' && d.risks) { S.skEditReport = { id: d.id, risks: d.risks }; renderSkills() }
@@ -1561,6 +1566,7 @@ function skProposal(p) {
   const head = el('div', 'head')
   head.append(el('span', '', p.name), el('span', 'tag', p.scope === 'user' ? t('skScopeUser') : t('skScopeProject')))
   if (p.target) head.appendChild(el('span', 'tag', t('skImproveTag')))
+  if (p.from_gateway) head.appendChild(el('span', 'tag', t('skGatewayTag')))
   if (p.sid && S.sessions.some(x => x.sid === p.sid)) {
     const go = el('button', '', '↗')
     go.type = 'button'

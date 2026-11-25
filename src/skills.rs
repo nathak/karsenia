@@ -142,6 +142,16 @@ pub fn risk_report(name: &str, description: &str, body: &str) -> Vec<Risk> {
     out
 }
 
+/// The risk report of a proposal's text, with the warning that it was made from a chat that went through a gateway when it was: a
+/// warning needs the person's confirmation to approve, so the approver reads it knowing that.
+fn report(name: &str, description: &str, body: &str, from_gateway: bool) -> Vec<Risk> {
+    let mut out = risk_report(name, description, body);
+    if from_gateway {
+        out.push(risk("from_gateway", "warn", 0, "made from a chat that went through a gateway: a third party's model chose some of these steps"));
+    }
+    out
+}
+
 pub fn blocked(report: &[Risk]) -> bool {
     report.iter().any(|r| r.level == "block")
 }
@@ -198,6 +208,8 @@ pub struct Proposal {
     pub seq: Option<u64>,
     pub risks: Vec<Risk>,
     pub created: u64,
+    /// Made from a chat that went through a gateway (a third party's model chose some of its steps): the report says so.
+    pub from_gateway: bool,
     /// For an improvement: the active text it would replace, for the diff.
     pub current: Option<Value>,
 }
@@ -213,6 +225,8 @@ pub struct NewProposal {
     pub body: String,
     pub sid: Option<String>,
     pub seq: Option<u64>,
+    /// Made from a chat that went through a gateway.
+    pub from_gateway: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -232,7 +246,7 @@ pub struct Overview {
 const SCHEMA: &str = "
 CREATE TABLE skill(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, scope TEXT NOT NULL, cwd TEXT, status TEXT NOT NULL, active_ver INTEGER NOT NULL, last_used INTEGER, deleted_at INTEGER, prev_status TEXT);
 CREATE TABLE skill_version(skill_id INTEGER NOT NULL, n INTEGER NOT NULL, description TEXT NOT NULL, body TEXT NOT NULL, source TEXT NOT NULL, sid TEXT, seq INTEGER, created INTEGER NOT NULL, PRIMARY KEY(skill_id, n));
-CREATE TABLE proposal(id INTEGER PRIMARY KEY, target_skill_id INTEGER, base_ver INTEGER, name TEXT NOT NULL, scope TEXT NOT NULL, cwd TEXT, description TEXT NOT NULL, body TEXT NOT NULL, sid TEXT, seq INTEGER, status TEXT NOT NULL, created INTEGER NOT NULL);
+CREATE TABLE proposal(id INTEGER PRIMARY KEY, target_skill_id INTEGER, base_ver INTEGER, name TEXT NOT NULL, scope TEXT NOT NULL, cwd TEXT, description TEXT NOT NULL, body TEXT NOT NULL, sid TEXT, seq INTEGER, status TEXT NOT NULL, created INTEGER NOT NULL, origin TEXT);
 CREATE TABLE runs(key TEXT PRIMARY KEY, n INTEGER NOT NULL);
 ";
 
@@ -281,6 +295,12 @@ impl SkillStore {
             anyhow::bail!("skills file version {version} is not understood");
         }
         let _: i64 = conn.query_row("SELECT count(*) FROM skill", [], |r| r.get(0))?;
+        // Proposals gained an `origin` column without a new version number: an older program still reads such a file (every statement
+        // of it names its columns), where a raised number would make it set the whole file aside.
+        let has_origin = conn.prepare("PRAGMA table_info(proposal)")?.query_map([], |r| r.get::<_, String>(1))?.flatten().any(|name| name == "origin");
+        if !has_origin {
+            conn.execute_batch("ALTER TABLE proposal ADD COLUMN origin TEXT")?;
+        }
         Ok(conn)
     }
 
@@ -332,7 +352,7 @@ impl SkillStore {
     fn proposal_row(&self, conn: &Connection, id: i64) -> Option<Proposal> {
         let row = conn
             .query_row(
-                "SELECT p.id, p.target_skill_id, p.base_ver, p.name, p.scope, p.cwd, p.description, p.body, p.sid, p.seq, p.created FROM proposal p WHERE p.id = ?1 AND p.status = 'pending'",
+                "SELECT p.id, p.target_skill_id, p.base_ver, p.name, p.scope, p.cwd, p.description, p.body, p.sid, p.seq, p.created, p.origin FROM proposal p WHERE p.id = ?1 AND p.status = 'pending'",
                 [id],
                 |r| {
                     Ok((
@@ -347,14 +367,16 @@ impl SkillStore {
                         r.get::<_, Option<String>>(8)?,
                         r.get::<_, Option<i64>>(9)?,
                         r.get::<_, i64>(10)?,
+                        r.get::<_, Option<String>>(11)?,
                     ))
                 },
             )
             .optional()
             .unwrap_or(None)?;
-        let (id, target_id, base_ver, name, scope, cwd, description, body, sid, seq, created) = row;
+        let (id, target_id, base_ver, name, scope, cwd, description, body, sid, seq, created, origin) = row;
+        let from_gateway = origin.as_deref() == Some("gateway");
         let current = target_id.and_then(|t| self.skill_row(conn, t));
-        let risks = risk_report(&name, &description, &body);
+        let risks = report(&name, &description, &body, from_gateway);
         Some(Proposal {
             id,
             target: current.as_ref().map(|c| c.name.clone()),
@@ -368,6 +390,7 @@ impl SkillStore {
             seq: seq.map(|n| n as u64),
             risks,
             created: created as u64,
+            from_gateway,
             current: current.map(|c| json!({"version": c.version, "description": c.description, "body": c.body})),
         })
     }
@@ -392,8 +415,8 @@ impl SkillStore {
             }
         };
         conn.execute(
-            "INSERT INTO proposal(target_skill_id, base_ver, name, scope, cwd, description, body, sid, seq, status, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10)",
-            params![target_id, base_ver, name, scope, cwd, new.description, new.body, new.sid, new.seq.map(|n| n as i64), now_ms() as i64],
+            "INSERT INTO proposal(target_skill_id, base_ver, name, scope, cwd, description, body, sid, seq, status, created, origin) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11)",
+            params![target_id, base_ver, name, scope, cwd, new.description, new.body, new.sid, new.seq.map(|n| n as i64), now_ms() as i64, new.from_gateway.then_some("gateway")],
         )
         .map_err(|e| e.to_string())?;
         let id = conn.last_insert_rowid();
@@ -423,7 +446,7 @@ impl SkillStore {
         let name = if proposal.target.is_some() { proposal.name.clone() } else { edit.name.clone().unwrap_or(proposal.name.clone()) };
         let description = edit.description.clone().unwrap_or(proposal.description.clone());
         let body = edit.body.clone().unwrap_or(proposal.body.clone());
-        let report = risk_report(&name, &description, &body);
+        let report = report(&name, &description, &body, proposal.from_gateway);
         if blocked(&report) {
             return Err("it has a problem that must be fixed first".into());
         }
@@ -474,7 +497,7 @@ impl SkillStore {
         let conn = self.lock();
         let Some(p) = self.proposal_row(&conn, id) else { return Vec::new() };
         let name = if p.target.is_some() { p.name.clone() } else { edit.name.clone().unwrap_or(p.name.clone()) };
-        risk_report(&name, edit.description.as_deref().unwrap_or(&p.description), edit.body.as_deref().unwrap_or(&p.body))
+        report(&name, edit.description.as_deref().unwrap_or(&p.description), edit.body.as_deref().unwrap_or(&p.body), p.from_gateway)
     }
 
     pub fn reject(&self, id: i64) -> bool {
@@ -599,7 +622,7 @@ mod tests {
     const BODY: &str = "1. Run cargo test.\n2. Run cargo clippy.\n3. Tell the user the result.";
 
     fn new(name: &str) -> NewProposal {
-        NewProposal { target: None, name: name.into(), scope: "project", cwd: Some("/p".into()), description: DESC.into(), body: BODY.into(), sid: Some("s1".into()), seq: Some(7) }
+        NewProposal { target: None, name: name.into(), scope: "project", cwd: Some("/p".into()), description: DESC.into(), body: BODY.into(), sid: Some("s1".into()), seq: Some(7), from_gateway: false }
     }
 
     fn codes(report: &[Risk]) -> Vec<&str> {
@@ -816,6 +839,46 @@ mod tests {
         let (store, _) = SkillStore::open(&path).unwrap();
         assert_eq!(store.runs("day:5"), 2, "a restart does not reset a cap");
         assert!(store.overview().active[0].last_used.is_some());
+    }
+
+    #[test]
+    fn a_gateway_origin_is_kept_and_its_warning_survives_an_edit_and_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("skills.sqlite");
+        let id = {
+            let (store, _) = SkillStore::open(&path).unwrap();
+            let p = store.propose(NewProposal { from_gateway: true, ..new("release-check") }).unwrap();
+            assert!(p.from_gateway && codes(&p.risks).contains(&"from_gateway"), "{:?}", p.risks);
+            let edited = store.final_report(p.id, &Edit { body: Some("1. Run cargo test.".into()), ..Default::default() });
+            assert!(codes(&edited).contains(&"from_gateway") && warned(&edited), "the warning is on the text that would be written too");
+            p.id
+        };
+        let (store, notice) = SkillStore::open(&path).unwrap();
+        assert!(notice.is_none());
+        assert!(store.proposal(id).unwrap().from_gateway, "read back after a reopen");
+        let plain = store.propose(new("other-skill")).unwrap();
+        assert!(!plain.from_gateway && !codes(&plain.risks).contains(&"from_gateway"));
+    }
+
+    #[test]
+    fn an_older_skills_file_gets_the_origin_column_and_is_not_set_aside() {
+        // A file made before proposals had an origin (the same version number: an older program must still be able to read this one).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("skills.sqlite");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(&SCHEMA.replace(", origin TEXT", "")).unwrap();
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION).unwrap();
+            conn.execute("INSERT INTO proposal(name, scope, description, body, status, created) VALUES ('old-one', 'user', 'Use when the user asks for the old thing.', 'Do it.', 'pending', 1)", []).unwrap();
+        }
+        let (store, notice) = SkillStore::open(&path).unwrap();
+        assert!(notice.is_none() && !dir.path().join("skills.sqlite.broken").exists(), "{notice:?}");
+        let old = store.overview().proposals.into_iter().find(|p| p.name == "old-one").unwrap();
+        assert!(!old.from_gateway);
+        let conn = Connection::open(&path).unwrap();
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, SCHEMA_VERSION, "the version number is not raised");
+        assert!(store.propose(NewProposal { from_gateway: true, ..new("new-one") }).unwrap().from_gateway, "and the new column works");
     }
 
     #[test]

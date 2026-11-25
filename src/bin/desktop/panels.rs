@@ -217,6 +217,19 @@ fn skill_result(ui: &AppWindow, app: &Arc<App>, data: &Value) {
     let op = data["rid"].as_u64().and_then(|rid| app.bus.take(rid)).unwrap_or(Value::Null);
     let sk = ui.global::<Sk>();
     if data["ok"] != true {
+        // A chat that went through a gateway goes to the account's run only after the person has said so: the same request is sent again
+        // with their confirmation.
+        if data["needs_confirm"] == "gateway" && op.is_object() {
+            let a = app.clone();
+            ask(ui, tr(app.lang, "sk_gateway_confirm"), tr(app.lang, "sk_propose"), false, Box::new(move |ok| {
+                if ok {
+                    let mut op = op;
+                    op["confirm_gateway"] = json!(true);
+                    a.bus.ask(op);
+                }
+            }));
+            return;
+        }
         if let Some(error) = data["error"].as_str() {
             crate::toast(ui, error.to_owned());
         }

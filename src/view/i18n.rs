@@ -959,6 +959,8 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("sk_warn", "읽어야 할 경고", "read this"),
     ("sk_line", "{n}행", "line {n}"),
     ("sk_improve_tag", "개선", "improves"),
+    ("sk_gateway_tag", "게이트웨이 대화에서 나옴", "From a gateway chat"),
+    ("sk_gateway_confirm", "이 대화는 게이트웨이를 거쳤습니다. 제안을 만들려면 이 대화에서 내가 쓴 메시지와 성공한 명령의 한 줄 요약(게이트웨이 쪽 모델이 고른 명령 포함)을 내 Claude 계정으로 Anthropic에 보냅니다. 모델의 답변과 도구 결과는 보내지 않습니다. 제안을 승인하기 전에 꼼꼼히 읽어 주세요. 보낼까요?", "This chat went through a gateway. To make a proposal, your messages in it and one-line summaries of the commands that succeeded (including ones the gateway's model chose) are sent to Anthropic under your Claude account; replies and tool results are not. Read the proposal carefully before approving it. Send?"),
     ("sk_last_used", "마지막 사용", "last used"),
     ("sk_never", "아직 쓰이지 않음", "never used"),
     ("sk_disabled_tag", "꺼짐", "off"),

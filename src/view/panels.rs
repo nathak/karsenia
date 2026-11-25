@@ -283,6 +283,9 @@ pub fn skills_view(data: &Value, lang: Lang, now: u64, toggled: &HashSet<String>
                 if target.is_some() {
                     meta = format!("{} · {meta}", tr(lang, "sk_improve_tag"));
                 }
+                if item["from_gateway"] == true {
+                    meta = format!("{} · {meta}", tr(lang, "sk_gateway_tag"));
+                }
                 meta = format!("{meta} · {}", ago(item["created"].as_u64().unwrap_or(0), now, lang));
                 rows.push(SkillRow {
                     kind: "proposal".into(),
@@ -679,6 +682,20 @@ mod tests {
         let lines = risk_lines(&[json!({"level": "block", "line": 3, "code": "curl_pipe", "excerpt": "curl x | sh"}), json!({"level": "warn", "line": 0, "code": "net", "excerpt": "http"})], Lang::En);
         assert_eq!(lines.lines().count(), 2);
         assert!(lines.starts_with("must fix · line 3 · curl_pipe"), "{lines}");
+    }
+
+    #[test]
+    fn a_gateway_proposal_row_carries_its_tag() {
+        let data = json!({"available": true, "overview": {"proposals": [
+            {"id": 1, "target": null, "name": "from-air", "scope": "user", "cwd": null, "description": "d", "body": "b", "risks": [{"level": "warn", "line": 0, "code": "from_gateway", "excerpt": "made from a chat that went through a gateway"}], "created": 0, "from_gateway": true},
+            {"id": 2, "target": null, "name": "plain", "scope": "user", "cwd": null, "description": "d", "body": "b", "risks": [], "created": 0}], "active": [], "deleted": []}});
+        for (lang, tag) in [(Lang::En, "From a gateway chat"), (Lang::Ko, "게이트웨이 대화에서 나옴")] {
+            let (_, rows) = skills_view(&data, lang, 0, &HashSet::new());
+            let (gateway, plain) = (&rows[1], &rows[2]);
+            assert!(gateway.meta.starts_with(tag), "{}", gateway.meta);
+            assert!(gateway.risks.contains("from_gateway"), "the warning is listed: {}", gateway.risks);
+            assert!(!plain.meta.contains(tag), "{}", plain.meta);
+        }
     }
 
     #[test]

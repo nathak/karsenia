@@ -543,3 +543,16 @@ test('markdown output carries no id or name (it would shadow the page\'s own ele
   assert.ok(forbidden, 'attributes are forbidden explicitly')
   for (const attribute of ['style', 'id', 'name']) assert.ok(forbidden[1].includes(`'${attribute}'`), `${attribute} is forbidden`)
 })
+
+test('a skill proposal from a chat that went through a gateway is confirmed first, resent with the confirmation, and tagged', () => {
+  const app = readFileSync(new URL('../ui/app.js', import.meta.url), 'utf8')
+  for (const key of ['skGatewayConfirm', 'skGatewayTag']) assert.equal(app.split(`${key}:`).length - 1, 2, `${key} is in both languages`)
+  // The host answers `needs_confirm: 'gateway'`; the page asks and sends the same request again with `confirm_gateway: true`.
+  const result = app.slice(app.indexOf('function skResult(d) {'), app.indexOf("$('sk-auto')"))
+  assert.match(result, /needs_confirm === 'gateway'/)
+  assert.match(result, /confirm\(t\('skGatewayConfirm'\)\)/)
+  assert.match(result, /confirm_gateway: true/)
+  assert.ok(result.indexOf("needs_confirm === 'gateway'") < result.indexOf('toast(d.error)'), 'the question comes before the refusal is shown as an error')
+  // The card says where the proposal came from.
+  assert.match(app, /p\.from_gateway[^\n]*skGatewayTag/)
+})

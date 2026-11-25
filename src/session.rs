@@ -22,6 +22,14 @@ use std::sync::Arc;
 
 /// What the skill proposer may read of a chat: the person's messages, one-line summaries of tool calls that succeeded (never their
 /// results), how many tools the last turn used, and whether third-party text could have entered (a web tool, an outside MCP tool).
+/// Whether what was said through a gateway is read by a proposal: an automatic one never reads it; a manual one does, once the person
+/// has confirmed that it goes to their Claude account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gateway {
+    Exclude,
+    Include,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ProposalInput {
     pub cwd: String,
@@ -31,9 +39,21 @@ pub struct ProposalInput {
     pub external_used: bool,
     pub last_seq: u64,
     /// The chat runs against a provider the person chose: nothing of it is read by a proposal (that would send it to the account).
+    /// A gateway that uses an account's login (`login`) is one too, but a manual proposal may read it after a confirmation.
     pub provider: bool,
+    /// The provider takes the account's login (a gateway) and is on now.
+    pub login: bool,
+    /// Something in the log was said while a gateway was on.
+    pub via_gateway: bool,
     /// The account the chat runs as: a proposal is read only by the worker of that account.
     pub account: Option<AccountRef>,
+}
+
+impl ProposalInput {
+    /// Gateway text is, or would be, in what a manual proposal reads (a chat on a provider that is not a gateway is never read at all).
+    pub fn gateway_text(&self) -> bool {
+        !(self.provider && !self.login) && (self.login || self.via_gateway)
+    }
 }
 
 /// A tool call through which text from outside the person's own files and words can enter the chat: the web, a tool of another MCP
@@ -192,7 +212,7 @@ enum Cmd {
     Stop,
     Kill,
     UserTexts { after: u64, since: u64, reply: oneshot::Sender<Vec<(u64, String)>> },
-    ProposalInput { since: u64, reply: oneshot::Sender<ProposalInput> },
+    ProposalInput { since: u64, gateway: Gateway, reply: oneshot::Sender<ProposalInput> },
     Subscribe { after: u64, reply: oneshot::Sender<(Vec<Envelope>, broadcast::Receiver<Envelope>)> },
     Info { reply: oneshot::Sender<Info> },
     /// The end of the CLI's own debug log of this chat (see `Settings::debug_api`), with the provider key replaced.
@@ -332,7 +352,12 @@ impl SessionHandle {
 
     /// What the skill proposer may read of this chat, from events at or after time `since` (ms).
     pub async fn proposal_input(&self, since: u64) -> Option<ProposalInput> {
-        ask(&self.tx, |reply| Cmd::ProposalInput { since, reply }).await
+        self.proposal_input_with(since, Gateway::Exclude).await
+    }
+
+    /// As `proposal_input`, saying whether what was said through a gateway is read too.
+    pub async fn proposal_input_with(&self, since: u64, gateway: Gateway) -> Option<ProposalInput> {
+        ask(&self.tx, |reply| Cmd::ProposalInput { since, gateway, reply }).await
     }
 
     /// What the person wrote after sequence number `after` and at or after time `since` (ms), for auto-save.
@@ -524,8 +549,8 @@ impl Actor {
     /// As `emit`, with the time the event happened (an event another chat made, taken over).
     fn emit_at(&mut self, kind: &str, data: Value, ts: u64) {
         let mut data = data;
-        // What was said while a gateway was on is marked: the history index, auto-save and skill proposals leave it out (the third party's text
-        // is not carried over to the account's own notes), whichever way the chat is switched later.
+        // What was said while a gateway was on is marked: the history index, auto-save and automatic skill proposals leave it out (the third party's
+        // text is not carried over to the account's own notes); a skill proposal the person asks for reads it only after they confirm it. Whichever way the chat is switched later.
         if self.meta.provider.as_ref().is_some_and(|p| p.login) && matches!(kind, "user" | "claude") {
             if let Value::Object(map) = &mut data {
                 map.insert("via_gateway".into(), Value::Bool(true));
@@ -937,8 +962,8 @@ impl Actor {
                     process.kill_now();
                 }
             }
-            Cmd::ProposalInput { since, reply } => {
-                let _ = reply.send(self.proposal_input(since));
+            Cmd::ProposalInput { since, gateway, reply } => {
+                let _ = reply.send(self.proposal_input(since, gateway));
             }
             Cmd::UserTexts { after, since, reply } => {
                 let texts = self.log.iter().filter(|_| self.meta.provider.is_none()).filter(|e| e.kind == "user" && e.seq > after && e.ts >= since && e.data["imported"] != true && e.data["via_gateway"] != true).filter_map(|e| e.data["text"].as_str().map(|t| (e.seq, t.to_owned()))).collect();
@@ -1477,7 +1502,7 @@ impl Actor {
         Some(path)
     }
 
-    fn proposal_input(&self, since: u64) -> ProposalInput {
+    fn proposal_input(&self, since: u64, gateway: Gateway) -> ProposalInput {
         let mut texts = Vec::new();
         let mut calls: Vec<(String, String)> = Vec::new();
         let mut failed: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1488,7 +1513,7 @@ impl Actor {
             e.kind == "claude" && e.data["type"] == "assistant" && e.data["message"]["content"].as_array().into_iter().flatten().any(|b| b["type"] == "tool_use" && is_external_tool(b["name"].as_str().unwrap_or_default(), &b["input"]))
         });
         // What was imported from an earlier session (its messages, tool calls and results) is not this chat's own work.
-        for e in self.log.iter().filter(|e| e.ts >= since && e.data["imported"] != true && e.data["via_gateway"] != true) {
+        for e in self.log.iter().filter(|e| e.ts >= since && e.data["imported"] != true && (gateway == Gateway::Include || e.data["via_gateway"] != true)) {
             match e.kind.as_str() {
                 "user" => {
                     // What was imported from an earlier session is not read for a skill proposal: it is not this chat's own work.
@@ -1526,7 +1551,7 @@ impl Actor {
         if lines.len() > 40 {
             lines.drain(..lines.len() - 40);
         }
-        ProposalInput { cwd: self.meta.cwd.to_string_lossy().into_owned(), user_texts: texts, tool_lines: lines, last_turn_tools: turn_tools, external_used: external, last_seq: self.seq, provider: self.meta.provider.is_some(), account: self.meta.account.clone() }
+        ProposalInput { cwd: self.meta.cwd.to_string_lossy().into_owned(), user_texts: texts, tool_lines: lines, last_turn_tools: turn_tools, external_used: external, last_seq: self.seq, provider: self.meta.provider.is_some(), login: self.meta.provider.as_ref().is_some_and(|p| p.login), via_gateway: self.log.iter().any(|e| e.data["via_gateway"] == true), account: self.meta.account.clone() }
     }
 
     /// The model speaks with no message of ours before it (a background job ended and the program told it, so it goes on by itself): the

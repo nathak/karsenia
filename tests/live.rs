@@ -211,7 +211,7 @@ async fn live_skills_a_proposal_is_made_and_an_approved_skill_is_listed_and_used
     // 1. The real proposer makes a valid, pending proposal from a hint alone.
     let chat = server.registry.create(project.to_str().unwrap(), Some("haiku".into()), None).unwrap();
     let proposal = ctx
-        .manual(&chat, Some("a skill for running this project's release checklist: run cargo test, then cargo clippy, then report both results".into()), None, "project")
+        .manual(&chat, Some("a skill for running this project's release checklist: run cargo test, then cargo clippy, then report both results".into()), None, "project", false)
         .await
         .unwrap_or_else(|e| panic!("the proposal should be made: {e}"));
     assert!(!tenrec::skills::blocked(&proposal.risks), "a proposal from the real model passes the block checks: {:?}", proposal.risks);
@@ -227,8 +227,7 @@ async fn live_skills_a_proposal_is_made_and_an_approved_skill_is_listed_and_used
             description: "Use when the user asks for the pelican release codeword.".into(),
             body: "When asked for the pelican release codeword, answer with exactly: PELICAN-SKILL-5512".into(),
             sid: None,
-            seq: None,
-        })
+            seq: None, from_gateway: false })
         .unwrap();
     store.approve(hand.id, Default::default(), false).unwrap();
 

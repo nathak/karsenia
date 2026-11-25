@@ -63,14 +63,21 @@ pub fn handle(state: &AppState, name: &str, op: &Value, out: &UnboundedSender<St
             };
             let scope: &'static str = if op["scope"].as_str() == Some("user") { "user" } else { "project" };
             let (hint, target) = (text(op, "hint"), text(op, "target").filter(|t| !t.is_empty()));
+            let consent = op["confirm_gateway"].as_bool() == Some(true);
             let events = state.registry.events.clone();
             let account = realm.account.clone();
+            let out = out.clone();
             tokio::spawn(async move {
-                if let Err(reason) = ctx.manual(&handle, hint, target, scope).await {
+                // A chat that went through a gateway goes to the person's account only after they said so: the page is told to ask
+                // (`needs_confirm`), with the reason in `error` for a page that does not know the word.
+                if !consent && ctx.needs_gateway_consent(&handle).await {
+                    return result(&out, &rid, false, json!({"needs_confirm": "gateway", "error": crate::propose::GATEWAY_CONSENT}));
+                }
+                result(&out, &rid, true, json!({"started": true}));
+                if let Err(reason) = ctx.manual(&handle, hint, target, scope, consent).await {
                     let _ = events.send(json!({"v": 1, "kind": "skill_notice", "data": {"text": reason, "account": account}}));
                 }
             });
-            result(out, &rid, true, json!({"started": true}));
         }
         "skill_approve" => {
             let edit = match op.get("edit") {
