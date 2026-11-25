@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn a_hand_written_bypass_or_unknown_mode_or_model_is_not_given_back_and_the_other_projects_survive() {
-        let (dir, store) = store();
+        let (dir, _store) = store();
         let path = dir.path().join("project_defaults.json");
         std::fs::write(&path, r#"{"v":1,"projects":{"/a":{"permission":"bypassPermissions","model":"haiku"},"/b":{"permission":"yolo"},"/c":{"permission":"plan","model":"bad model; rm"}}}"#).unwrap();
         let store = DefaultsStore::open(path);

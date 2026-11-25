@@ -694,7 +694,10 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
         ui.set_new_perm(0);
         ui.set_new_worktree(false);
         ui.set_new_acct(ui.global::<Acct>().get_pre_acct());
-        (form.set_touched_model(true), form.set_touched_acct(true), form.set_touched_perm(true), form.set_touched_wt(true));
+        form.set_touched_model(true);
+        form.set_touched_acct(true);
+        form.set_touched_perm(true);
+        form.set_touched_wt(true);
         form.set_used(false);
     });
 
