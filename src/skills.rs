@@ -243,6 +243,21 @@ pub struct Overview {
     pub deleted: Vec<SkillInfo>,
 }
 
+/// Adds the `origin` column to a proposal table that lacks it. One that another program (or an earlier call) added between the check and
+/// the change is not an error: the file would otherwise read as damaged and be set aside.
+fn ensure_origin_column(conn: &Connection) -> Result<()> {
+    let has_origin = |conn: &Connection| -> Result<bool> { Ok(conn.prepare("PRAGMA table_info(proposal)")?.query_map([], |r| r.get::<_, String>(1))?.flatten().any(|name| name == "origin")) };
+    if has_origin(conn)? {
+        return Ok(());
+    }
+    if let Err(error) = conn.execute_batch("ALTER TABLE proposal ADD COLUMN origin TEXT") {
+        if !has_origin(conn)? {
+            return Err(error.into());
+        }
+    }
+    Ok(())
+}
+
 const SCHEMA: &str = "
 CREATE TABLE skill(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, scope TEXT NOT NULL, cwd TEXT, status TEXT NOT NULL, active_ver INTEGER NOT NULL, last_used INTEGER, deleted_at INTEGER, prev_status TEXT);
 CREATE TABLE skill_version(skill_id INTEGER NOT NULL, n INTEGER NOT NULL, description TEXT NOT NULL, body TEXT NOT NULL, source TEXT NOT NULL, sid TEXT, seq INTEGER, created INTEGER NOT NULL, PRIMARY KEY(skill_id, n));
@@ -297,10 +312,7 @@ impl SkillStore {
         let _: i64 = conn.query_row("SELECT count(*) FROM skill", [], |r| r.get(0))?;
         // Proposals gained an `origin` column without a new version number: an older program still reads such a file (every statement
         // of it names its columns), where a raised number would make it set the whole file aside.
-        let has_origin = conn.prepare("PRAGMA table_info(proposal)")?.query_map([], |r| r.get::<_, String>(1))?.flatten().any(|name| name == "origin");
-        if !has_origin {
-            conn.execute_batch("ALTER TABLE proposal ADD COLUMN origin TEXT")?;
-        }
+        ensure_origin_column(&conn)?;
         Ok(conn)
     }
 
@@ -879,6 +891,20 @@ mod tests {
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(version, SCHEMA_VERSION, "the version number is not raised");
         assert!(store.propose(NewProposal { from_gateway: true, ..new("new-one") }).unwrap().from_gateway, "and the new column works");
+    }
+
+    #[test]
+    fn the_origin_column_added_twice_is_not_an_error() {
+        // A second program (or call) that adds it after the first one's check must not make the file read as damaged.
+        let dir = tempfile::tempdir().unwrap();
+        let conn = Connection::open(dir.path().join("skills.sqlite")).unwrap();
+        conn.execute_batch(&SCHEMA.replace(", origin TEXT", "")).unwrap();
+        ensure_origin_column(&conn).unwrap();
+        ensure_origin_column(&conn).unwrap();
+        conn.execute("INSERT INTO proposal(name, scope, description, body, status, created, origin) VALUES ('x', 'user', 'd', 'b', 'pending', 1, 'gateway')", []).unwrap();
+        // Something else that makes the change fail is still an error.
+        let bare = Connection::open_in_memory().unwrap();
+        assert!(ensure_origin_column(&bare).is_err(), "no proposal table: the file is not one of ours");
     }
 
     #[test]
