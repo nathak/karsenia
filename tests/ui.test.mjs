@@ -534,3 +534,12 @@ test('the model picker offers the documented aliases and shows a full model id a
   assert.deepEqual(modelChoices('claude-sonnet-5-5'), [...MODEL_ALIASES, 'claude-sonnet-5-5'])
   assert.equal(MODEL_ALIASES[0], '', 'the first is the default')
 })
+
+test('markdown output carries no id or name (it would shadow the page\'s own elements: $() takes the first element of an id)', () => {
+  const app = readFileSync(new URL('../ui/app.js', import.meta.url), 'utf8')
+  const line = app.split('\n').find(l => l.startsWith('const markdown ='))
+  assert.ok(line, 'the markdown function is there')
+  const forbidden = /FORBID_ATTR:\s*\[([^\]]*)\]/.exec(line)
+  assert.ok(forbidden, 'attributes are forbidden explicitly')
+  for (const attribute of ['style', 'id', 'name']) assert.ok(forbidden[1].includes(`'${attribute}'`), `${attribute} is forbidden`)
+})

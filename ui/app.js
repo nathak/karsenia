@@ -246,7 +246,7 @@ DOMPurify.addHook('afterSanitizeAttributes', node => {
     node.setAttribute('rel', 'noopener noreferrer')
   }
 })
-const markdown = source => DOMPurify.sanitize(marked.parse(source, { gfm: true, breaks: true }), { FORBID_TAGS: ['style', 'form', 'input', 'button', 'img'], FORBID_ATTR: ['style'] })
+const markdown = source => DOMPurify.sanitize(marked.parse(source, { gfm: true, breaks: true }), { FORBID_TAGS: ['style', 'form', 'input', 'button', 'img'], FORBID_ATTR: ['style', 'id', 'name'] })
 
 // ---- state ----
 const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, liveThink: null, thinkMs: null, sysTurn: new Set(), sysWin: new Map(), curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, skills: null, sched: null, providers: null, pvEditing: null, scEditing: 0, scRunId: 0, skEditing: 0, skHistory: null, skDraft: null, skEditReport: null, images: [], debug: [], connected: false, wasConnected: false, acct: null, accounts: null, acctStatus: new Map(), acctRid: 0, acctHow: new Set(), acctPlug: new Set(), acctPlugins: new Map(), acctPlugBusy: new Set(), acctOps: new Map(), acctReq: 0, curTs: 0, day: '', asstMeta: false, model: null }
