@@ -46,22 +46,23 @@ fn row(kind: &str, text: &str) -> ChatRow {
     ChatRow { kind: kind.into(), text: text.into(), ..Default::default() }
 }
 
-fn save(window: &MinimalSoftwareWindow, path: &std::path::Path) {
+fn save(window: &MinimalSoftwareWindow, path: &std::path::Path, w: u32, h: u32) {
+    window.set_size(PhysicalSize::new(w, h));
     slint::platform::update_timers_and_animations();
-    let mut buffer = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; (W * H) as usize];
+    let mut buffer = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; (w * h) as usize];
     // Two passes: the first lays the window out, the second draws what the layout settled.
     for _ in 0..2 {
         window.draw_if_needed(|renderer| {
-            renderer.render(&mut buffer, W as usize);
+            renderer.render(&mut buffer, w as usize);
         });
         slint::platform::update_timers_and_animations();
         window.request_redraw();
     }
     window.draw_if_needed(|renderer| {
-        renderer.render(&mut buffer, W as usize);
+        renderer.render(&mut buffer, w as usize);
     });
     let bytes: Vec<u8> = buffer.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
-    image::RgbImage::from_raw(W, H, bytes).expect("a full buffer").save(path).expect("the picture is written");
+    image::RgbImage::from_raw(w, h, bytes).expect("a full buffer").save(path).expect("the picture is written");
     println!("{}", path.display());
 }
 
@@ -107,7 +108,7 @@ fn main() {
     g.set_sel(1);
     g.set_note("".into());
     g.set_open(true);
-    save(&window, &out.join("1-dark-slash-menu.png"));
+    save(&window, &out.join("1-dark-slash-menu.png"), W, H);
 
     // 2. Dark, with the project settings card.
     g.set_open(false);
@@ -125,16 +126,91 @@ fn main() {
     let lines: Vec<WtLine> = lines.into_iter().map(|(text, bad)| WtLine { text: text.into(), bad }).collect();
     p.set_lines(ModelRc::from(Rc::new(VecModel::from(lines))));
     p.set_show(true);
-    save(&window, &out.join("2-dark-project-card.png"));
+    save(&window, &out.join("2-dark-project-card.png"), W, H);
     p.set_show(false);
 
     // 3. Light, with the menu again (the light palette and its contrast).
     ui.global::<Theme>().set_mode(1);
     ui.set_draft("/".into());
     g.set_open(true);
-    save(&window, &out.join("3-light-slash-menu.png"));
+    save(&window, &out.join("3-light-slash-menu.png"), W, H);
     g.set_open(false);
     ui.set_draft("".into());
     p.set_show(true);
-    save(&window, &out.join("4-light-project-card.png"));
+    save(&window, &out.join("4-light-project-card.png"), W, H);
+
+    // 5. The window with a chat open, at different widths and with few or many accounts: the header's account choice and the session header.
+    scenes(&ui, &window, &out);
+}
+
+fn strings(list: &[&str]) -> ModelRc<SharedString> {
+    ModelRc::from(Rc::new(VecModel::from(list.iter().map(|s| SharedString::from(*s)).collect::<Vec<_>>())))
+}
+
+/// A chat is open: a long title, the account, a permission mode, a worktree chip, a gateway and a model to choose.
+fn open_chat(ui: &AppWindow, accounts: &[&str]) {
+    ui.set_has_chat(true);
+    ui.set_chat_title("릴리스 점검 및 사용량 카드 개선 작업 정리 (긴 제목 확인용)".into());
+    ui.set_chat_account("회사-프로덕션-서울리전".into());
+    ui.set_chat_perm("acceptEdits".into());
+    ui.set_chat_perm_danger(false);
+    ui.set_pwd_path("~/work/karsenia".into());
+    ui.set_pwd_full("/home/me/work/karsenia".into());
+    ui.set_crumb_ws("work".into());
+    ui.set_crumb_proj("karsenia".into());
+    ui.set_crumb_branch("main".into());
+    ui.set_turn_tokens("45k / 200k · 22%".into());
+    ui.set_turn_cost("$0.42".into());
+    ui.set_model_idx(2);
+    ui.set_gw_shown(true);
+    ui.set_gw_names(strings(&["게이트웨이 없음", "Air"]));
+    ui.set_gw_idx(0);
+    ui.set_state("idle".into());
+    ui.set_state_label("대기".into());
+    ui.global::<Wt>().set_show(true);
+    let acct = ui.global::<Acct>();
+    acct.set_names(strings(accounts));
+    acct.set_labels(strings(accounts));
+    acct.set_view(0);
+    ui.set_renaming(false);
+    ui.set_text_view(false);
+    let rows = vec![
+        row("day", "오늘 · 09:41"),
+        row("meta-user", "나"),
+        row("user", "릴리스 전에 확인할 것을 정리해 줘"),
+        row("meta-asst", "opus"),
+        row("para", "확인할 것은 세 가지입니다."),
+    ];
+    ui.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+}
+
+fn scenes(ui: &AppWindow, window: &MinimalSoftwareWindow, out: &std::path::Path) {
+    let few = ["기본 계정", "업무", "개인"];
+    let many = [
+        "기본 계정", "⚠ 2 회사-프로덕션-서울리전-계정", "● 1 개인", "연구소", "파트너사-A", "파트너사-B", "테스트-계정-1", "테스트-계정-2", "테스트-계정-3", "고객지원", "운영", "감사",
+    ];
+    // What the earlier pictures left open is shut: the pictures below are of the window itself.
+    ui.global::<Proj>().set_show(false);
+    ui.global::<Slash>().set_open(false);
+    ui.set_draft("".into());
+    ui.global::<Theme>().set_mode(0);
+    ui.set_side(0);
+    open_chat(ui, &few);
+    save(window, &out.join("5-1280x800-3acct-dark.png"), 1280, 800);
+    open_chat(ui, &many);
+    // What waits elsewhere, beside the closed choice.
+    ui.global::<Acct>().set_away("⚠ 2".into());
+    save(window, &out.join("6-1280x800-12acct-long-dark.png"), 1280, 800);
+    save(window, &out.join("7-1000x700-12acct-chat-dark.png"), 1000, 700);
+    save(window, &out.join("8-760x640-12acct-chat-dark.png"), 760, 640);
+    ui.set_renaming(true);
+    ui.set_rename_text("릴리스 점검 및 사용량 카드 개선 작업 정리 (긴 제목 확인용)".into());
+    save(window, &out.join("9-760x640-renaming-dark.png"), 760, 640);
+    ui.set_renaming(false);
+    ui.set_text_view(true);
+    save(window, &out.join("10-760x640-textview-dark.png"), 760, 640);
+    ui.set_text_view(false);
+    ui.global::<Theme>().set_mode(1);
+    save(window, &out.join("11-1280x800-12acct-light.png"), 1280, 800);
+    save(window, &out.join("12-760x640-12acct-chat-light.png"), 760, 640);
 }

@@ -46,7 +46,7 @@ fn run(ui: &AppWindow, app: &Arc<App>, index: i32) {
         "go_vhdb" => page(ui, 7),
         "new_chat" => {
             ui.set_new_acct(ui.global::<crate::Acct>().get_pre_acct());
-            ui.set_new_prov(ui.global::<crate::Acct>().get_pre_prov());
+            ui.set_new_prov(0);
             ui.global::<crate::Imp>().set_open(false);
             ui.set_new_open(true);
         }

@@ -510,20 +510,15 @@ pub fn accounts_view(list: &Value, status: &HashMap<String, Option<Value>>, chat
     (head, rows)
 }
 
-/// What the chat list is of: an account (None is the default one) or one provider. A provider chat has no account, so a provider is a
-/// tab of its own beside the accounts.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Ctx {
-    Account(Option<String>),
-    Provider(String),
-}
+/// What the chat list is of: an account (None is the default one). A chat belongs to its account whatever provider it runs on: the
+/// providers are not tabs or entries of the account choice.
+pub type View = Option<String>;
 
 /// The ids the host listed, to tell a chat of something that was deleted from one that is only not listed yet. `None` is "the list has not
-/// come": a chat of an extra account or of a provider is then taken to be listed under its own.
+/// come": a chat of an extra account is then taken to be listed under its own.
 #[derive(Clone, Copy, Default)]
 pub struct Known<'a> {
     pub accounts: Option<&'a [String]>,
-    pub providers: Option<&'a [String]>,
 }
 
 /// The account a chat is shown under: its own, or None (the default one) when it has none or its account is gone.
@@ -531,40 +526,29 @@ pub fn view_of(chat: Option<&str>, known: Option<&[String]>) -> Option<String> {
     chat.filter(|a| known.is_none_or(|k| k.iter().any(|id| id == a))).map(str::to_owned)
 }
 
-/// One chat as the tab badges and the list see it: its account id and its provider id (a chat has one of them at most), whether it is
-/// working, how many questions wait for the person.
+/// One chat as the account choice and the list see it: its account id, whether it is working, how many questions wait for the person.
 #[derive(Clone)]
 pub struct Mark {
     pub account: Option<String>,
-    pub provider: Option<String>,
     pub running: bool,
     pub pending: usize,
 }
 
-/// The provider a chat is listed under, as an id: only one that is not an account's login. A chat of a provider that uses an account's login
-/// belongs to its account (it is listed there, with the provider shown as a tag).
-pub fn listed_provider(provider: Option<&crate::providers::ProviderRef>) -> Option<String> {
-    provider.filter(|p| !p.login).map(|p| p.id.clone())
+/// The account a chat is listed under: its own, or the default one when it has none or its account was deleted, so no chat becomes
+/// unreachable. A chat on a provider with its own key and one on a gateway that uses the account's login are listed the same way.
+pub fn owner(chat: &Mark, known: Known) -> View {
+    view_of(chat.account.as_deref(), known.accounts)
 }
 
-/// The tab a chat is listed under. A provider chat is under its provider; a chat of a provider that was deleted, a chat of an account
-/// that was deleted, a chat of the default account all belong to the default account, so none of them becomes unreachable.
-pub fn owner(chat: &Mark, known: Known) -> Ctx {
-    match &chat.provider {
-        Some(p) if known.providers.is_none_or(|k| k.iter().any(|id| id == p)) => Ctx::Provider(p.clone()),
-        _ => Ctx::Account(view_of(chat.account.as_deref(), known.accounts)),
-    }
-}
-
-/// True when a chat is listed under the tab being shown.
-pub fn in_context(chat: &Mark, view: &Ctx, known: Known) -> bool {
+/// True when a chat is listed under the account being shown.
+pub fn in_context(chat: &Mark, view: &View, known: Known) -> bool {
     owner(chat, known) == *view
 }
 
-/// What waits or runs under the tabs that are not shown: for each tab the number of chats with a question waiting and the number that
-/// are working. A chat that waits is not counted as working too.
-pub fn attention(chats: &[Mark], view: &Ctx, known: Known) -> HashMap<Ctx, (usize, usize)> {
-    let mut out: HashMap<Ctx, (usize, usize)> = HashMap::new();
+/// What waits or runs under the accounts that are not shown: for each account the number of chats with a question waiting and the number
+/// that are working. A chat that waits is not counted as working too.
+pub fn attention(chats: &[Mark], view: &View, known: Known) -> HashMap<View, (usize, usize)> {
+    let mut out: HashMap<View, (usize, usize)> = HashMap::new();
     for c in chats {
         let owner = owner(c, known);
         if owner == *view {
@@ -580,22 +564,23 @@ pub fn attention(chats: &[Mark], view: &Ctx, known: Known) -> HashMap<Ctx, (usiz
     out
 }
 
-/// The tabs in the header, in order: the Claude accounts (`ids` and `names` as the host listed them, the default account first), then
-/// one for each provider (`(id, name)`), written "→ name" as a provider chat is in the list.
-pub fn tab_list(ids: &[Option<String>], names: &[String], providers: &[(String, String)]) -> Vec<(Ctx, String)> {
-    let mut tabs: Vec<(Ctx, String)> = ids.iter().zip(names).map(|(id, name)| (Ctx::Account(id.clone()), name.clone())).collect();
-    tabs.extend(providers.iter().map(|(id, name)| (Ctx::Provider(id.clone()), format!("→ {name}"))));
-    tabs
+/// The entries of the account choice, in order (`ids` and `names` as the host listed them, the default account first), each with what waits
+/// or runs under it when it is not the account shown.
+pub fn labels(ids: &[View], names: &[String], seen: &HashMap<View, (usize, usize)>) -> Vec<String> {
+    ids.iter().zip(names).map(|(id, name)| tab_label(name, seen.get(id))).collect()
 }
 
-/// What the new-chat form starts on when a tab is shown: the index of the account card and of the provider in its pick list (the
-/// provider list starts with "none", so the first provider is 1). A tab that is not in the list starts the form on the defaults.
-pub fn presets(tabs: &[(Ctx, String)], view: &Ctx) -> (usize, usize) {
-    let accounts = tabs.iter().filter(|(c, _)| matches!(c, Ctx::Account(_))).count();
-    match tabs.iter().position(|(c, _)| c == view) {
-        Some(i) if matches!(view, Ctx::Account(_)) => (i, 0),
-        Some(i) => (0, i - accounts + 1),
-        None => (0, 0),
+/// What waits or runs under all the accounts that are not shown, for the badge beside the closed choice (which names only the account
+/// shown, so a question waiting elsewhere would otherwise go unseen): "⚠ n" when chats wait for the person, else "● n" when some are working,
+/// else "".
+pub fn away(seen: &HashMap<View, (usize, usize)>) -> String {
+    let (wait, run) = seen.values().fold((0, 0), |(w, r), (sw, sr)| (w + sw, r + sr));
+    if wait > 0 {
+        format!("⚠ {wait}")
+    } else if run > 0 {
+        format!("● {run}")
+    } else {
+        String::new()
     }
 }
 
@@ -743,19 +728,19 @@ mod tests {
         let full = json!({"accounts": (0..8).map(|i| json!({"id": format!("a{i}"), "name": "x", "open": true, "login": ""})).collect::<Vec<_>>()});
         assert!(!accounts_view(&full, &HashMap::new(), &HashMap::new(), Lang::En).0.can_add);
     }
-    fn mark(account: Option<&str>, provider: Option<&str>, running: bool, pending: usize) -> Mark {
-        Mark { account: account.map(str::to_owned), provider: provider.map(str::to_owned), running, pending }
+    fn mark(account: Option<&str>, running: bool, pending: usize) -> Mark {
+        Mark { account: account.map(str::to_owned), running, pending }
     }
 
-    fn acct(id: Option<&str>) -> Ctx {
-        Ctx::Account(id.map(str::to_owned))
+    fn acct(id: Option<&str>) -> View {
+        id.map(str::to_owned)
     }
 
     #[test]
     fn a_chat_is_listed_under_its_own_account_and_the_others_fall_to_the_default() {
         let accounts = vec!["a1".to_owned()];
-        let k = Known { accounts: Some(&accounts), providers: None };
-        let on = |account: Option<&str>, view: Option<&str>, k: Known| in_context(&mark(account, None, false, 0), &acct(view), k);
+        let k = Known { accounts: Some(&accounts) };
+        let on = |account: Option<&str>, view: Option<&str>, k: Known| in_context(&mark(account, false, 0), &acct(view), k);
         assert!(on(None, None, k) && !on(None, Some("a1"), k));
         assert!(on(Some("a1"), Some("a1"), k) && !on(Some("a1"), None, k));
         // An account that was deleted: its chat is under the default account (and nowhere else).
@@ -770,33 +755,25 @@ mod tests {
     }
 
     #[test]
-    fn provider_chats_have_their_own_tab_and_a_deleted_providers_fall_to_the_default() {
+    fn a_provider_chat_is_listed_under_its_account_never_lost_and_never_a_tab_of_its_own() {
+        // A chat on a provider with its own key has no account: it is under the default account (it used to be under a tab of its provider,
+        // so with that tab gone it must be listed here). One that has an account is under that account.
         let accounts = vec!["a1".to_owned()];
-        let providers = vec!["p1".to_owned(), "p2".to_owned()];
-        let k = Known { accounts: Some(&accounts), providers: Some(&providers) };
-        let chat = mark(None, Some("p1"), false, 0);
-        assert!(in_context(&chat, &Ctx::Provider("p1".into()), k));
-        assert!(!in_context(&chat, &acct(None), k), "no longer under the default account");
-        assert!(!in_context(&chat, &Ctx::Provider("p2".into()), k));
-        // Its provider was deleted: the chat is not lost, it is under the default account.
-        let gone = mark(None, Some("p9"), false, 0);
-        assert!(in_context(&gone, &acct(None), k) && !in_context(&gone, &Ctx::Provider("p9".into()), k));
-        // Before the provider list came, a provider chat is under its provider.
-        let early = Known { accounts: Some(&accounts), providers: None };
-        assert!(in_context(&gone, &Ctx::Provider("p9".into()), early));
-        // The badges of the tabs that are not shown: a provider has its own key.
-        let list = [mark(None, Some("p1"), false, 2), mark(None, Some("p2"), true, 0), mark(None, None, true, 0)];
-        let seen = attention(&list, &acct(None), k);
-        assert_eq!(seen[&Ctx::Provider("p1".into())], (1, 0));
-        assert_eq!(seen[&Ctx::Provider("p2".into())], (0, 1));
-        assert!(!seen.contains_key(&acct(None)), "the shown tab has no badge");
+        let k = Known { accounts: Some(&accounts) };
+        assert_eq!(owner(&mark(None, false, 0), k), None);
+        assert_eq!(owner(&mark(Some("a1"), false, 0), k), acct(Some("a1")));
+        assert_eq!(owner(&mark(Some("deleted"), false, 0), k), None, "an account that was deleted: the default account");
+        // What waits under it is counted for the choice like any chat's.
+        let list = [mark(None, false, 2), mark(None, true, 0)];
+        let seen = attention(&list, &acct(Some("a1")), k);
+        assert_eq!(seen[&None], (1, 1));
     }
 
     #[test]
     fn what_waits_or_runs_is_counted_under_the_accounts_that_are_not_shown() {
         let accounts = vec!["a1".to_owned()];
-        let k = Known { accounts: Some(&accounts), providers: None };
-        let list = [mark(None, None, true, 2), mark(Some("a1"), None, true, 0), mark(Some("a1"), None, false, 1), mark(Some("a1"), None, false, 0), mark(Some("zz"), None, true, 0)];
+        let k = Known { accounts: Some(&accounts) };
+        let list = [mark(None, true, 2), mark(Some("a1"), true, 0), mark(Some("a1"), false, 1), mark(Some("a1"), false, 0), mark(Some("zz"), true, 0)];
         let seen = attention(&list, &acct(None), k);
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[&acct(Some("a1"))], (1, 1));
@@ -809,20 +786,27 @@ mod tests {
     }
 
     #[test]
-    fn tabs_list_accounts_then_providers_and_preset_the_new_chat() {
-        let ids = vec![None, Some("a1".to_owned())];
-        let names = vec!["Default".to_owned(), "Work".to_owned()];
-        let provs = vec![("p1".to_owned(), "Gateway".to_owned()), ("p2".to_owned(), "Local".to_owned())];
-        let tabs = tab_list(&ids, &names, &provs);
-        let labels: Vec<&str> = tabs.iter().map(|(_, l)| l.as_str()).collect();
-        assert_eq!(labels, ["Default", "Work", "→ Gateway", "→ Local"]);
-        assert_eq!(tabs[2].0, Ctx::Provider("p1".into()));
-        assert_eq!(presets(&tabs, &acct(Some("a1"))), (1, 0), "an account tab: that account, no provider");
-        assert_eq!(presets(&tabs, &acct(None)), (0, 0));
-        assert_eq!(presets(&tabs, &Ctx::Provider("p1".into())), (0, 1), "the first provider (0 is none)");
-        assert_eq!(presets(&tabs, &Ctx::Provider("p2".into())), (0, 2));
-        assert_eq!(presets(&tabs, &Ctx::Provider("zz".into())), (0, 0), "a tab that is gone starts on the defaults");
-        assert_eq!(tab_list(&[], &[], &[]), Vec::new());
+    fn the_account_choice_lists_only_accounts_each_with_what_waits_under_it() {
+        let ids = vec![None, Some("a1".to_owned()), Some("a2".to_owned())];
+        let names = vec!["Default".to_owned(), "Work".to_owned(), "Lab".to_owned()];
+        let mut seen = HashMap::new();
+        seen.insert(Some("a1".to_owned()), (2, 0));
+        seen.insert(Some("a2".to_owned()), (0, 1));
+        let entries = labels(&ids, &names, &seen);
+        assert_eq!(entries, ["Default", "⚠ 2 Work", "● Lab"], "one entry per account, no provider among them");
+        assert!(entries.iter().all(|e| !e.contains('→')));
+        assert_eq!(labels(&[], &[], &HashMap::new()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_badge_beside_the_closed_choice_sums_what_waits_elsewhere() {
+        let mut seen: HashMap<View, (usize, usize)> = HashMap::new();
+        assert_eq!(away(&seen), "", "nothing elsewhere: no badge");
+        seen.insert(Some("a1".to_owned()), (0, 2));
+        assert_eq!(away(&seen), "● 2");
+        seen.insert(Some("a2".to_owned()), (1, 0));
+        seen.insert(None, (2, 5));
+        assert_eq!(away(&seen), "⚠ 3", "waiting comes before working and the waiting chats are added up");
     }
 
     #[test]
@@ -850,20 +834,5 @@ mod tests {
         assert!(outside.sub.contains("API key") && outside.sub.contains("outside"), "{}", outside.sub);
         assert_eq!(ask(serde_json::json!({"logged_in": false, "method": null, "known": true, "file": false})).state, "out");
         assert_eq!(ask(serde_json::json!({"logged_in": false, "method": null, "known": false, "file": false})).state, "error");
-    }
-
-    #[test]
-    fn a_chat_of_an_account_login_provider_is_listed_under_its_account_not_the_provider() {
-        use crate::providers::ProviderRef;
-        let plain = ProviderRef { id: "p1".into(), name: "Plain".into(), host: "a.example".into(), login: false };
-        let login = ProviderRef { login: true, id: "p2".into(), ..plain.clone() };
-        assert_eq!(listed_provider(Some(&plain)).as_deref(), Some("p1"));
-        assert_eq!(listed_provider(Some(&login)), None);
-        assert_eq!(listed_provider(None), None);
-        let providers = vec!["p1".to_owned(), "p2".to_owned()];
-        let k = Known { accounts: None, providers: Some(&providers) };
-        let chat = |p: &ProviderRef| mark(Some("a1"), listed_provider(Some(p)).as_deref(), false, 0);
-        assert_eq!(owner(&chat(&login), k), acct(Some("a1")), "under its account");
-        assert_eq!(owner(&chat(&plain), k), Ctx::Provider("p1".into()), "under its provider");
     }
 }

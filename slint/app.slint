@@ -302,8 +302,12 @@ export component AppWindow inherits Window {
                                 Label { text: T.tr("acct_context"); vertical-alignment: center; horizontal-stretch: 1; }
                                 Badge { text: "ACTIVE"; tone: "primary"; }
                             }
-                            if Acct.labels.length <= 3: SegTabs { items: Acct.labels; current: Acct.view; chosen(i) => { Acct.view = i; Acct.view-chosen(i); } }
-                            if Acct.labels.length > 3: ComboBox { model: Acct.labels; current-index <=> Acct.view; selected(v) => { Acct.view-chosen(self.current-index); } }
+                            // One choice whatever the number of accounts (a row of tabs, or a segment per account, ran out of room).
+                            HorizontalLayout {
+                                spacing: 8px;
+                                ComboBox { horizontal-stretch: 1; model: Acct.labels; current-index <=> Acct.view; selected(v) => { Acct.view-chosen(self.current-index); root.refocus(); } }
+                                if Acct.away != "": VerticalLayout { alignment: center; Badge { text: Acct.away; tone: "warn"; mono: false; } }
+                            }
                         }
                     }
                     VerticalLayout {
@@ -322,7 +326,7 @@ export component AppWindow inherits Window {
                         padding-left: 6px; padding-right: 2px; padding-bottom: 8px; padding-top: 12px; spacing: 6px;
                         Label { text: T.sessions; vertical-alignment: center; horizontal-stretch: 1; }
                         Rectangle { width: 7px; height: 7px; y: (parent.height - 7px) / 2; border-radius: 3.5px; background: Theme.ok; }
-                        IconBtn { y: -4px; icon: @image-url("icons/plus.svg"); clicked => { root.new-acct = Acct.pre-acct; root.new-prov = Acct.pre-prov; Imp.open = false; root.new-open = true; } }
+                        IconBtn { y: -4px; icon: @image-url("icons/plus.svg"); clicked => { root.new-acct = Acct.pre-acct; root.new-prov = 0; Imp.open = false; root.new-open = true; } }
                     }
                     if Search.text != "": ScrollView {
                         vertical-stretch: 1;
@@ -343,7 +347,7 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                    if Search.text == "" && root.no-chats: Rectangle { height: 40px; Text { text: T.tr(Acct.pre-prov > 0 ? "no_chats_provider" : "no_chats_here"); color: Theme.outline; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; } }
+                    if Search.text == "" && root.no-chats: Rectangle { height: 40px; Text { text: T.tr("no_chats_here"); color: Theme.outline; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; } }
                     if Search.text == "": ListView {
                         vertical-stretch: 1;
                         for s in root.sessions: Rectangle {
@@ -403,7 +407,7 @@ export component AppWindow inherits Window {
                             Text { text: root.conn-host + " · " + T.connected; color: Theme.ok; font-size: 11px; font-family: Theme.mono; overflow: elide; }
                         }
                     }
-                    VerticalLayout { padding-top: 10px; Btn { text: "+  " + T.new-chat; primary: true; height: 42px; clicked => { root.new-acct = Acct.pre-acct; root.new-prov = Acct.pre-prov; Imp.open = false; root.new-open = true; } } }
+                    VerticalLayout { padding-top: 10px; Btn { text: "+  " + T.new-chat; primary: true; height: 42px; clicked => { root.new-acct = Acct.pre-acct; root.new-prov = 0; Imp.open = false; root.new-open = true; } } }
                     HorizontalLayout {
                         padding-top: 8px; spacing: 6px;
                         Rectangle {
@@ -422,7 +426,7 @@ export component AppWindow inherits Window {
                                 Text { text: T.tr("cli_sessions"); color: Theme.on-var; font-size: 13px; vertical-alignment: center; }
                                 Image { source: @image-url("icons/terminal.svg"); width: 16px; height: 16px; y: (parent.height - 16px) / 2; colorize: Theme.on-var; }
                             }
-                            cli-area := TouchArea { mouse-cursor: pointer; clicked => { root.new-acct = Acct.pre-acct; root.new-prov = Acct.pre-prov; root.new-open = true; Imp.acct = root.new-acct; Imp.open = true; Imp.scan(Imp.acct, Acct.names.length > 1 ? Acct.names[Imp.acct] : ""); } }
+                            cli-area := TouchArea { mouse-cursor: pointer; clicked => { root.new-acct = Acct.pre-acct; root.new-prov = 0; root.new-open = true; Imp.acct = root.new-acct; Imp.open = true; Imp.scan(Imp.acct, Acct.names.length > 1 ? Acct.names[Imp.acct] : ""); } }
                         }
                     }
                 }
@@ -440,8 +444,10 @@ export component AppWindow inherits Window {
                         // Sized by the header, not the other way round: what is shown depends on this width.
                         width: parent.width; height: parent.height;
                         padding-left: 16px; padding-right: 16px; spacing: 10px; alignment: start;
-                        for n[i] in Acct.labels: AcctTab { text: n; cap: Acct.labels.length >= 4 ? (root.hw < 900px ? 56px : 80px) : (root.hw < 900px ? 90px : 120px); active: !root.new-open && Acct.view == i; clicked => { Acct.view = i; Acct.view-chosen(i); root.new-open = false; } }
-                        AcctTab { text: T.tr("tab_manage"); cap: Acct.labels.length >= 4 ? 72px : 120px; active: root.new-open; clicked => { root.new-acct = Acct.pre-acct; root.new-prov = Acct.pre-prov; Imp.open = false; root.new-open = true; } }
+                        // The account choice: one box however many accounts there are (what waits elsewhere is the badge beside it).
+                        VerticalLayout { alignment: center; ComboBox { width: root.hw < 600px ? 140px : root.hw < 900px ? 170px : 230px; model: Acct.labels; current-index <=> Acct.view; selected(v) => { Acct.view-chosen(self.current-index); root.new-open = false; root.refocus(); } } }
+                        if Acct.away != "": VerticalLayout { alignment: center; Badge { text: Acct.away; tone: "warn"; mono: false; } }
+                        AcctTab { text: T.tr("tab_manage"); cap: 120px; active: root.new-open; clicked => { root.new-acct = Acct.pre-acct; root.new-prov = 0; Imp.open = false; root.new-open = true; } }
                         Rectangle { y: 16px; width: 1px; height: 24px; background: Theme.hairline; }
                         // breadcrumb: workspace / project, or the page's name when no chat is open
                         Rectangle {
@@ -473,58 +479,71 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-                // the chat's own header: session title, folder, account, state (as in the Stitch main chat)
-                if root.has-chat && root.side == 0: Rectangle {
-                    height: 52px;
-                    background: Theme.surface;
-                    // The header never asks the page for more width than the window has (a header that wants more widened the whole page
-                    // past the window's edge and what was laid out in the middle ended up off it).
+                // The chat's own header, in two rows: who and how it stands (title, folder, account, permission mode, state, chips) and,
+                // below it, what can be done (the model and the gateway to choose, rename, view as text, ...). Neither row asks the page for
+                // more width than the window has (a header that wants more widens the whole page past the window's edge).
+                if root.has-chat && root.side == 0: VerticalLayout {
                     min-width: 0px;
-                    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
-                    HorizontalLayout {
-                        padding-left: root.gutter; padding-right: root.gutter; spacing: 10px; alignment: start;
-                        if root.hw >= 900px: Label { text: "SESSION //"; vertical-alignment: center; }
-                        if !root.renaming: Text { text: root.chat-title; color: Theme.on-surface; font-size: 16px; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
-                        if root.renaming: VerticalLayout { horizontal-stretch: 1; alignment: center; LineEdit { text <=> root.rename-text; font-size: 14px; accepted(t) => { root.renaming = false; root.rename-chat(t); } } }
-                        if root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename_ok"); height: 28px; primary: true; clicked => { root.renaming = false; root.rename-chat(root.rename-text); } } }
-                        if !root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename"); height: 28px; clicked => { root.rename-text = root.chat-title; root.renaming = true; } } }
-                        VerticalLayout { alignment: center; Btn { text: T.tr("text_view"); height: 28px; primary: root.text-view; clicked => { root.text-view = !root.text-view; if (root.text-view && root.debug-view) { root.debug-view = false; root.debug-view-set(false); } root.text-view-set(root.text-view); } } }
-                        if root.hw >= 1100px: VerticalLayout { alignment: center; Btn { text: T.tr("dbg_btn"); height: 28px; primary: root.debug-view; clicked => { root.debug-view = !root.debug-view; if (root.debug-view && root.text-view) { root.text-view = false; root.text-view-set(false); } root.debug-view-set(root.debug-view); } } }
-                        if root.hw >= 900px: VerticalLayout { alignment: center; Btn { text: T.tr("copy_all"); height: 28px; clicked => { root.copy-all(); } } }
-                        if root.hw >= 1000px && Acct.names.length > 1: VerticalLayout { alignment: center; Btn { text: T.tr("cont_btn"); height: 28px; enabled: root.state != "running"; clicked => { root.cont-open = !root.cont-open; } } }
-                        VerticalLayout { alignment: center; Btn { text: T.tr("chat_delete"); height: 28px; danger: true; enabled: root.state != "running"; clicked => { root.renaming = false; root.delete-chat(); } } }
-                        if root.hw >= 1250px: Rectangle {
-                            y: 12px; height: 28px; width: min(dirrow.preferred-width, 300px); border-radius: 6px; background: Theme.container; border-width: 1px; border-color: Theme.hairline;
-                            dirrow := HorizontalLayout {
-                                padding-left: 8px; padding-right: 4px; spacing: 6px;
-                                Label { text: "DIR:"; vertical-alignment: center; }
-                                Text { text: root.pwd-path; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; }
-                                IconBtn { y: 0px; width: 24px; height: 28px; icon: @image-url("icons/copy.svg"); clicked => { root.copy(root.pwd-full); } }
+                    Rectangle {
+                        height: 52px;
+                        background: Theme.surface;
+                        min-width: 0px;
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
+                        HorizontalLayout {
+                            padding-left: root.gutter; padding-right: root.gutter; spacing: 10px; alignment: start;
+                            if root.hw >= 1100px: Label { text: "SESSION //"; vertical-alignment: center; }
+                            if !root.renaming: Text { text: root.chat-title; color: Theme.on-surface; font-size: 16px; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                            if root.renaming: VerticalLayout { horizontal-stretch: 1; alignment: center; LineEdit { text <=> root.rename-text; font-size: 14px; accepted(t) => { root.renaming = false; root.rename-chat(t); } } }
+                            if root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename_ok"); height: 28px; primary: true; clicked => { root.renaming = false; root.rename-chat(root.rename-text); } } }
+                            if !root.renaming && root.hw >= 1000px: Rectangle {
+                                y: 12px; height: 28px; width: min(dirrow.preferred-width, 300px); border-radius: 6px; background: Theme.container; border-width: 1px; border-color: Theme.hairline;
+                                dirrow := HorizontalLayout {
+                                    padding-left: 8px; padding-right: 4px; spacing: 6px;
+                                    Label { text: "DIR:"; vertical-alignment: center; }
+                                    Text { text: root.pwd-path; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; }
+                                    IconBtn { y: 0px; width: 24px; height: 28px; icon: @image-url("icons/copy.svg"); clicked => { root.copy(root.pwd-full); } }
+                                }
                             }
-                        }
-                        if root.chat-account != "": VerticalLayout { alignment: center; Badge { text: root.chat-account; tone: "ok"; mono: false; } }
-                        if root.has-chat && root.side == 0: VerticalLayout { alignment: center; ComboBox { width: 150px; model: [T.tr("model_default_opt"), "sonnet", "opus", "haiku", "fable", "sonnet[1m]", "opus[1m]"]; current-index: root.model-idx; enabled: root.state != "running"; selected(v) => { root.set-chat-model(self.current-index); } } }
-                        if root.has-chat && root.side == 0 && root.gw-shown && root.hw >= 1150px: VerticalLayout { alignment: center; ComboBox { width: 150px; model: root.gw-names; current-index <=> root.gw-idx; enabled: root.state != "running"; selected(v) => { root.gw-picked(self.current-index, v); } } }
-                        if root.chat-perm != "": VerticalLayout { alignment: center; Badge { text: root.chat-perm; tone: root.chat-perm-danger ? "err" : "warn"; mono: false; } }
-                        VerticalLayout {
-                            alignment: center;
-                            Pill {
-                                text: root.state-label; pulse: root.state == "running";
-                                fg: root.state == "running" ? Theme.primary-soft : root.state == "idle" ? Theme.ok : Theme.outline;
-                                fill: root.state == "running" ? Theme.primary.with-alpha(0.15) : root.state == "idle" ? Theme.ok.with-alpha(0.1) : transparent;
+                            if !root.renaming && root.chat-account != "": VerticalLayout { alignment: center; Badge { text: root.chat-account; tone: "ok"; mono: false; } }
+                            if !root.renaming && root.chat-perm != "": VerticalLayout { alignment: center; Badge { text: root.chat-perm; tone: root.chat-perm-danger ? "err" : "warn"; mono: false; } }
+                            VerticalLayout {
+                                alignment: center;
+                                Pill {
+                                    text: root.state-label; pulse: root.state == "running";
+                                    fg: root.state == "running" ? Theme.primary-soft : root.state == "idle" ? Theme.ok : Theme.outline;
+                                    fill: root.state == "running" ? Theme.primary.with-alpha(0.15) : root.state == "idle" ? Theme.ok.with-alpha(0.1) : transparent;
+                                }
                             }
-                        }
-                        // This chat's own team mode (see the Team page): on or off, and with it on the two helpers' models.
-                        if Team.wb-ready && Team.nt-applies && root.hw >= 1300px: VerticalLayout {
-                            alignment: center;
-                            Pill {
-                                clickable: true; clicked => { root.new-open = false; root.side = 6; }
-                                text: T.tr("team_chip") + " " + (Team.nt-on ? "ON" : "OFF") + (Team.nt-on && root.hw >= 1650px ? " · " + Team.nt-line : "");
-                                fg: Team.nt-on ? Theme.primary-soft : Theme.outline;
-                                fill: Team.nt-on ? Theme.primary.with-alpha(0.15) : transparent;
+                            // This chat's own team mode (see the Team page): on or off, and with it on the two helpers' models.
+                            if !root.renaming && Team.wb-ready && Team.nt-applies && root.hw >= 1100px: VerticalLayout {
+                                alignment: center;
+                                Pill {
+                                    clickable: true; clicked => { root.new-open = false; root.side = 6; }
+                                    text: T.tr("team_chip") + " " + (Team.nt-on ? "ON" : "OFF") + (Team.nt-on && root.hw >= 1650px ? " · " + Team.nt-line : "");
+                                    fg: Team.nt-on ? Theme.primary-soft : Theme.outline;
+                                    fill: Team.nt-on ? Theme.primary.with-alpha(0.15) : transparent;
+                                }
                             }
+                            if !root.renaming && Wt.show: VerticalLayout { alignment: center; Pill { clickable: true; clicked => { Wt.open = !Wt.open; Usage.open = false; if (Wt.open) { Wt.check(); } } text: T.tr("wt_chip"); fg: Theme.info; } }
                         }
-                        if Wt.show: VerticalLayout { alignment: center; Pill { clickable: true; clicked => { Wt.open = !Wt.open; Usage.open = false; if (Wt.open) { Wt.check(); } } text: T.tr("wt_chip"); fg: Theme.info; } }
+                    }
+                    Rectangle {
+                        height: 40px;
+                        background: Theme.surface;
+                        min-width: 0px;
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Theme.hairline; }
+                        HorizontalLayout {
+                            padding-left: root.gutter; padding-right: root.gutter; spacing: 8px; alignment: start;
+                            VerticalLayout { alignment: center; ComboBox { width: root.hw < 600px ? 130px : 150px; model: [T.tr("model_default_opt"), "sonnet", "opus", "haiku", "fable", "sonnet[1m]", "opus[1m]"]; current-index: root.model-idx; enabled: root.state != "running"; selected(v) => { root.set-chat-model(self.current-index); } } }
+                            if root.gw-shown && root.hw >= 720px: VerticalLayout { alignment: center; ComboBox { width: 150px; model: root.gw-names; current-index <=> root.gw-idx; enabled: root.state != "running"; selected(v) => { root.gw-picked(self.current-index, v); } } }
+                            Rectangle { horizontal-stretch: 1; }
+                            if !root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename"); height: 28px; clicked => { root.rename-text = root.chat-title; root.renaming = true; } } }
+                            VerticalLayout { alignment: center; Btn { text: T.tr("text_view"); height: 28px; primary: root.text-view; clicked => { root.text-view = !root.text-view; if (root.text-view && root.debug-view) { root.debug-view = false; root.debug-view-set(false); } root.text-view-set(root.text-view); } } }
+                            if root.hw >= 860px: VerticalLayout { alignment: center; Btn { text: T.tr("dbg_btn"); height: 28px; primary: root.debug-view; clicked => { root.debug-view = !root.debug-view; if (root.debug-view && root.text-view) { root.text-view = false; root.text-view-set(false); } root.debug-view-set(root.debug-view); } } }
+                            if root.hw >= 700px: VerticalLayout { alignment: center; Btn { text: T.tr("copy_all"); height: 28px; clicked => { root.copy-all(); } } }
+                            if root.hw >= 900px && Acct.names.length > 1: VerticalLayout { alignment: center; Btn { text: T.tr("cont_btn"); height: 28px; enabled: root.state != "running"; clicked => { root.cont-open = !root.cont-open; } } }
+                            VerticalLayout { alignment: center; Btn { text: T.tr("chat_delete"); height: 28px; danger: true; enabled: root.state != "running"; clicked => { root.renaming = false; root.delete-chat(); } } }
+                        }
                     }
                 }
                 HorizontalLayout {
@@ -754,7 +773,7 @@ export component AppWindow inherits Window {
                                     if root.has-chat: Btn { y: 7px; text: "/  " + T.tr("slash_btn"); enabled: root.state != "running" && !root.shell-mode; clicked => { root.draft = "/"; Slash.draft-changed("/"); composer.focus(); } }
                                     Btn { y: 7px; text: T.tr("att_add"); show-icon: true; icon: @image-url("icons/image.svg"); enabled: root.has-chat; clicked => { Att.pick(); } }
                                     Rectangle { horizontal-stretch: 1; }
-                                    Text { text: T.hint; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
+                                    if root.hw >= 760px: Text { text: T.hint; color: Theme.outline; font-size: 11px; font-family: Theme.mono; vertical-alignment: center; }
                                     if root.state == "running": Btn { y: 7px; text: T.stop; danger: true; clicked => { root.stop(); } }
                                     Btn { y: 7px; text: T.send; show-icon: true; icon: @image-url("icons/send.svg"); primary: true; enabled: root.has-chat && root.state != "running" && (root.draft != "" || Att.items.length > 0); clicked => { root.send(root.draft); } }
                                 }
@@ -818,7 +837,7 @@ export component AppWindow inherits Window {
         // ---- the worktree card under the header chip; a click outside closes it ----
         if Wt.open && root.has-chat && Wt.show: Rectangle {
             TouchArea { clicked => { Wt.open = false; } }
-            WtCard { x: root.width - self.width - 16px; y: 62px; width: 400px; }
+            WtCard { x: root.width - self.width - 16px; y: 112px; width: 400px; }
         }
 
         // ---- the check of the project's own Claude Code settings: asked before the chat starts, over everything but the dialogs ----
@@ -832,7 +851,7 @@ export component AppWindow inherits Window {
         if root.cont-open && root.has-chat: Rectangle {
             TouchArea { clicked => { root.cont-open = false; } }
             Rectangle {
-                x: root.width - self.width - 16px; y: 62px; width: 300px; height: cc.preferred-height;
+                x: root.width - self.width - 16px; y: 148px; width: 300px; height: cc.preferred-height;
                 background: Theme.container; border-radius: 12px; border-width: 1px; border-color: Theme.hairline;
                 cc := VerticalLayout {
                     padding: 14px; spacing: 8px;

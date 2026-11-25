@@ -7,7 +7,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use tenrec::view::i18n::{fill, tr};
-use tenrec::view::panels::{accounts_view, presets, tab_list, tab_label, Ctx, Known};
+use tenrec::view::panels::{accounts_view, away, labels, Known, View};
 
 use crate::{Acct, AcctRow, App, AppWindow, PlugRow};
 
@@ -18,12 +18,9 @@ thread_local! {
     static CHATS: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
     // The picker's entries and the id behind each (None: the default account).
     static IDS: RefCell<Vec<Option<String>>> = const { RefCell::new(Vec::new()) };
-    // The header's tabs: each account (the picker's `IDS`) and then each provider, with the text on it. The provider shown (a provider tab
-    // is chosen), if one is: the account the panels show is then the default one (a provider chat has no account of its own).
-    static TABS: RefCell<Vec<(Ctx, String)>> = const { RefCell::new(Vec::new()) };
-    static PROVIDER: RefCell<Option<String>> = const { RefCell::new(None) };
-    // What the header's tabs say (the names with what waits or runs under each).
+    // What the account choice says (the names with what waits or runs under each) and the badge beside it for what waits elsewhere.
     static LABELS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static AWAY: RefCell<String> = const { RefCell::new(String::new()) };
     static NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     // The chat whose account the panels were last switched to.
     static APPLIED_SID: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -98,7 +95,7 @@ pub fn render(ui: &AppWindow, app: &App) {
     if current.is_some() && !head.ids.contains(&current) {
         set_account(ui, app, None);
     }
-    refresh_tabs(ui, app);
+    refresh_labels(ui, app);
     crate::usage::render(ui, app);
     // The new chat's picker stays inside the list.
     if ui.get_new_acct() as usize >= head.ids.len() {
@@ -124,83 +121,58 @@ pub fn known() -> Option<Vec<String>> {
     })
 }
 
-/// The accounts and the providers the host listed (each None before its list came): what a chat is told apart from a deleted one by.
-pub fn known_all() -> (Option<Vec<String>>, Option<Vec<String>>) {
-    (known(), crate::prov::tabs().map(|t| t.into_iter().map(|(id, _)| id).collect()))
+/// The account shown: the one the panels and the list are of (None is the default account).
+pub fn ctx(app: &App) -> View {
+    app.bus.account()
 }
 
-/// The tab shown: a provider when one was chosen, else the account the panels show.
-pub fn ctx(app: &App) -> Ctx {
-    match PROVIDER.with(|p| p.borrow().clone()) {
-        Some(p) => Ctx::Provider(p),
-        None => Ctx::Account(app.bus.account()),
-    }
-}
-
-/// The tabs again from the accounts and the providers listed (either list changed), then what hangs on them: a provider tab whose provider
-/// is gone is left for the default account, the picker and the list follow.
-pub fn refresh_tabs(ui: &AppWindow, app: &App) {
-    let providers = crate::prov::tabs();
-    let tabs = tab_list(&IDS.with(|i| i.borrow().clone()), &NAMES.with(|n| n.borrow().clone()), providers.as_deref().unwrap_or_default());
-    TABS.with(|t| *t.borrow_mut() = tabs);
-    let gone = PROVIDER.with(|p| p.borrow().as_ref().is_some_and(|id| providers.as_ref().is_some_and(|list| !list.iter().any(|(pid, _)| pid == id))));
-    if gone {
-        set_ctx(ui, app, Ctx::Account(None));
-    }
+/// The account choice again (the accounts listed changed), then what hangs on it: the choice and the list follow the account shown.
+pub fn refresh_labels(ui: &AppWindow, app: &App) {
     sync_view(ui, app);
     crate::show_sessions(ui, app);
 }
 
-/// The header's tab names, each with "⚠ n" (a chat there waits for the person) or "●" (one is working) when it is not the tab shown.
+/// The account choice's entries, each with "⚠ n" (a chat there waits for the person) or "●" (one is working) when it is not the account
+/// shown, and the badge beside the closed choice that sums them (the closed choice names only the account shown).
 pub fn set_labels(ui: &AppWindow, app: &App) {
     let view = ctx(app);
-    let (accounts, providers) = known_all();
-    let seen = crate::attention_now(&view, Known { accounts: accounts.as_deref(), providers: providers.as_deref() });
-    let labels: Vec<String> = TABS.with(|t| t.borrow().iter().map(|(c, name)| tab_label(name, seen.get(c))).collect());
-    if LABELS.with(|l| *l.borrow() == labels) {
+    let known = known();
+    let seen = crate::attention_now(&view, Known { accounts: known.as_deref() });
+    let (ids, names) = (IDS.with(|i| i.borrow().clone()), NAMES.with(|n| n.borrow().clone()));
+    let entries = labels(&ids, &names, &seen);
+    let badge = away(&seen);
+    let acct = ui.global::<Acct>();
+    if AWAY.with(|a| *a.borrow() != badge) {
+        acct.set_away(badge.as_str().into());
+        AWAY.with(|a| *a.borrow_mut() = badge);
+    }
+    if LABELS.with(|l| *l.borrow() == entries) {
         return;
     }
-    ui.global::<Acct>().set_labels(ModelRc::from(std::rc::Rc::new(VecModel::from(labels.iter().map(|l| l.into()).collect::<Vec<SharedString>>()))));
-    LABELS.with(|l| *l.borrow_mut() = labels);
-    // A picker that lost its model may have lost its place.
+    acct.set_labels(ModelRc::from(std::rc::Rc::new(VecModel::from(entries.iter().map(|l| l.into()).collect::<Vec<SharedString>>()))));
+    LABELS.with(|l| *l.borrow_mut() = entries);
+    // A choice that lost its model may have lost its place.
     sync_view(ui, app);
 }
 
-/// Points the header's picker at the tab shown, and the new-chat form's presets (account, provider) at what that tab means.
+/// Points the account choice at the account shown, and the new-chat form's account at it too.
 fn sync_view(ui: &AppWindow, app: &App) {
-    let view = ctx(app);
-    let (index, (pre_acct, pre_prov)) = TABS.with(|t| {
-        let tabs = t.borrow();
-        (tabs.iter().position(|(c, _)| *c == view).unwrap_or(0), presets(&tabs, &view))
-    });
+    let account = app.bus.account();
+    let index = IDS.with(|ids| ids.borrow().iter().position(|id| *id == account).unwrap_or(0)) as i32;
     let acct = ui.global::<Acct>();
-    acct.set_view(index as i32);
-    acct.set_pre_acct(pre_acct as i32);
-    acct.set_pre_prov(pre_prov as i32);
+    acct.set_view(index);
+    acct.set_pre_acct(index);
 }
 
-/// Switches the tab shown. An account (or the default one) changes what the panels show: what was shown of the old one goes, and the open
-/// panel asks again. A provider is shown with the default account's panels (a provider chat has none of its own); only the list changes.
-pub fn set_ctx(ui: &AppWindow, app: &App, view: Ctx) {
-    let (account, provider) = match view {
-        Ctx::Account(id) => (id, None),
-        Ctx::Provider(p) => (None, Some(p)),
-    };
-    let provider_changed = PROVIDER.with(|p| p.replace(provider.clone())) != provider;
-    let account_changed = app.bus.set_account(account);
+/// Switches the panels to another account: what was shown of the old one goes, and the open panel asks again.
+pub fn set_account(ui: &AppWindow, app: &App, id: Option<String>) {
+    let changed = app.bus.set_account(id);
     sync_view(ui, app);
-    if provider_changed || account_changed {
+    if changed {
         crate::show_sessions(ui, app);
-    }
-    if account_changed {
         crate::usage::render(ui, app);
         crate::panels::account_changed(ui, app);
     }
-}
-
-/// Switches the panels to another account (see `set_ctx`).
-pub fn set_account(ui: &AppWindow, app: &App, id: Option<String>) {
-    set_ctx(ui, app, Ctx::Account(id));
 }
 
 pub fn ask_status(ui: &AppWindow, app: &App, key: &str) {
@@ -229,20 +201,13 @@ pub fn set_chats(ui: &AppWindow, app: &App, chats: HashMap<String, usize>) {
     render(ui, app);
 }
 
-/// Another chat was opened: the tab follows it (once; a hand-picked tab stays until the next chat). A provider chat goes to its provider's
-/// tab; a chat of an account to that account's.
-pub fn follow_chat(ui: &AppWindow, app: &App, sid: &str, account: Option<String>, provider: Option<String>) {
+/// Another chat was opened: the account choice follows it (once; a hand-picked account stays until the next chat). A chat that has no
+/// account, and a provider chat is one, goes to the default account.
+pub fn follow_chat(ui: &AppWindow, app: &App, sid: &str, account: Option<String>) {
     if APPLIED_SID.with(|a| a.borrow().as_deref() == Some(sid)) {
         return;
     }
     APPLIED_SID.with(|a| *a.borrow_mut() = Some(sid.to_owned()));
-    // A provider that was deleted leaves its chat to the default account (the provider list may not have come yet: it is then taken as it is).
-    if let Some(p) = provider {
-        if crate::prov::tabs().is_none_or(|list| list.iter().any(|(id, _)| *id == p)) {
-            set_ctx(ui, app, Ctx::Provider(p));
-            return;
-        }
-    }
     // A chat of an account that was deleted: the panels show the default account, not one that is gone (the list may not have
     // come yet, then the account is taken as it is and `render` corrects it).
     let account = account.filter(|id| IDS.with(|ids| ids.borrow().is_empty() || ids.borrow().contains(&Some(id.clone()))));
@@ -436,8 +401,8 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
     let (a, weak) = (app.clone(), ui.as_weak());
     acct.on_view_chosen(move |i| {
         let Some(ui) = weak.upgrade() else { return };
-        let Some(view) = TABS.with(|t| t.borrow().get(i.max(0) as usize).map(|(c, _)| c.clone())) else { return };
-        set_ctx(&ui, &a, view);
+        let Some(id) = IDS.with(|ids| ids.borrow().get(i.max(0) as usize).cloned()) else { return };
+        set_account(&ui, &a, id);
     });
 }
 
