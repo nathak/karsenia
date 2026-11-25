@@ -7,11 +7,13 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use slint::{ComponentHandle, SharedString};
 use tenrec::view::i18n::{fill, tr};
-use tenrec::view::sched::{prov_op, prov_view, ProvForm};
+use tenrec::view::sched::{login_choice, prov_op, prov_view, LoginPick, ProvForm};
 
 use crate::{App, AppWindow, Prov, ProvRowV};
 
 thread_local! {
+    // The account (None: the default one) and the picker's index the open provider form started with.
+    static OPENED: RefCell<(Option<String>, i32)> = const { RefCell::new((None, 0)) };
     static LIST: RefCell<Option<Value>> = const { RefCell::new(None) };
     // The number of the save in flight, to tell its reply from another's.
     static SAVE_RID: Cell<u64> = const { Cell::new(0) };
@@ -112,7 +114,10 @@ fn open_new(ui: &AppWindow, auth: i32, account: Option<&str>, from: &str) {
     p.set_f_auth(auth);
     p.set_f_clear(false);
     p.set_f_has_key(false);
-    p.set_f_login_acct(crate::accounts::index_of(account));
+    // What the picker shows is the starting point (an account that is gone shows the first entry, and saving then says so).
+    let index = crate::accounts::index_or_none(account).max(0);
+    OPENED.with(|o| *o.borrow_mut() = (account.map(str::to_owned), index));
+    p.set_f_login_acct(index);
     p.set_form_from(from.into());
     p.set_editing(true);
 }
@@ -131,7 +136,12 @@ fn open_edit(ui: &AppWindow, id: &str, from: &str) {
     p.set_f_key(SharedString::new());
     p.set_f_clear(false);
     p.set_f_has_key(one["has_token"] == true);
-    p.set_f_login_acct(crate::accounts::index_of(one["login_account"].as_str()));
+    // The account the form is opened with is remembered by id: a list that changes while the form is open must not change it, and an
+    // account that is gone shows as no entry (-1) instead of as the default account.
+    let opened = one["login_account"].as_str();
+    let index = crate::accounts::index_or_none(opened);
+    OPENED.with(|o| *o.borrow_mut() = (opened.map(str::to_owned), index));
+    p.set_f_login_acct(index);
     p.set_f_model(text(&one["model"]));
     p.set_f_opus(text(&one["models"]["opus"]));
     p.set_f_sonnet(text(&one["models"]["sonnet"]));
@@ -216,7 +226,20 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         let aliases = [p.get_f_opus().to_string(), p.get_f_sonnet().to_string(), p.get_f_haiku().to_string()];
         // The account of an account-login provider: the picker's index and the name it showed must still agree (the list can change meanwhile).
         let login_name = slint::Model::row_data(&ui.global::<crate::Acct>().get_names(), p.get_f_login_acct().max(0) as usize).unwrap_or_default().to_string();
-        let account = crate::accounts::id_at(p.get_f_login_acct(), &login_name).flatten();
+        // The account is judged only for an account-login provider; a mismatch or a gone account is refused, never the default account.
+        let account = if p.get_f_auth() == 4 {
+            let (opened, opened_index) = OPENED.with(|o| o.borrow().clone());
+            let touched = p.get_f_login_acct() != opened_index;
+            match login_choice(opened.as_deref(), touched, crate::accounts::id_at(p.get_f_login_acct(), &login_name), &crate::accounts::ids()) {
+                Ok(account) => account,
+                Err(why) => {
+                    crate::toast(&ui, tr(a.lang, if why == LoginPick::Gone { "pv_login_gone" } else { "pv_login_stale" }));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let op = prov_op(&ProvForm { id: Some(id.as_str()), name: &name, url: &url, auth: p.get_f_auth(), key: &key, clear: p.get_f_clear(), model: &model, aliases: [&aliases[0], &aliases[1], &aliases[2]], headers: &p.get_f_headers().to_string(), account: account.as_deref() });
         // `send`, not `ask`: the operation (the key in it) is not kept waiting for its reply.
         let rid = a.bus.send(op);

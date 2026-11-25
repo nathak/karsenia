@@ -364,6 +364,32 @@ pub struct ProvForm<'a> {
     pub headers: &'a str,
 }
 
+/// Why an account-login provider cannot be saved with the account the form shows.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LoginPick {
+    /// The account the form was opened with is gone.
+    Gone,
+    /// The picker's entry no longer matches the list.
+    Stale,
+}
+
+/// The account an account-login provider is saved with (`None` is the default account). `opened` is the account the form was opened
+/// with, `touched` whether the person changed the picker since, `picked` what the picker's entry stands for now (`None`: it matches no
+/// entry of the list) and `ids` the list now (`None` entries are the default account). A form that was not touched keeps the account it
+/// was opened with whatever happened to the list (an index slides when an account before it is deleted); an account that is gone or an
+/// entry that matches nothing is refused, never quietly turned into the default account (whose login would go to the gateway).
+pub fn login_choice(opened: Option<&str>, touched: bool, picked: Option<Option<String>>, ids: &[Option<String>]) -> Result<Option<String>, LoginPick> {
+    if touched {
+        return picked.ok_or(LoginPick::Stale);
+    }
+    let opened = opened.map(str::to_owned);
+    if ids.is_empty() || ids.contains(&opened) {
+        Ok(opened)
+    } else {
+        Err(LoginPick::Gone)
+    }
+}
+
 /// The `provider_save` operation. An empty key field puts no "token" in it at all (the saved key stays); an empty id is a new
 /// provider.
 pub fn prov_op(f: &ProvForm) -> Value {
@@ -515,6 +541,40 @@ mod tests {
         assert_eq!((keep["id"].as_str(), keep["models"]["haiku"].as_str()), (Some("p1"), Some("h")));
         let clear = prov_op(&ProvForm { id: Some("p1"), name: "G", url: "https://x.example", auth: 0, key: "", clear: true, account: None, model: "", aliases: ["", "", ""], headers: "" });
         assert_eq!(clear["clear_token"], true);
+    }
+
+    fn ids(list: &[Option<&str>]) -> Vec<Option<String>> {
+        list.iter().map(|id| id.map(str::to_owned)).collect()
+    }
+
+    #[test]
+    fn an_untouched_picker_keeps_the_account_the_form_opened_with() {
+        // The form was opened for account "b" (at index 2); an account before it was deleted, so "b" is at index 1 now.
+        let now = ids(&[None, Some("b"), Some("c")]);
+        assert_eq!(login_choice(Some("b"), false, Some(Some("c".into())), &now), Ok(Some("b".to_owned())), "not the account that slid into its index");
+        // The default account (None) is an account too.
+        assert_eq!(login_choice(None, false, Some(None), &now), Ok(None));
+    }
+
+    #[test]
+    fn a_gone_account_is_refused_not_turned_into_the_default() {
+        let now = ids(&[None, Some("c")]);
+        assert_eq!(login_choice(Some("b"), false, Some(None), &now), Err(LoginPick::Gone));
+        // A list that has not come yet cannot say it is gone.
+        assert_eq!(login_choice(Some("b"), false, None, &[]), Ok(Some("b".to_owned())));
+    }
+
+    #[test]
+    fn a_picker_that_no_longer_matches_is_refused() {
+        let now = ids(&[None, Some("b")]);
+        assert_eq!(login_choice(Some("b"), true, None, &now), Err(LoginPick::Stale));
+    }
+
+    #[test]
+    fn the_default_account_is_a_choice_not_a_mismatch() {
+        let now = ids(&[None, Some("b")]);
+        assert_eq!(login_choice(Some("b"), true, Some(None), &now), Ok(None), "the person picked the default account");
+        assert_eq!(login_choice(None, true, Some(Some("b".into())), &now), Ok(Some("b".to_owned())));
     }
 
     #[test]

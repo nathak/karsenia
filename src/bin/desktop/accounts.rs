@@ -256,9 +256,14 @@ pub fn id_at(index: i32, name: &str) -> Option<Option<String>> {
     same.then(|| IDS.with(|ids| ids.borrow().get(i).cloned().flatten()))
 }
 
-/// The index of an account in the picker (the default account, None, is 0; an account that is gone is 0 too).
-pub fn index_of(id: Option<&str>) -> i32 {
-    IDS.with(|ids| ids.borrow().iter().position(|one| one.as_deref() == id).unwrap_or(0)) as i32
+/// Like `index_of`, but -1 for an account that is gone (a form then asks for a pick, it does not show the default account).
+pub fn index_or_none(id: Option<&str>) -> i32 {
+    IDS.with(|ids| ids.borrow().iter().position(|one| one.as_deref() == id).map_or(-1, |i| i as i32))
+}
+
+/// The account ids behind the picker's entries (`None`: the default account).
+pub fn ids() -> Vec<Option<String>> {
+    IDS.with(|ids| ids.borrow().clone())
 }
 
 /// The new chat's account from the picker: the index and the name it showed must still agree.
