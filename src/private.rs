@@ -73,7 +73,7 @@ pub const STALE_TMP_AGE: std::time::Duration = std::time::Duration::from_secs(10
 
 /// Files `write_atomic` left beside `path` when the app stopped between writing and renaming (they hold the whole text, keys perhaps)
 /// are removed: only regular files named exactly as it names them for this `path`, older than `min_age`. Links, folders and every
-/// other name are left; nothing fails (a file another process holds open is skipped).
+/// other name are left; nothing fails (on Windows a file another process holds open is skipped).
 pub fn remove_stale_tmp(path: &Path, min_age: std::time::Duration) {
     if let Some(cutoff) = std::time::SystemTime::now().checked_sub(min_age) {
         remove_tmp_older_than(path, cutoff);
