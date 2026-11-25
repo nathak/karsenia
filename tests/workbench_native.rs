@@ -76,7 +76,7 @@ async fn a_locked_contract_and_pins_reach_the_model_but_not_the_transcript_and_t
 #[tokio::test]
 async fn a_command_goes_to_the_program_alone_so_it_is_run_and_not_read_as_a_question() {
     // Measured with claude 2.1.326: `/cost` as the only block is run by the program itself (no model call); with one more text block
-    // after it the whole message is a prompt for the model (`/compact` then gets an answer instead of running).
+    // after it the whole message is a prompt for the model (measured with `/cost`; the owner's screenshot showed the same for `/compact`: the model answered that it cannot run it).
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let turn = "{\"$wait\":\"user\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}\n";
