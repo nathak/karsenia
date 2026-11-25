@@ -378,6 +378,14 @@ mod tests {
     }
 
     #[test]
+    fn a_header_that_only_starts_like_user_agent_is_not_the_persons_own() {
+        let mut p = provider(Auth::Bearer, Some("airkey-123456"));
+        p.headers = Some("User-Agent-Extra: x".into());
+        let plan = with_user_agent(plan(&[], Some(&p), Path::new("/cfg")), Some(&p), Some("2.1.326"));
+        assert_eq!(ua(&plan), Some("User-Agent-Extra: x\nUser-Agent: claude-cli/2.1.326 (external, sdk-cli) Karsenia"));
+    }
+
+    #[test]
     fn an_account_login_provider_gets_it_too() {
         let p = provider(Auth::AccountLogin, None);
         for dir in [None, Some(Path::new("/data/accounts/0123456789abcdef"))] {
