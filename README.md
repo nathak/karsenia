@@ -10,8 +10,7 @@ A desktop-style host for [Claude Code](https://claude.com/claude-code). A Rust c
 (`--input-format stream-json --output-format stream-json`) and gives it a chat window of its own: a native desktop app
 (Slint, no browser, no network listener) or a local web page.
 
-> Status: early (v0.1.1). It is used daily by its author, mostly on Windows with builds cross-compiled from Linux.
-> The Linux test suite is large; Windows has no automated tests, only hand use. Expect rough edges.
+> Status: early (v0.1.1). The Linux test suite is large; Windows has no automated tests, only hand use. Expect rough edges.
 
 ## Download
 
@@ -109,8 +108,7 @@ Source code: [MIT](LICENSE). The desktop app is built with [Slint](https://slint
 (`--input-format stream-json --output-format stream-json`)로 실행하고, 전용 채팅 화면을 제공합니다. 화면은 네이티브
 데스크톱 앱(Slint, 브라우저와 네트워크 수신 포트 없음)이거나 로컬 웹 페이지입니다.
 
-> 상태: 초기 단계(v0.1.1). 만든 사람이 매일 쓰고 있으며 주로 Windows에서 리눅스로 교차 컴파일한 빌드를 씁니다.
-> 리눅스용 테스트는 많지만 Windows는 자동 테스트 없이 손으로만 확인했습니다. 거친 부분이 있을 수 있습니다.
+> 상태: 초기 단계(v0.1.1). 리눅스용 테스트는 많지만 Windows는 자동 테스트 없이 손으로만 확인했습니다. 거친 부분이 있을 수 있습니다.
 
 ## 내려받기
 
