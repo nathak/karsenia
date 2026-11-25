@@ -11,7 +11,7 @@ A desktop-style host for [Claude Code](https://claude.com/claude-code). A Rust c
 
 ## Download
 
-Prebuilt Windows app: **[Releases](https://github.com/nathak/tenrec/releases/latest)** → `karsenia-desktop-0.1.0-windows-x86_64.zip`
+Prebuilt Windows app: **[Releases](https://github.com/nathak/karsenia/releases/latest)** → `karsenia-desktop-0.1.0-windows-x86_64.zip`
 (check it against the `.sha256` file next to it). Unzip, then double-click `karsenia-desktop.exe`.
 
 - It needs `claude` (Claude Code) on your `PATH`.
@@ -91,7 +91,7 @@ Source code: [MIT](LICENSE). The desktop app is built with [Slint](https://slint
 
 ## 내려받기
 
-Windows 빌드: **[Releases](https://github.com/nathak/tenrec/releases/latest)** → `karsenia-desktop-0.1.0-windows-x86_64.zip`
+Windows 빌드: **[Releases](https://github.com/nathak/karsenia/releases/latest)** → `karsenia-desktop-0.1.0-windows-x86_64.zip`
 (옆의 `.sha256` 파일로 확인하세요). 압축을 풀고 `karsenia-desktop.exe`를 실행합니다.
 
 - `claude`(Claude Code)가 `PATH`에 있어야 합니다.
