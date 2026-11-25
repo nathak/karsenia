@@ -59,7 +59,7 @@ export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=~/.cache/swb-tools/bin/cc CC
   without a click here, exactly as in the terminal. Open only projects you would run `claude` in.
 - **Images**: paste, drop or pick (png, jpeg, gif, webp, 5 MB each, five per message) go in as base64 image blocks; images in tool
   results show in the tool card; an image file inside the project that a tool names (or a result mentions) is fetched through
-  `GET /api/file`, which needs the token, resolves links and refuses anything outside the project or not an image (no SVG).
+  `GET /api/file`, which needs the token, resolves links and refuses anything outside the project or not an image (no SVG). It applies the editor's project check first (a chat whose folder is, or holds, the app's data folder or the home folder, or sits in a place that keeps credentials, gets no image), and it reads through one handle opened without following a link and without waiting (a FIFO swapped in for the file cannot hold the server), judged by that handle (a regular file within the size limit).
 - **Interrupt** sends the CLI's `interrupt` control request; the turn ends with `error_during_execution`.
 - Events the host does not know are passed to the UI as raw JSON (and shown in the debug drawer), so a new CLI version cannot break parsing.
 

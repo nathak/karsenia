@@ -184,6 +184,54 @@ async fn image_files_need_the_token_and_stay_inside_the_project() {
 }
 
 #[tokio::test]
+async fn an_ancestor_of_the_data_folder_cannot_serve_its_images() {
+    let fx = fixture().await;
+    let port = fx.server.addr.port();
+    // The test folder holds both the project and the app's data folder, so a chat made in it holds the data folder too.
+    let top = fx.project.parent().unwrap().to_path_buf();
+    let secret = top.join("data").join("attachments").join("x").join("secret.png");
+    std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
+    std::fs::write(&secret, b"\x89PNG private").unwrap();
+
+    let mut ws = good(&fx).await;
+    until_kind(&mut ws, "hello").await;
+    ws.send(Message::Text(json!({"op": "new", "cwd": top}).to_string())).await.unwrap();
+    let sid = until_kind(&mut ws, "created").await["sid"].as_str().unwrap().to_owned();
+
+    let http = reqwest::Client::new();
+    let url = |path: &str| format!("http://127.0.0.1:{port}/api/file?sid={sid}&path={path}");
+    let bearer = format!("Bearer {}", fx.server.token);
+    let relative = http.get(url("data%2Fattachments%2Fx%2Fsecret.png")).header("Authorization", &bearer).send().await.unwrap();
+    assert_eq!(relative.status(), 404, "the data folder's images are not served, whichever chat asks");
+    let absolute = http.get(url(&secret.display().to_string().replace('/', "%2F"))).header("Authorization", &bearer).send().await.unwrap();
+    assert_eq!(absolute.status(), 404);
+}
+
+#[tokio::test]
+async fn a_link_or_fifo_named_png_is_refused_at_once() {
+    let fx = fixture().await;
+    let port = fx.server.addr.port();
+    let outside = fx.project.parent().unwrap().join("outside.png");
+    std::fs::write(&outside, b"x").unwrap();
+    std::os::unix::fs::symlink(&outside, fx.project.join("link.png")).unwrap();
+    let fifo = fx.project.join("pipe.png");
+    let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+
+    let mut ws = good(&fx).await;
+    until_kind(&mut ws, "hello").await;
+    ws.send(Message::Text(json!({"op": "new", "cwd": fx.project}).to_string())).await.unwrap();
+    let sid = until_kind(&mut ws, "created").await["sid"].as_str().unwrap().to_owned();
+    let http = reqwest::Client::new();
+    let bearer = format!("Bearer {}", fx.server.token);
+    for name in ["link.png", "pipe.png"] {
+        let url = format!("http://127.0.0.1:{port}/api/file?sid={sid}&path={name}");
+        let got = tokio::time::timeout(Duration::from_secs(5), http.get(url).header("Authorization", &bearer).send()).await.expect("the request must not hang").unwrap();
+        assert_eq!(got.status(), 404, "{name}");
+    }
+}
+
+#[tokio::test]
 async fn the_memory_panel_adds_edits_approves_and_undoes_and_every_page_hears_of_it() {
     let fx = fixture().await;
     let mut ws = good(&fx).await;

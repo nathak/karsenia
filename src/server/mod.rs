@@ -33,7 +33,6 @@ use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -182,14 +181,19 @@ async fn file(State(state): State<AppState>, headers: HeaderMap, Query(query): Q
     }
     let Some(handle) = state.registry.get(&query.sid) else { return StatusCode::NOT_FOUND.into_response() };
     let Some(info) = handle.info().await else { return StatusCode::NOT_FOUND.into_response() };
-    let Some(real) = files::resolve(&info.meta.cwd, &query.path) else { return StatusCode::NOT_FOUND.into_response() };
-    let Some(kind) = files::image_type(&real) else { return StatusCode::NOT_FOUND.into_response() };
-    // Read through one open handle and never past the limit, whatever the file grew to since it was checked.
-    let Ok(opened) = tokio::fs::File::open(&real).await else { return StatusCode::NOT_FOUND.into_response() };
-    let mut bytes = Vec::new();
-    if opened.take(files::MAX_FILE + 1).read_to_end(&mut bytes).await.is_err() || bytes.len() as u64 > files::MAX_FILE {
-        return StatusCode::NOT_FOUND.into_response();
-    }
+    // The same project check as the editor's (not the app's data folder or a place that holds it, not the home folder or a place that
+    // keeps credentials), then the image rules; the disk work runs off the async threads.
+    let (project, data_dir, home, wanted) = (info.meta.cwd.clone(), state.registry.dir().to_path_buf(), crate::platform::home_dir(), query.path.clone());
+    let found = tokio::task::spawn_blocking(move || {
+        let root = fs_ops::check_project(&project, &data_dir, home.as_deref(), false).ok()?;
+        let real = files::resolve(&root, &wanted)?;
+        let kind = files::image_type(&real)?;
+        Some((kind, files::read_image(&real)?))
+    })
+    .await
+    .ok()
+    .flatten();
+    let Some((kind, bytes)) = found else { return StatusCode::NOT_FOUND.into_response() };
     ([(header::CONTENT_TYPE, kind)], bytes).into_response()
 }
 
