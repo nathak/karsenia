@@ -9,7 +9,7 @@ use super::AppState;
 /// Equal without stopping at the first difference.
 pub fn ct_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
-    let mut diff = (a.len() ^ b.len()) as u8;
+    let mut diff = u8::from(a.len() != b.len());
     for i in 0..a.len().max(b.len()) {
         diff |= a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0);
     }
@@ -87,6 +87,13 @@ mod tests {
         assert!(!origin_ok(&headers(&[("origin", "http://evil.test")]), 4000));
         assert!(!origin_ok(&headers(&[("origin", "https://127.0.0.1:4000")]), 4000));
         assert!(!origin_ok(&headers(&[]), 4000), "a missing Origin is refused");
+    }
+
+    #[test]
+    fn ct_eq_does_not_wrap_the_length_difference() {
+        // A length difference of a multiple of 256 must not read as no difference (the rest is compared with zeros).
+        assert!(!ct_eq("abc", &format!("abc{}", "\0".repeat(256))));
+        assert!(!ct_eq(&format!("abc{}", "\0".repeat(512)), "abc"));
     }
 
     #[test]
