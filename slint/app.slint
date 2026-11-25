@@ -184,6 +184,15 @@ export component AppWindow inherits Window {
     callback zoom-close();
     // Carry the chat on under another account (the index in Acct.names and its name).
     in-out property <bool> cont-open;
+    // The "more" menu of the chat header's action row: what does not fit a narrow window moves in here (each `in-*` says that the item
+    // is in the row; the menu shows exactly the items that are not).
+    in-out property <bool> more-open: false;
+    property <bool> in-copy: root.hw >= 700px;
+    property <bool> in-gw: root.hw >= 720px;
+    property <bool> in-dbg: root.hw >= 860px;
+    property <bool> in-cont: root.hw >= 900px;
+    property <bool> more-shown: !root.in-copy || !root.in-dbg || (root.gw-shown && !root.in-gw) || (Acct.names.length > 1 && !root.in-cont);
+    changed more-shown => { if (!root.more-shown) { root.more-open = false; } }
     callback continue-chat(int, string);
     // The chat as one selectable text (the header's "View as text"): a snapshot made when it is opened or refreshed, a note when the
     // beginning was left out, and whether the chat has changed since.
@@ -239,7 +248,7 @@ export component AppWindow inherits Window {
     changed debug-view => { if (!root.debug-view && !root.perm.visible && !Dialog.visible) { root.refocus(); } }
     changed new-open => { if (root.new-open) { root.panel-open(100); } else { root.new-perm = 0; root.new-name = ""; root.refocus(); } }
     // A panel that goes away takes focus with it.
-    changed side => { Team.open = false; Usage.open = false; Know.adding = false; root.panel-open(root.side); root.refocus(); }
+    changed side => { root.more-open = false; Team.open = false; Usage.open = false; Know.adding = false; root.panel-open(root.side); root.refocus(); }
 
     // Every element sits in here: capture-key-pressed runs from the window down the focused element's parents, so the zoom
     // keys work whatever holds focus, before the composer or a dialog sees them; everything else is passed on.
@@ -248,11 +257,11 @@ export component AppWindow inherits Window {
         focus-on-tab-navigation: false;
         init => { self.focus(); }
         capture-key-pressed(event) => {
-            if (event.text == Key.Escape && root.debug-view && root.side == 0 && !root.new-open && !root.zoom-open && !root.perm.visible && !Dialog.visible && !Pal.open && !(Team.open || Usage.open || root.cont-open)) { root.debug-view = false; root.debug-view-set(false); return accept; }
-            if (event.text == Key.Escape && root.text-view && root.side == 0 && !root.new-open && !root.zoom-open && !root.perm.visible && !Dialog.visible && !Pal.open && !(Team.open || Usage.open || root.cont-open)) { root.text-view = false; root.text-view-set(false); return accept; }
+            if (event.text == Key.Escape && root.debug-view && root.side == 0 && !root.new-open && !root.zoom-open && !root.perm.visible && !Dialog.visible && !Pal.open && !(Team.open || Usage.open || root.cont-open || root.more-open)) { root.debug-view = false; root.debug-view-set(false); return accept; }
+            if (event.text == Key.Escape && root.text-view && root.side == 0 && !root.new-open && !root.zoom-open && !root.perm.visible && !Dialog.visible && !Pal.open && !(Team.open || Usage.open || root.cont-open || root.more-open)) { root.text-view = false; root.text-view-set(false); return accept; }
             if (event.text == Key.Escape && root.zoom-open && !root.perm.visible && !Dialog.visible) { root.zoom-close(); return accept; }
             // Esc closes the team card; a dialog that waits for an answer keeps its own Esc.
-            if (event.text == Key.Escape && (Team.open || Usage.open || root.cont-open) && !root.perm.visible && !Dialog.visible) { Team.open = false; Usage.open = false; root.cont-open = false; return accept; }
+            if (event.text == Key.Escape && (Team.open || Usage.open || root.cont-open || root.more-open) && !root.perm.visible && !Dialog.visible) { Team.open = false; Usage.open = false; root.cont-open = false; root.more-open = false; return accept; }
             if ((event.modifiers.alt || event.modifiers.control) && !event.modifiers.shift && !event.modifiers.meta && !root.perm.visible && !Dialog.visible) {
                 if (event.text == "1") { root.side = 0; root.new-open = false; return accept; }
                 if (event.text == "2") { root.side = 1; root.new-open = false; return accept; }
@@ -292,7 +301,7 @@ export component AppWindow inherits Window {
                         }
                         VerticalLayout { alignment: center; Badge { text: "● " + T.tr("app_running"); tone: "ok"; } }
                     }
-                    // the account the window shows (the same choice as the header's select box)
+                    // the account the window shows (the only place the account is chosen; the header only has the Accounts button)
                     Rectangle {
                         height: ctx.preferred-height;
                         border-radius: 8px; background: Theme.container; border-width: 1px; border-color: Theme.hairline;
@@ -444,9 +453,6 @@ export component AppWindow inherits Window {
                         // Sized by the header, not the other way round: what is shown depends on this width.
                         width: parent.width; height: parent.height;
                         padding-left: 16px; padding-right: 16px; spacing: 10px; alignment: start;
-                        // The account choice: one box however many accounts there are (what waits elsewhere is the badge beside it).
-                        if Acct.labels.length > 1: VerticalLayout { alignment: center; ComboBox { width: root.hw < 600px ? 140px : root.hw < 900px ? 170px : 230px; model: Acct.labels; current-index <=> Acct.view; selected(v) => { Acct.view-chosen(self.current-index); root.new-open = false; root.refocus(); } } }
-                        if Acct.away != "" && Acct.labels.length > 1: VerticalLayout { alignment: center; Badge { text: Acct.away; tone: "warn"; mono: false; } }
                         AcctTab { text: T.tr("tab_manage"); cap: 120px; active: root.new-open; clicked => { root.new-acct = Acct.pre-acct; root.new-prov = 0; Imp.open = false; root.new-open = true; } }
                         Rectangle { y: 16px; width: 1px; height: 24px; background: Theme.hairline; }
                         // breadcrumb: workspace / project, or the page's name when no chat is open
@@ -535,14 +541,15 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             padding-left: root.gutter; padding-right: root.gutter; spacing: 8px; alignment: start;
                             VerticalLayout { alignment: center; ComboBox { width: root.hw < 600px ? 130px : 150px; model: [T.tr("model_default_opt"), "sonnet", "opus", "haiku", "fable", "sonnet[1m]", "opus[1m]"]; current-index: root.model-idx; enabled: root.state != "running"; selected(v) => { root.set-chat-model(self.current-index); } } }
-                            if root.gw-shown && root.hw >= 720px: VerticalLayout { alignment: center; ComboBox { width: 150px; model: root.gw-names; current-index <=> root.gw-idx; enabled: root.state != "running"; selected(v) => { root.gw-picked(self.current-index, v); } } }
+                            if root.gw-shown && root.in-gw: VerticalLayout { alignment: center; ComboBox { width: 150px; model: root.gw-names; current-index <=> root.gw-idx; enabled: root.state != "running"; selected(v) => { root.gw-picked(self.current-index, v); } } }
                             Rectangle { horizontal-stretch: 1; }
                             if !root.renaming: VerticalLayout { alignment: center; Btn { text: T.tr("chat_rename"); height: 28px; clicked => { root.rename-text = root.chat-title; root.renaming = true; } } }
                             VerticalLayout { alignment: center; Btn { text: T.tr("text_view"); height: 28px; primary: root.text-view; clicked => { root.text-view = !root.text-view; if (root.text-view && root.debug-view) { root.debug-view = false; root.debug-view-set(false); } root.text-view-set(root.text-view); } } }
-                            if root.hw >= 860px: VerticalLayout { alignment: center; Btn { text: T.tr("dbg_btn"); height: 28px; primary: root.debug-view; clicked => { root.debug-view = !root.debug-view; if (root.debug-view && root.text-view) { root.text-view = false; root.text-view-set(false); } root.debug-view-set(root.debug-view); } } }
-                            if root.hw >= 700px: VerticalLayout { alignment: center; Btn { text: T.tr("copy_all"); height: 28px; clicked => { root.copy-all(); } } }
-                            if root.hw >= 900px && Acct.names.length > 1: VerticalLayout { alignment: center; Btn { text: T.tr("cont_btn"); height: 28px; enabled: root.state != "running"; clicked => { root.cont-open = !root.cont-open; } } }
+                            if root.in-dbg: VerticalLayout { alignment: center; Btn { text: T.tr("dbg_btn"); height: 28px; primary: root.debug-view; clicked => { root.debug-view = !root.debug-view; if (root.debug-view && root.text-view) { root.text-view = false; root.text-view-set(false); } root.debug-view-set(root.debug-view); } } }
+                            if root.in-copy: VerticalLayout { alignment: center; Btn { text: T.tr("copy_all"); height: 28px; clicked => { root.copy-all(); } } }
+                            if root.in-cont && Acct.names.length > 1: VerticalLayout { alignment: center; Btn { text: T.tr("cont_btn"); height: 28px; enabled: root.state != "running"; clicked => { root.cont-open = !root.cont-open; } } }
                             VerticalLayout { alignment: center; Btn { text: T.tr("chat_delete"); height: 28px; danger: true; enabled: root.state != "running"; clicked => { root.renaming = false; root.delete-chat(); } } }
+                            if root.more-shown: VerticalLayout { alignment: center; IconBtn { icon: @image-url("icons/more.svg"); clicked => { root.more-open = !root.more-open; Wt.open = false; Usage.open = false; root.cont-open = false; } } }
                         }
                     }
                 }
@@ -847,17 +854,41 @@ export component AppWindow inherits Window {
             ProjCard { x: (parent.width - self.width) / 2; y: 90px; width: min(620px, parent.width - 48px); }
         }
 
+        // ---- the "more" menu of the chat header: what the narrow window left out of the action row; a click outside closes it ----
+        if root.more-open && root.more-shown && root.has-chat && root.side == 0: Rectangle {
+            TouchArea { clicked => { root.more-open = false; } }
+            Rectangle {
+                x: root.width - self.width - 16px; y: 148px; width: 260px; height: mc.preferred-height;
+                background: Theme.container; border-radius: 12px; border-width: 1px; border-color: Theme.hairline;
+                mc := VerticalLayout {
+                    padding: 12px; spacing: 6px;
+                    Text { text: T.tr("more_actions"); color: Theme.on-surface; font-size: 14px; font-weight: 600; }
+                    if root.gw-shown && !root.in-gw: HorizontalLayout {
+                        spacing: 8px;
+                        Label { text: T.tr("gw_label"); vertical-alignment: center; }
+                        ComboBox { horizontal-stretch: 1; model: root.gw-names; current-index <=> root.gw-idx; enabled: root.state != "running"; selected(v) => { root.gw-picked(self.current-index, v); root.more-open = false; root.refocus(); } }
+                    }
+                    if !root.in-dbg: Btn { text: T.tr("dbg_btn"); height: 30px; primary: root.debug-view; clicked => { root.debug-view = !root.debug-view; if (root.debug-view && root.text-view) { root.text-view = false; root.text-view-set(false); } root.debug-view-set(root.debug-view); root.more-open = false; } }
+                    if !root.in-copy: Btn { text: T.tr("copy_all"); height: 30px; clicked => { root.more-open = false; root.copy-all(); } }
+                    if !root.in-cont && Acct.names.length > 1: Btn { text: T.tr("cont_btn"); height: 30px; enabled: root.state != "running"; clicked => { root.more-open = false; root.cont-open = true; } }
+                }
+            }
+        }
+
         // ---- the account chooser of "continue in another account", under the header button; a click outside closes it ----
         if root.cont-open && root.has-chat: Rectangle {
             TouchArea { clicked => { root.cont-open = false; } }
             Rectangle {
-                x: root.width - self.width - 16px; y: 148px; width: 300px; height: cc.preferred-height;
+                // Never taller than the window (with many accounts the list scrolls).
+                x: root.width - self.width - 16px; y: 148px; width: 300px; height: min(cc.preferred-height, root.height - 148px - 16px);
                 background: Theme.container; border-radius: 12px; border-width: 1px; border-color: Theme.hairline;
-                cc := VerticalLayout {
-                    padding: 14px; spacing: 8px;
-                    Text { text: T.tr("cont_title"); color: Theme.on-surface; font-size: 14px; font-weight: 600; }
-                    WText { text: T.tr("cont_note"); size: 12px; fg: Theme.on-var; }
-                    for n[i] in Acct.names: Btn { text: n; height: 30px; enabled: !(root.chat-account == "" ? i == 0 : n == root.chat-account); clicked => { root.cont-open = false; root.continue-chat(i, n); } }
+                ScrollView {
+                    cc := VerticalLayout {
+                        padding: 14px; spacing: 8px;
+                        Text { text: T.tr("cont_title"); color: Theme.on-surface; font-size: 14px; font-weight: 600; }
+                        WText { text: T.tr("cont_note"); size: 12px; fg: Theme.on-var; }
+                        for n[i] in Acct.names: Btn { text: n; height: 30px; enabled: !(root.chat-account == "" ? i == 0 : n == root.chat-account); clicked => { root.cont-open = false; root.continue-chat(i, n); } }
+                    }
                 }
             }
         }

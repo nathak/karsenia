@@ -139,7 +139,7 @@ fn main() {
     p.set_show(true);
     save(&window, &out.join("4-light-project-card.png"), W, H);
 
-    // 5. The window with a chat open, at different widths and with few or many accounts: the header's account choice and the session header.
+    // 5. The window with a chat open, at different widths and with few or many accounts: the sidebar's account choice and the session header.
     scenes(&ui, &window, &out);
 }
 
@@ -210,6 +210,19 @@ fn scenes(ui: &AppWindow, window: &MinimalSoftwareWindow, out: &std::path::Path)
     ui.set_text_view(true);
     save(window, &out.join("10-760x640-textview-dark.png"), 760, 640);
     ui.set_text_view(false);
+    // The "more" menu of the action row: at 1000px only debug and "continue in another account" are in it, at 760px everything that is
+    // not always shown; "continue" opens its own card at the same place.
+    ui.set_more_open(true);
+    save(window, &out.join("13-1000x700-more-dark.png"), 1000, 700);
+    save(window, &out.join("14-760x640-more-dark.png"), 760, 640);
+    ui.set_more_open(false);
+    ui.set_cont_open(true);
+    save(window, &out.join("15-760x640-cont-dark.png"), 760, 640);
+    ui.set_cont_open(false);
+    // One account, a window wide enough for the gateway and copy but not for debug: the menu has debug only.
+    open_chat(ui, &["기본 계정"]);
+    save(window, &out.join("16-1160x800-1acct-dark.png"), 1160, 800);
+    open_chat(ui, &many);
     ui.global::<Theme>().set_mode(1);
     save(window, &out.join("11-1280x800-12acct-light.png"), 1280, 800);
     save(window, &out.join("12-760x640-12acct-chat-light.png"), 760, 640);

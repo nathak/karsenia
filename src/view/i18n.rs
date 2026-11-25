@@ -334,6 +334,8 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("perm_bypass_ok", "확인 없이 실행하는 대화 만들기", "Make the chat that never asks"),
     ("perm_tag", "권한", "permission"),
     ("acct_context", "계정 컨텍스트", "ACCOUNT CONTEXT"),
+    ("more_actions", "더 보기", "More actions"),
+    ("gw_label", "게이트웨이", "Gateway"),
     ("no_chats_here", "이 계정에는 대화가 없습니다.", "No chats under this account."),
     ("tab_team", "스마트워크벤치", "SmartWorkbench"),
     ("cli_sessions", "CLI 세션", "CLI sessions"),
