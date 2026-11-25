@@ -1236,7 +1236,12 @@ impl Actor {
         };
         self.emit("user", json!({"text": text, "images": shown, "files": files}));
         // What the person has set in the chat's workbench is added for the model; the transcript above shows only the person's words.
-        let context = if self.workbench_native() { crate::workbench::inject::blocks(&self.dir, &self.meta.sid, &self.meta.cwd, self.team_spawned.is_some()) } else { Vec::new() };
+        // A command (`/compact`, `/cost`, a skill or plug-in command) goes alone: the program runs it only when it is the message's only
+        // block, and one more text block after it makes the whole message a prompt for the model (measured with claude 2.1.326: the model
+        // then answers that it cannot run the command, at the cost of a model call). With attached files it is a prompt anyway, so it keeps
+        // the blocks.
+        let alone = parts.is_empty() && is_slash(&text);
+        let context = if !alone && self.workbench_native() { crate::workbench::inject::blocks(&self.dir, &self.meta.sid, &self.meta.cwd, self.team_spawned.is_some()) } else { Vec::new() };
         let sent = self.process.as_ref().map(|p| p.send_line(protocol::user_message(&text, &parts, &context))).unwrap_or(false);
         if !sent {
             self.emit("error", json!({"message": "the claude process is gone; try again"}));

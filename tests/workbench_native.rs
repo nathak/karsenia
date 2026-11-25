@@ -74,6 +74,55 @@ async fn a_locked_contract_and_pins_reach_the_model_but_not_the_transcript_and_t
 }
 
 #[tokio::test]
+async fn a_command_goes_to_the_program_alone_so_it_is_run_and_not_read_as_a_question() {
+    // Measured with claude 2.1.326: `/cost` as the only block is run by the program itself (no model call); with one more text block
+    // after it the whole message is a prompt for the model (`/compact` then gets an answer instead of running).
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let turn = "{\"$wait\":\"user\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}\n";
+    std::fs::write(root.join("scenario.jsonl"), turn.repeat(5)).unwrap();
+    let wrapper = root.join("claude");
+    std::fs::write(&wrapper, format!("#!/bin/sh\nFAKE_SCENARIO='{}' FAKE_LOG='{}' exec '{}' \"$@\"\n", root.join("scenario.jsonl").display(), root.join("fake.log").display(), FAKE)).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let project = root.join("p");
+    std::fs::create_dir_all(&project).unwrap();
+    let server = start(Config { port: 0, data_dir: root.join("data"), bin: Some(wrapper.display().to_string()), mcp_bin: Some(wrapper.clone()), extract: Default::default(), propose: Default::default(), sched: Default::default() }).await.unwrap();
+    let reg = &server.registry;
+    reg.settings().update(|s| s.workbench_native = true);
+    let chat = reg.create_in(project.to_str().unwrap(), None, None, false, None).unwrap();
+    reg.workbench_apply(&chat.sid, Op::SetGoal { text: "ship it".into() }).unwrap();
+    reg.workbench_apply(&chat.sid, Op::Lock).unwrap();
+    let (_, mut rx) = chat.subscribe(0).await.unwrap();
+
+    let note = tenrec::claude::protocol::Image { media_type: "text/plain".into(), data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"some notes\n"), name: Some("n.txt".into()) };
+    chat.send("/cost".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+    chat.send("/my-skill arg".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+    chat.send("/home/me/a.rs fix this".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+    chat.send("/cost".into(), vec![note]).await.unwrap();
+    idle(&mut rx).await;
+    chat.send("a question".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+    let log = std::fs::read_to_string(root.join("fake.log")).unwrap();
+    let lines: Vec<&str> = log.lines().filter(|l| l.starts_with("IN ")).collect();
+    assert_eq!(lines.len(), 5, "{log}");
+    let blocks = |line: &str| serde_json::from_str::<serde_json::Value>(line.trim_start_matches("IN ")).unwrap()["message"]["content"].as_array().unwrap().len();
+    // A command (a skill or plug-in command too) is sent alone.
+    for line in &lines[..2] {
+        assert_eq!(blocks(line), 1, "a command is sent alone: {line}");
+        assert!(!line.contains("workbench_contract"), "{line}");
+    }
+    assert!(lines[0].contains("\"text\":\"/cost\"") && lines[1].contains("/my-skill arg"));
+    // A path is not a command, a command sent with a file is a prompt anyway, and an ordinary message: each keeps the contract.
+    for line in &lines[2..] {
+        assert!(line.contains("workbench_contract") && line.contains("ship it"), "{line}");
+    }
+}
+
+#[tokio::test]
 async fn switching_the_workbench_on_restarts_a_running_process_at_the_next_message() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
