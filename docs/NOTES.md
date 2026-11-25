@@ -23,6 +23,7 @@ cargo run -- --terminal   # also turns on the terminal (see below); TENREC_TERMI
 The token is in the address fragment (never sent over HTTP); the page moves it to `sessionStorage` and clears the address.
 Sessions are kept in `~/.local/share/tenrec` (`TENREC_DATA` or `--data` to change; a folder an older build made as `~/.local/share/smart-workbench-app`, or named by `SWB_APP_DATA`, is still used where it is): a meta file and an event log each,
 so a chat can be reopened and replayed, and continues with `claude --resume` after a restart.
+The log holds one event per line, added in one write; a line left half written (a crash, a full disk) is never glued to the next one, and reading skips only a line that cannot be read and keeps every other. If the log cannot be written the chat says so once (the chat goes on in memory).
 
 `TENREC_UI_DIR=./ui cargo run` serves the UI from disk, so editing it needs no rebuild.
 

@@ -959,14 +959,64 @@ fn socket_path(dir: &Path) -> Option<PathBuf> {
     (there.as_os_str().len() <= 100).then_some(there)
 }
 
+/// The events of a chat's log, one per line. A line that cannot be read (a write cut short can leave half a line, even in the middle of a
+/// letter) is skipped and every other line is kept; one bad line never costs the chat its history.
 fn read_log(path: &Path) -> Vec<Envelope> {
-    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
-    text.lines().filter_map(|line| serde_json::from_str::<Envelope>(line).ok()).collect()
+    let Ok(bytes) = std::fs::read(path) else { return Vec::new() };
+    bytes.split(|b| *b == b'\n').filter_map(|raw| log_event(&String::from_utf8_lossy(raw))).collect()
+}
+
+/// One log line as an event. A torn tail that the next event was written straight after is not a line of its own: the event after it is
+/// found by where an event begins (`{"v":`, the first field of an event; inside the text of one it is escaped).
+fn log_event(line: &str) -> Option<Envelope> {
+    if let Ok(event) = serde_json::from_str::<Envelope>(line) {
+        return Some(event);
+    }
+    line.rmatch_indices("{\"v\":").find_map(|(at, _)| serde_json::from_str::<Envelope>(&line[at..]).ok())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn log_line(seq: u64, text: &str) -> String {
+        serde_json::to_string(&session::Envelope { v: 1, sid: "s".into(), seq, ts: 1, kind: "user".into(), data: serde_json::json!({"text": text}) }).unwrap()
+    }
+
+    fn seqs(path: &Path) -> Vec<u64> {
+        read_log(path).iter().map(|e| e.seq).collect()
+    }
+
+    #[test]
+    fn a_torn_utf8_tail_keeps_every_good_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let mut bytes = format!("{}\n{}\n", log_line(1, "a"), log_line(2, "한글")).into_bytes();
+        let torn = log_line(3, "한글");
+        // Cut in the middle of the first Korean letter: the tail is not valid UTF-8.
+        bytes.extend_from_slice(&torn.as_bytes()[..torn.find('한').unwrap() + 1]);
+        std::fs::write(&path, bytes).unwrap();
+        assert_eq!(seqs(&path), [1, 2]);
+    }
+
+    #[test]
+    fn a_glued_line_keeps_the_event_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let torn = log_line(2, "한글");
+        let torn = &torn[..torn.find('한').unwrap() + 3];
+        std::fs::write(&path, format!("{}\n{torn}{}\n{}\n", log_line(1, "a"), log_line(3, "c"), log_line(4, "d"))).unwrap();
+        assert_eq!(seqs(&path), [1, 3, 4]);
+    }
+
+    #[test]
+    fn unparsable_lines_in_the_middle_are_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, format!("{}\nnot json\n\n{{\"v\":1}}\n{}\n", log_line(1, "a"), log_line(2, "b"))).unwrap();
+        assert_eq!(seqs(&path), [1, 2]);
+        assert!(read_log(&dir.path().join("missing.jsonl")).is_empty());
+    }
 
     #[test]
     fn the_data_folder_is_named_tenrec_and_a_folder_of_the_first_name_is_kept_where_it_is() {

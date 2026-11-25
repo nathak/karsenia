@@ -413,7 +413,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), cli_key: None, seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), cli_key: None, log_failed: false, seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -434,6 +434,8 @@ struct Actor {
     secrets: Vec<String>,
     /// Which `claude` program the chat last started (see `cli_version::key`), so its `init` can say what version it is.
     cli_key: Option<String>,
+    /// The last write of the chat's log failed (and the person was told).
+    log_failed: bool,
     seq: u64,
     bcast: broadcast::Sender<Envelope>,
     state: State,
@@ -530,14 +532,21 @@ impl Actor {
         let data = self.scrub(data);
         self.seq += 1;
         let envelope = Envelope { v: 1, sid: self.meta.sid.clone(), seq: self.seq, ts, kind: kind.to_owned(), data };
-        if let Ok(line) = serde_json::to_string(&envelope) {
-            let _ = crate::private::append_line(&log_path(&self.dir, &self.meta.sid), &line);
-        }
+        let written = serde_json::to_string(&envelope).map_err(std::io::Error::other).and_then(|line| crate::private::append_line(&log_path(&self.dir, &self.meta.sid), &line));
         if let Some(index) = self.realm.as_ref().and_then(|r| r.index.as_ref()) {
             index.add(&self.meta.cwd.to_string_lossy(), self.meta.created, &envelope);
         }
         self.log.push(envelope.clone());
         let _ = self.bcast.send(envelope);
+        // A log that cannot be written is said once, when it starts (not per event: the say-so is an event itself and fails the same way).
+        match written {
+            Ok(()) => self.log_failed = false,
+            Err(error) if !self.log_failed => {
+                self.log_failed = true;
+                self.emit("error", json!({"message": format!("the chat's log could not be written: {error}")}));
+            }
+            Err(_) => {}
+        }
     }
 
     /// For what only matters while it happens (streaming text pieces): sent to whoever is attached, never kept, never numbered.

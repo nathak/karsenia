@@ -105,15 +105,40 @@ fn is_tmp_name(file_name: &str, prefix: &str) -> bool {
     hex(pid, 8) && hex(nonce, 32)
 }
 
+/// One line added to a log, in one write. If the file does not end with a line break (an earlier write was cut short) one is added first,
+/// so the new line is never glued to the torn one.
 pub fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
     unlink_if_link(path);
-    let mut file = options().append(true).open(path)?;
-    writeln!(file, "{line}")
+    let mut file = options().read(true).append(true).open(path)?;
+    let mut buf = Vec::with_capacity(line.len() + 2);
+    if file.metadata()?.len() > 0 {
+        file.seek(SeekFrom::End(-1))?;
+        let mut last = [0u8; 1];
+        file.read_exact(&mut last)?;
+        if last[0] != b'\n' {
+            buf.push(b'\n');
+        }
+    }
+    buf.extend_from_slice(line.as_bytes());
+    buf.push(b'\n');
+    file.write_all(&buf)
 }
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_append_after_a_torn_tail_starts_on_its_own_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jsonl");
+        std::fs::write(&path, "{\"v\":1,\"si").unwrap();
+        append_line(&path, "y").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"v\":1,\"si\ny\n");
+        append_line(&path, "z").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"v\":1,\"si\ny\nz\n", "a complete tail needs no extra line break");
+    }
 
     #[test]
     fn folders_and_files_are_private() {
