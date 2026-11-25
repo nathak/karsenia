@@ -109,7 +109,7 @@ pub fn account_plan(inherited: &[String], config_dir: &Path) -> EnvPlan {
 }
 
 /// What the app calls itself to a provider.
-pub const APP_UA: &str = concat!("Karsenia/", env!("CARGO_PKG_VERSION"));
+pub const APP_UA: &str = "Karsenia";
 
 /// Appends the app's name to the program's own User-Agent for a provider chat. The program replaces its whole User-Agent with one given in
 /// `ANTHROPIC_CUSTOM_HEADERS` (measured with 2.1.326: `claude-cli/2.1.326 (external, sdk-cli)`), so the program's own part is written
@@ -345,12 +345,12 @@ mod tests {
         let mut p = provider(Auth::Bearer, Some("airkey-123456"));
         p.headers = Some("AIR-Api-Key: {key}".into());
         let with = with_user_agent(plan(&[], Some(&p), Path::new("/cfg")), Some(&p), Some("2.1.326"));
-        let expected = format!("AIR-Api-Key: airkey-123456\nUser-Agent: claude-cli/2.1.326 (external, sdk-cli) Karsenia/{}", env!("CARGO_PKG_VERSION"));
-        assert_eq!(ua(&with), Some(expected.as_str()));
+        let expected = "AIR-Api-Key: airkey-123456\nUser-Agent: claude-cli/2.1.326 (external, sdk-cli) Karsenia";
+        assert_eq!(ua(&with), Some(expected));
         // Without header lines the line stands alone, and an inherited value of the variable is not also removed.
         let none = provider(Auth::Bearer, Some("airkey-123456"));
         let alone = with_user_agent(plan(&names(&["ANTHROPIC_CUSTOM_HEADERS"]), Some(&none), Path::new("/cfg")), Some(&none), Some("2.1.326"));
-        assert_eq!(ua(&alone), Some(format!("User-Agent: claude-cli/2.1.326 (external, sdk-cli) Karsenia/{}", env!("CARGO_PKG_VERSION")).as_str()));
+        assert_eq!(ua(&alone), Some("User-Agent: claude-cli/2.1.326 (external, sdk-cli) Karsenia"));
         assert!(!alone.remove.contains(&"ANTHROPIC_CUSTOM_HEADERS".to_owned()));
         // The key is only where the header lines put it, never in the User-Agent line.
         let line = ua(&alone).unwrap();
@@ -382,7 +382,7 @@ mod tests {
         let p = provider(Auth::AccountLogin, None);
         for dir in [None, Some(Path::new("/data/accounts/0123456789abcdef"))] {
             let plan = with_user_agent(login_plan(&[], &p, dir), Some(&p), Some("2.1.326"));
-            assert!(ua(&plan).is_some_and(|v| v.starts_with("User-Agent: claude-cli/2.1.326 (external, sdk-cli) Karsenia/")));
+            assert!(ua(&plan).is_some_and(|v| v == "User-Agent: claude-cli/2.1.326 (external, sdk-cli) Karsenia"));
         }
     }
 }
