@@ -413,7 +413,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), cli_key: None, log_failed: false, seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), cli_key: None, log_failed: false, init_seen: false, spawned_resume: None, last_stderr: String::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -436,6 +436,12 @@ struct Actor {
     cli_key: Option<String>,
     /// The last write of the chat's log failed (and the person was told).
     log_failed: bool,
+    /// The program of this chat sent its `init` (a program that ends before it, having been told to resume, has lost the conversation).
+    init_seen: bool,
+    /// The conversation the running program was told to resume, if any.
+    spawned_resume: Option<String>,
+    /// What the program wrote on stderr, from its start.
+    last_stderr: String,
     seq: u64,
     bcast: broadcast::Sender<Envelope>,
     state: State,
@@ -1149,6 +1155,9 @@ impl Actor {
                     // hidden, and what was taken away. The key replacement of `emit` is a second guard.
                     let env: Vec<Value> = opts.env.describe().into_iter().map(|(name, shown)| json!([name, shown])).collect();
                     self.emit("spawn", json!({"bin": opts.bin, "cwd": opts.cwd, "args": crate::claude::process::args(&opts), "env": env, "env_removed": opts.env.remove, "container": opts.container.is_some()}));
+                    self.init_seen = false;
+                    self.spawned_resume = opts.resume.clone();
+                    self.last_stderr.clear();
                     events = Some(rx);
                 }
                 Err(error) => {
@@ -1314,6 +1323,7 @@ impl Actor {
     fn event(&mut self, event: ProcEvent) {
         match event {
             ProcEvent::Line(Event::Init { session_id, raw, .. }) => {
+                self.init_seen = true;
                 if let (Some(key), Some(version)) = (&self.cli_key, crate::claude::cli_version::from_init(&raw)) {
                     crate::claude::cli_version::remember(key, version);
                 }
@@ -1379,6 +1389,9 @@ impl Actor {
             }
             ProcEvent::Line(Event::Unparsed(text)) => self.emit("claude", json!({"type": "unparsed", "text": text})),
             ProcEvent::Stderr(text) => {
+                if self.last_stderr.len() < 4000 {
+                    self.last_stderr.push_str(&text);
+                }
                 if !text.trim().is_empty() {
                     self.emit("stderr", json!({"text": text}));
                 }
@@ -1910,6 +1923,13 @@ impl Actor {
         self.process = None;
         self.bg_live = 0;
         self.ctl_drop();
+        // A program told to resume a conversation it does not have ends before its init: the conversation is forgotten (also on disk), or
+        // every later message would resume it and fail the same way for good. The person is told; the next message starts a new one.
+        if let Some(lost) = self.spawned_resume.take().filter(|id| !self.init_seen && self.meta.claude_session_id.as_deref() == Some(id.as_str()) && crate::claude::process::resume_lost(&self.last_stderr)) {
+            self.meta.claude_session_id = None;
+            self.save_meta();
+            self.emit("error", json!({"message": "Claude Code has no record of this conversation, so it could not be resumed. Your next message starts a new conversation without the earlier context.", "resume_lost": lost}));
+        }
         self.set_state(State::Exited { code });
         if let Some(reply) = self.retire_reply.take() {
             let _ = reply.send(Ok(()));

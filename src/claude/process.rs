@@ -87,6 +87,12 @@ pub fn claude_bin() -> String {
     std::env::var("TENREC_CLAUDE").unwrap_or_else(|_| "claude".to_owned())
 }
 
+/// Whether the program's stderr says the conversation it was told to resume does not exist (measured with 2.1.326: it prints this and
+/// exits with 1 before any init, e.g. when its session file is gone).
+pub fn resume_lost(stderr: &str) -> bool {
+    stderr.contains("No conversation found with session ID")
+}
+
 pub fn args(opts: &SpawnOpts) -> Vec<String> {
     let mut args: Vec<String> = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-prompt-tool", "stdio"]
         .iter()
@@ -468,5 +474,15 @@ mod tests {
         let list = args(&opts);
         let at = list.iter().position(|a| a == "--debug-file").expect("the flag");
         assert_eq!(list[at + 1], "/d/run/x.debug.log");
+    }
+
+    #[test]
+    fn resume_lost_matches_the_cli_message_only() {
+        // Measured with claude 2.1.326: `claude -p --resume <unknown id>` prints this on stderr and exits with 1 before any init.
+        assert!(resume_lost("No conversation found with session ID: 00000000-0000-0000-0000-000000000000\n"));
+        assert!(resume_lost("warning: x\nNo conversation found with session ID: abc"));
+        assert!(!resume_lost(""));
+        assert!(!resume_lost("could not connect to the API"));
+        assert!(!resume_lost("no conversation found"));
     }
 }
