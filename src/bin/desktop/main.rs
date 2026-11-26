@@ -37,7 +37,7 @@ use std::time::Duration;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, StyledText, VecModel};
 use tenrec::registry::Registry;
 use tenrec::view::i18n::{fill, tr, Lang};
-use tenrec::view::new_form::{prefill, Touched};
+use tenrec::view::new_form::{prefill, revert, Fill, Touched};
 use tenrec::view::panels::{ago, attention, in_context, Known, Mark, View};
 use tenrec::view::transcript::{model_label, Row, Transcript};
 
@@ -658,6 +658,9 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
 
     // The folder of the new-chat form is settled: what is remembered for it fills the fields the person has not set by hand.
     let a = app.clone();
+    // What the form filled in itself for the folder it last settled on: taken back when the next folder has nothing remembered for it.
+    let filled = std::rc::Rc::new(std::cell::Cell::new(Fill::default()));
+    let filled_here = filled.clone();
     ui.global::<NewForm>().on_cwd_settled(move |cwd| {
         let Some(ui) = a.weak.upgrade() else { return };
         let cwd = cwd.trim().to_owned();
@@ -667,6 +670,22 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
         let form = ui.global::<NewForm>();
         let touched = Touched { model: form.get_touched_model(), account: form.get_touched_acct(), permission: form.get_touched_perm(), worktree: form.get_touched_wt() };
         let fill = prefill(&a.registry.project_defaults(&cwd), &cwd, touched, &accounts::ids());
+        // The fields filled in for the folder before go back to the form's start unless this folder fills them again (or the person took over).
+        let start = Fill { model: Some(0), account: Some(ui.global::<Acct>().get_pre_acct()), permission: Some(0), worktree: Some(false) };
+        let back = revert(&filled_here.get(), &fill, touched, &start);
+        if let Some(i) = back.model {
+            form.set_model(i);
+        }
+        if let Some(i) = back.account {
+            ui.set_new_acct(i);
+        }
+        if let Some(i) = back.permission {
+            ui.set_new_perm(i);
+        }
+        if let Some(on) = back.worktree {
+            ui.set_new_worktree(on);
+        }
+        filled_here.set(fill);
         if let Some(i) = fill.model {
             form.set_model(i);
         }
@@ -689,6 +708,7 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
     let a = app.clone();
     ui.global::<NewForm>().on_reset_defaults(move || {
         let Some(ui) = a.weak.upgrade() else { return };
+        filled.set(Fill::default());
         let form = ui.global::<NewForm>();
         form.set_model(0);
         ui.set_new_perm(0);

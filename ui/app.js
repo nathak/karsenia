@@ -3,7 +3,7 @@ import DOMPurify from './vendor/purify.js'
 import { initFiles } from './files.js'
 import { initTerm } from './term.js'
 import { initWt } from './wt.js'
-import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, wtText, accountName, accountOf, forAccount, inContext, viewOf, attn, permChoices, permNeedsConfirm, permOf, formFill, grantButtons, modelChoices, withAccount, baseName, chatHost, checkImage, isLocalHost, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, parseSites, pathsInText, resultBlocks, skillMd, toolSummary, dayKey, clock, ago, modelLabel, turnLine, codeLines, tailPath } from './util.js'
+import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, wtText, accountName, accountOf, forAccount, inContext, viewOf, attn, permChoices, permNeedsConfirm, permOf, formFill, unfill, grantButtons, modelChoices, withAccount, baseName, chatHost, checkImage, isLocalHost, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, parseSites, pathsInText, resultBlocks, skillMd, toolSummary, dayKey, clock, ago, modelLabel, turnLine, codeLines, tailPath } from './util.js'
 // The reason the host gives a web task made before sites were listed (src/sched_store.rs NEEDS_DOMAINS); shown translated.
 const NEEDS_SITES = 'needs the sites it may open: edit the task and list them'
 
@@ -589,6 +589,7 @@ $('new-toggle').addEventListener('click', () => {
   // The permission mode starts on the default every time; the project's remembered settings (askDefaults, below) may fill in a mode, never
   // the one that skips every check: a chat never skips its checks because the last one did.
   newTouched.clear()
+  newFilled = new Set()
   $('new-defaults-note').hidden = true
   $('new-perm').replaceChildren()
   $('new-name').value = ''
@@ -600,6 +601,8 @@ $('new-toggle').addEventListener('click', () => {
 })
 // What the form takes from what the core remembers for the folder: the fields the person set by hand in this form stay as they are.
 const newTouched = new Set()
+// The fields the form filled in itself for the folder it last asked about.
+let newFilled = new Set()
 for (const [id, field] of [['new-model', 'model'], ['new-account', 'account'], ['new-perm', 'permission'], ['new-worktree', 'worktree']]) $(id).addEventListener('change', () => newTouched.add(field))
 function askDefaults() {
   const cwd = $('new-cwd').value.trim()
@@ -607,7 +610,11 @@ function askDefaults() {
 }
 $('new-cwd').addEventListener('change', askDefaults)
 function applyDefaults(answer) {
-  if ($('new-form').hidden) return
+  // An answer for a folder that is not the one in the field any more is a late one: it changes nothing.
+  if ($('new-form').hidden || answer.cwd !== $('new-cwd').value.trim()) return
+  // What was filled in for the folder before goes back to the start first, so a folder with nothing remembered does not keep the last one's settings.
+  const start = { model: () => { $('new-model').value = '' }, account: () => { if (!$('new-provider').value) $('new-account').value = [...$('new-account').options].some(o => o.value === (S.acct || '')) ? (S.acct || '') : '' }, permission: () => { $('new-perm').value = 'default' }, worktree: () => { $('new-worktree').checked = false } }
+  for (const field of unfill(newFilled, newTouched)) start[field]()
   const have = { models: [...$('new-model').options].map(o => o.value), accounts: [...$('new-account').options].map(o => o.value), perms: permChoices() }
   const fill = formFill(answer, $('new-cwd').value.trim(), newTouched, have)
   // A chat is of an account or of a provider: an account is only filled in while no provider is chosen.
@@ -617,7 +624,9 @@ function applyDefaults(answer) {
   fillPerm()
   if (fill.permission !== undefined) { $('new-perm').value = fill.permission; $('new-perm-note').textContent = t('permN_' + fill.permission) }
   if (fill.model !== undefined) $('new-model').value = fill.model
-  $('new-defaults-note').hidden = Object.keys(fill).length === 0
+  newFilled = new Set(Object.keys(fill))
+  fillPerm()
+  $('new-defaults-note').hidden = newFilled.size === 0
 }
 $('new-defaults-reset').addEventListener('click', () => {
   $('new-model').value = ''
@@ -627,10 +636,11 @@ $('new-defaults-reset').addEventListener('click', () => {
   $('new-perm').value = 'default'
   $('new-perm-note').textContent = t('permN_default')
   for (const field of ['model', 'account', 'permission', 'worktree']) newTouched.add(field)
+  newFilled = new Set()
   $('new-defaults-note').hidden = true
 })
 $('new-worktree').addEventListener('change', () => { if ($('new-worktree').checked) $('new-container').checked = false; fillPerm() })
-$('new-container').addEventListener('change', () => { if ($('new-container').checked) $('new-worktree').checked = false; fillPerm() })
+$('new-container').addEventListener('change', () => { if ($('new-container').checked) { $('new-worktree').checked = false; newTouched.add('worktree') } fillPerm() })
 $('new-cancel').addEventListener('click', () => { $('new-form').hidden = true })
 $('new-form').addEventListener('submit', event => {
   event.preventDefault()

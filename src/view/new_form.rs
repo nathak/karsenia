@@ -64,10 +64,35 @@ pub fn prefill(answer: &Value, asked: &str, touched: Touched, account_ids: &[Opt
     fill
 }
 
+/// What goes back to the form's starting values (`start`): a field `before` filled in (for the folder it was settled on earlier) that `now`
+/// does not fill in again and the person has not set by hand since, so one project's settings do not stay on a form for another.
+pub fn revert(before: &Fill, now: &Fill, touched: Touched, start: &Fill) -> Fill {
+    let back = |was: bool, now: bool, hand: bool| was && !now && !hand;
+    Fill {
+        model: start.model.filter(|_| back(before.model.is_some(), now.model.is_some(), touched.model)),
+        account: start.account.filter(|_| back(before.account.is_some(), now.account.is_some(), touched.account)),
+        permission: start.permission.filter(|_| back(before.permission.is_some(), now.permission.is_some(), touched.permission)),
+        worktree: start.worktree.filter(|_| back(before.worktree.is_some(), now.worktree.is_some(), touched.worktree)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn what_was_filled_in_for_one_folder_goes_back_to_the_start_when_the_next_has_nothing_for_it() {
+        let start = Fill { model: Some(0), account: Some(1), permission: Some(0), worktree: Some(false) };
+        let before = Fill { model: Some(2), account: Some(2), permission: Some(2), worktree: Some(true) };
+        let now = Fill { model: Some(3), ..Fill::default() };
+        // The model is filled again; the rest goes back to where the form starts.
+        assert_eq!(revert(&before, &now, Touched::default(), &start), Fill { model: None, account: Some(1), permission: Some(0), worktree: Some(false) });
+        // What the person set by hand is not taken back; what was never filled in is not touched.
+        let touched = Touched { permission: true, ..Touched::default() };
+        assert_eq!(revert(&before, &Fill::default(), touched, &start).permission, None);
+        assert_eq!(revert(&Fill::default(), &Fill::default(), Touched::default(), &start), Fill::default());
+    }
 
     fn ids() -> Vec<Option<String>> {
         vec![None, Some("a1".into()), Some("a2".into())]

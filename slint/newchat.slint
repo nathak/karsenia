@@ -93,7 +93,7 @@ export component NewChatCard inherits Rectangle {
         }
         CheckBox { text: T.tr("new_worktree"); enabled: !root.container; checked <=> root.worktree; toggled => { NewForm.touched-wt = true; } }
         if root.worktree: WText { text: T.tr("new_wt_note"); size: 11px; fg: Theme.outline; }
-        if Prov.new-names.length > 1: CheckBox { text: T.tr("new_container"); enabled: root.prov > 0 && !root.worktree; checked <=> root.container; }
+        if Prov.new-names.length > 1: CheckBox { text: T.tr("new_container"); enabled: root.prov > 0 && !root.worktree; checked <=> root.container; toggled => { NewForm.touched-wt = true; } }
         Text { text: T.tr("perm_label"); color: Theme.on-var; font-size: 13px; font-weight: 600; }
         ComboBox { model: [T.tr("perm_m_default"), T.tr("perm_m_acceptEdits"), T.tr("perm_m_plan"), T.tr("perm_m_auto"), T.tr("perm_m_dontAsk"), T.tr("perm_m_bypassPermissions")]; current-index <=> root.perm; selected(v) => { NewForm.touched-perm = true; } }
         WText { text: [T.tr("perm_n_default"), T.tr("perm_n_acceptEdits"), T.tr("perm_n_plan"), T.tr("perm_n_auto"), T.tr("perm_n_dontAsk"), T.tr("perm_n_bypassPermissions")][root.perm]; size: 11px; fg: root.perm == 5 ? Theme.error : Theme.outline; }

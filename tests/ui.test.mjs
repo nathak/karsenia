@@ -3,7 +3,7 @@ import { test } from 'node:test'
 
 import { readFileSync } from 'node:fs'
 
-import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, accountName, accountOf, forAccount, inContext, viewOf, attn, PERM_MODES, permChoices, permNeedsConfirm, permOf, grantButtons, MODEL_ALIASES, modelChoices, needsAccount, withAccount, wtBlockerText, wtRemovePrompts, wtText, termFeed, termState, termText, asTextarea, diffWithin, gutterText, lineCount, relJoin, relParent, isUnder, toCrlf, baseName, checkImage, fmtTurn, imagePaths, parseSites, pathsInText, resultBlocks, toolSummary, formFill} from '../ui/util.js'
+import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, accountName, accountOf, forAccount, inContext, viewOf, attn, PERM_MODES, permChoices, permNeedsConfirm, permOf, grantButtons, MODEL_ALIASES, modelChoices, needsAccount, withAccount, wtBlockerText, wtRemovePrompts, wtText, termFeed, termState, termText, asTextarea, diffWithin, gutterText, lineCount, relJoin, relParent, isUnder, toCrlf, baseName, checkImage, fmtTurn, imagePaths, parseSites, pathsInText, resultBlocks, toolSummary, formFill, unfill} from '../ui/util.js'
 
 test('a tool call is summed up by what it works on', () => {
   assert.equal(toolSummary('Bash', { command: 'ls -la\nmore' }), 'ls -la')
@@ -592,4 +592,10 @@ test('the new-chat form asks for the folder\'s remembered settings and tells whe
   for (const key of ['ncDefaultsUsed', 'ncDefaultsReset']) assert.equal((app.match(new RegExp(key + ':', 'g')) || []).length, 2, `${key} in both languages`)
   for (const id of ['new-defaults-note', 'new-defaults-reset']) assert.ok(html.includes(`id="${id}"`), id)
   assert.ok(!/permission[^\n]*bypassPermissions[^\n]*fill\./.test(app), 'the mode that skips checks is never filled in from the answer')
+})
+
+test('what the form filled in for one folder is taken back when the folder changes, but never what the person set by hand', () => {
+  assert.deepEqual(unfill(new Set(['model', 'account', 'permission']), new Set(['account'])), ['model', 'permission'])
+  assert.deepEqual(unfill(new Set(), new Set(['model'])), [])
+  assert.deepEqual(unfill(new Set(['worktree']), new Set()), ['worktree'])
 })

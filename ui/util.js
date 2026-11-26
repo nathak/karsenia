@@ -407,6 +407,14 @@ export function formFill(answer, asked, touched, have) {
   return out
 }
 
+/**
+ * The fields to take back to the form's own start when the folder changes: those the form filled in (`filled`) for the folder before, minus
+ * those the person has set by hand since (`touched`). One project's settings must not stay on a form for another project.
+ */
+export function unfill(filled, touched) {
+  return [...filled].filter(field => !touched.has(field))
+}
+
 /** The mode a chat entry carries, or null for the default (nothing stored). Only a name from the list counts. */
 export const permOf = session => (session && PERM_MODES.includes(session.permission_mode) && session.permission_mode !== 'default' ? session.permission_mode : null)
 
