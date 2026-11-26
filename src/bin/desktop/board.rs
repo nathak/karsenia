@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use tenrec::board::Row;
 use tenrec::view::board::{page, Filter, Sort};
 
@@ -17,8 +17,21 @@ static GEN: AtomicU64 = AtomicU64::new(0);
 static BUSY: AtomicBool = AtomicBool::new(false);
 /// When the host was asked last (ms), so that a burst of events does not ask every time.
 static LAST: AtomicU64 = AtomicU64::new(0);
+/// "Look again" was pressed while a request was on its way: the next one is made with it (a press is never lost).
+static PENDING_FORCE: AtomicBool = AtomicBool::new(false);
 /// The rows of the last answer: what a change of filter or order draws again without asking.
 static ROWS: Mutex<Vec<Row>> = Mutex::new(Vec::new());
+/// The chat the keyboard is on, by id: the lines are sorted again at every answer, so an index would point at another chat.
+static SELECTED: Mutex<Option<String>> = Mutex::new(None);
+
+/// Marks the request as over, whatever ends it (an answer, an early return, a panic).
+struct Ask;
+
+impl Drop for Ask {
+    fn drop(&mut self) {
+        BUSY.store(false, Ordering::Release);
+    }
+}
 
 /// Oftenest the host is asked.
 const EVERY_MS: u64 = 1000;
@@ -45,6 +58,11 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
     });
     let a = app.clone();
     board.on_refresh(move || start(&a, true));
+    let weak = ui.as_weak();
+    board.on_picked(move |i| {
+        let sid = weak.upgrade().and_then(|ui| usize::try_from(i).ok().and_then(|i| ui.global::<Board>().get_lines().row_data(i)).map(|l| l.sid.to_string()));
+        *SELECTED.lock().unwrap_or_else(|p| p.into_inner()) = sid;
+    });
 }
 
 /// Called by the chat list's loop on every round: asks the host when the page is on screen and the last ask is not too recent.
@@ -55,6 +73,9 @@ pub fn tick(app: &Arc<App>) {
 }
 
 fn start(app: &Arc<App>, force: bool) {
+    if force {
+        PENDING_FORCE.store(true, Ordering::Release);
+    }
     let now = tenrec::now_ms();
     if !force && now.saturating_sub(LAST.load(Ordering::Relaxed)) < EVERY_MS {
         return;
@@ -63,10 +84,11 @@ fn start(app: &Arc<App>, force: bool) {
         return;
     }
     LAST.store(now, Ordering::Relaxed);
+    let force = PENDING_FORCE.swap(false, Ordering::AcqRel);
     let (a, generation) = (app.clone(), GEN.load(Ordering::Acquire));
     tokio::spawn(async move {
+        let _ask = Ask;
         let rows = a.registry.board(force).await;
-        BUSY.store(false, Ordering::Release);
         // The page went away (or came back) while the host was answering: this answer is old.
         if !VISIBLE.load(Ordering::Acquire) || GEN.load(Ordering::Acquire) != generation {
             return;
@@ -104,7 +126,10 @@ fn render(ui: &AppWindow, app: &Arc<App>) {
             spoken: l.spoken.into(),
         })
         .collect();
+    // The keyboard stays on the same chat when the lines move (and on none when it has gone).
+    let sel = SELECTED.lock().unwrap_or_else(|p| p.into_inner()).clone().and_then(|sid| lines.iter().position(|l| l.sid.as_str() == sid)).and_then(|i| i32::try_from(i).ok()).unwrap_or(-1);
     board.set_lines(ModelRc::from(Rc::new(VecModel::from(lines))));
+    board.set_sel(sel);
     board.set_summary(shown.summary.into());
     board.set_total(i32::try_from(shown.total).unwrap_or(i32::MAX));
 }

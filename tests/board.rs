@@ -192,6 +192,25 @@ async fn a_worktree_deleted_by_hand_is_gone() {
     assert_eq!(by_sid(&rows, &chat.sid).wt.clone().unwrap().merge, Merge::Gone);
 }
 
+#[tokio::test]
+async fn a_merge_or_removal_that_holds_the_project_is_not_disturbed_and_the_look_comes_after_it() {
+    let (r, config) = rig(WAIT);
+    let registry = start_core(config).unwrap();
+    let (chat, _) = registry.create_isolated(r.project.to_str().unwrap(), None, None, None).await.unwrap();
+    let repo = chat.info().await.unwrap().meta.worktree.unwrap().repo;
+    let lock = tenrec::worktree::repo_lock(&repo);
+    let held = lock.lock().await;
+    // While the project is held, the line stays "not looked at" and nothing is run (the look waits and is tried again).
+    for _ in 0..4 {
+        let rows = registry.board(false).await;
+        assert_eq!(by_sid(&rows, &chat.sid).wt.clone().unwrap().merge, Merge::Unknown);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    drop(held);
+    let rows = settled(&registry).await;
+    assert_eq!(by_sid(&rows, &chat.sid).wt.clone().unwrap().merge, Merge::Nothing, "looked at once the project was free");
+}
+
 type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 async fn connect(port: u16, token: &str) -> Ws {

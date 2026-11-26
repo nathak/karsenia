@@ -35,6 +35,9 @@ export global Board {
     in property <int> total;
     in property <[string]> filters;
     in property <[string]> sorts;
+    // The line the keyboard is on (-1: none); Rust keeps it on the same chat when the lines move.
+    in-out property <int> sel: -1;
+    callback picked(int);
     in-out property <int> filter: 0;
     in-out property <int> sort: 0;
     // The page is on screen (set by the window; the host asks for lines only then).
@@ -106,8 +109,6 @@ component LineView inherits Rectangle {
 export component BoardPage inherits Rectangle {
     // The chat to open (the window goes to it).
     callback open(string);
-    // The line the keyboard is on (-1: none).
-    property <int> sel: -1;
     // How much of a line fits: 2 from 960px, 1 from 760px, else 0.
     property <int> tier: root.width >= 960px ? 2 : root.width >= 760px ? 1 : 0;
     background: Theme.surface;
@@ -118,9 +119,9 @@ export component BoardPage inherits Rectangle {
     TouchArea { }
     fs := FocusScope {
         key-pressed(event) => {
-            if (event.text == Key.DownArrow) { root.sel = min(root.sel + 1, Board.lines.length - 1); root.reveal(); return accept; }
-            if (event.text == Key.UpArrow) { root.sel = max(root.sel - 1, 0); root.reveal(); return accept; }
-            if (event.text == Key.Return && root.sel >= 0 && root.sel < Board.lines.length) { root.open(Board.lines[root.sel].sid); return accept; }
+            if (event.text == Key.DownArrow) { Board.sel = min(Board.sel + 1, Board.lines.length - 1); Board.picked(Board.sel); root.reveal(); return accept; }
+            if (event.text == Key.UpArrow) { Board.sel = max(Board.sel - 1, 0); Board.picked(Board.sel); root.reveal(); return accept; }
+            if (event.text == Key.Return && Board.sel >= 0 && Board.sel < Board.lines.length) { root.open(Board.lines[Board.sel].sid); return accept; }
             reject
         }
         VerticalLayout {
@@ -129,15 +130,15 @@ export component BoardPage inherits Rectangle {
                 spacing: 12px;
                 Text { text: T.tr("board_title"); color: Theme.on-surface; font-size: 22px; font-weight: 600; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; }
-                if root.tier > 0: ComboBox { width: 140px; model: Board.filters; current-index <=> Board.filter; selected(v) => { root.sel = -1; Board.view-changed(); } }
-                if root.tier > 0: ComboBox { width: 140px; model: Board.sorts; current-index <=> Board.sort; selected(v) => { root.sel = -1; Board.view-changed(); } }
+                if root.tier > 0: ComboBox { width: 140px; model: Board.filters; current-index <=> Board.filter; selected(v) => { Board.sel = -1; Board.picked(-1); Board.view-changed(); } }
+                if root.tier > 0: ComboBox { width: 140px; model: Board.sorts; current-index <=> Board.sort; selected(v) => { Board.sel = -1; Board.picked(-1); Board.view-changed(); } }
                 Btn { text: T.tr("board_refresh"); height: 32px; clicked => { Board.refresh(); } }
             }
             // A narrow window: the filter and the order go under the title.
             if root.tier == 0: HorizontalLayout {
                 spacing: 8px;
-                ComboBox { horizontal-stretch: 1; model: Board.filters; current-index <=> Board.filter; selected(v) => { root.sel = -1; Board.view-changed(); } }
-                ComboBox { horizontal-stretch: 1; model: Board.sorts; current-index <=> Board.sort; selected(v) => { root.sel = -1; Board.view-changed(); } }
+                ComboBox { horizontal-stretch: 1; model: Board.filters; current-index <=> Board.filter; selected(v) => { Board.sel = -1; Board.picked(-1); Board.view-changed(); } }
+                ComboBox { horizontal-stretch: 1; model: Board.sorts; current-index <=> Board.sort; selected(v) => { Board.sel = -1; Board.picked(-1); Board.view-changed(); } }
             }
             Text { text: T.tr("board_sub"); color: Theme.on-var; font-size: 12px; wrap: word-wrap; }
             Text { text: Board.summary; color: Theme.on-surface; font-size: 13px; font-weight: 600; }
@@ -157,8 +158,8 @@ export component BoardPage inherits Rectangle {
                 VerticalLayout {
                     spacing: 6px; alignment: start;
                     for l[i] in Board.lines: LineView {
-                        l: l; selected: i == root.sel; tier: root.tier;
-                        clicked => { root.sel = i; fs.focus(); root.open(l.sid); }
+                        l: l; selected: i == Board.sel; tier: root.tier;
+                        clicked => { Board.sel = i; Board.picked(i); fs.focus(); root.open(l.sid); }
                     }
                 }
             }
@@ -167,7 +168,7 @@ export component BoardPage inherits Rectangle {
 
     // Scrolls so that the line under the keyboard is in view (every line is 60px, with 6px between).
     function reveal() {
-        if (root.sel < 0) { return; }
-        sv.content-y = clamp(sv.content-y, -(root.sel * 66px), -(root.sel * 66px + 60px - sv.visible-height));
+        if (Board.sel < 0) { return; }
+        sv.content-y = clamp(sv.content-y, -(Board.sel * 66px), -(Board.sel * 66px + 60px - sv.visible-height));
     }
 }
