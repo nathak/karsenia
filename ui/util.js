@@ -382,6 +382,31 @@ export function permChoices() {
 /** True for the mode that skips every check: it is only sent after the person confirmed it. */
 export const permNeedsConfirm = mode => mode === 'bypassPermissions'
 
+/**
+ * What the new-chat form takes from what the core remembers for its folder (the `project_defaults` answer): the fields to set, by the
+ * form's own values; a field that is not in the result stays as it is. `touched` holds the fields the person set by hand in this form
+ * ('model', 'account', 'permission', 'worktree'). `have` lists what the form offers: `models`, `accounts` ('' is the default account) and
+ * `perms`. Nothing for an answer that is for another folder (a late one) or that found nothing; never the mode that skips every check; an
+ * account, model or mode the form does not offer is left alone, and so is the account when the answer has no `account` at all (not known any more).
+ */
+export function formFill(answer, asked, touched, have) {
+  const out = {}
+  if (!answer || answer.found !== true || answer.cwd !== asked) return out
+  if (!touched.has('model')) {
+    const model = answer.model == null ? '' : answer.model
+    if (have.models.includes(model)) out.model = model
+  }
+  if (!touched.has('account') && 'account' in answer) {
+    const account = answer.account == null ? '' : answer.account
+    if (have.accounts.includes(account)) out.account = account
+  }
+  if (!touched.has('permission') && typeof answer.permission === 'string' && answer.permission !== 'bypassPermissions' && have.perms.includes(answer.permission)) {
+    out.permission = answer.permission
+  }
+  if (!touched.has('worktree') && typeof answer.worktree === 'boolean') out.worktree = answer.worktree
+  return out
+}
+
 /** The mode a chat entry carries, or null for the default (nothing stored). Only a name from the list counts. */
 export const permOf = session => (session && PERM_MODES.includes(session.permission_mode) && session.permission_mode !== 'default' ? session.permission_mode : null)
 

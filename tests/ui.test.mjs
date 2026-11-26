@@ -3,7 +3,7 @@ import { test } from 'node:test'
 
 import { readFileSync } from 'node:fs'
 
-import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, accountName, accountOf, forAccount, inContext, viewOf, attn, PERM_MODES, permChoices, permNeedsConfirm, permOf, grantButtons, MODEL_ALIASES, modelChoices, needsAccount, withAccount, wtBlockerText, wtRemovePrompts, wtText, termFeed, termState, termText, asTextarea, diffWithin, gutterText, lineCount, relJoin, relParent, isUnder, toCrlf, baseName, checkImage, fmtTurn, imagePaths, parseSites, pathsInText, resultBlocks, toolSummary } from '../ui/util.js'
+import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, accountName, accountOf, forAccount, inContext, viewOf, attn, PERM_MODES, permChoices, permNeedsConfirm, permOf, grantButtons, MODEL_ALIASES, modelChoices, needsAccount, withAccount, wtBlockerText, wtRemovePrompts, wtText, termFeed, termState, termText, asTextarea, diffWithin, gutterText, lineCount, relJoin, relParent, isUnder, toCrlf, baseName, checkImage, fmtTurn, imagePaths, parseSites, pathsInText, resultBlocks, toolSummary, formFill} from '../ui/util.js'
 
 test('a tool call is summed up by what it works on', () => {
   assert.equal(toolSummary('Bash', { command: 'ls -la\nmore' }), 'ls -la')
@@ -555,4 +555,41 @@ test('a skill proposal from a chat that went through a gateway is confirmed firs
   assert.ok(result.indexOf("needs_confirm === 'gateway'") < result.indexOf('toast(d.error)'), 'the question comes before the refusal is shown as an error')
   // The card says where the proposal came from.
   assert.match(app, /p\.from_gateway[^\n]*skGatewayTag/)
+})
+
+test('the new-chat form takes what is remembered for its folder, field by field, and only what it has', () => {
+  const have = { models: ['', 'haiku', 'sonnet', 'opus'], accounts: ['', 'a1', 'a2'], perms: ['default', 'acceptEdits', 'plan'] }
+  const answer = { cwd: '/p', found: true, model: 'haiku', worktree: true, account: 'a2', permission: 'plan' }
+  assert.deepEqual(formFill(answer, '/p', new Set(), have), { model: 'haiku', account: 'a2', permission: 'plan', worktree: true })
+  // What the person set by hand in this form is left alone.
+  assert.deepEqual(formFill(answer, '/p', new Set(['model', 'account', 'permission', 'worktree']), have), {})
+  assert.deepEqual(formFill(answer, '/p', new Set(['model']), have).model, undefined)
+  // A late answer for another folder, or none for this one, fills nothing.
+  assert.deepEqual(formFill(answer, '/other', new Set(), have), {})
+  assert.deepEqual(formFill({ cwd: '/p', found: false }, '/p', new Set(), have), {})
+})
+
+test('the form never takes the mode that skips every check, nor an account, model or mode it does not offer', () => {
+  const have = { models: ['', 'haiku'], accounts: ['', 'a1'], perms: ['default', 'plan'] }
+  const bypass = { cwd: '/p', found: true, model: null, worktree: false, permission: 'bypassPermissions' }
+  assert.equal(formFill(bypass, '/p', new Set(), { ...have, perms: ['default', 'plan', 'bypassPermissions'] }).permission, undefined)
+  const odd = { cwd: '/p', found: true, model: 'sonnet[1m]', worktree: false, account: 'gone', permission: 'auto' }
+  const got = formFill(odd, '/p', new Set(), have)
+  assert.deepEqual([got.model, got.account, got.permission], [undefined, undefined, undefined])
+  // No account key: the account is not known any more, the form keeps its own. null is the default account, the first entry.
+  assert.equal(formFill({ cwd: '/p', found: true, model: null, worktree: false }, '/p', new Set(), have).account, undefined)
+  const plain = formFill({ cwd: '/p', found: true, model: null, worktree: false, account: null }, '/p', new Set(), have)
+  assert.deepEqual([plain.model, plain.account, plain.worktree], ['', '', false])
+})
+
+test('the new-chat form asks for the folder\'s remembered settings and tells when it used them', () => {
+  const app = readFileSync(new URL('../ui/app.js', import.meta.url), 'utf8')
+  const html = readFileSync(new URL('../ui/index.html', import.meta.url), 'utf8')
+  assert.match(app, /op: 'project_defaults'/, 'it asks')
+  assert.match(app, /m\.kind === 'project_defaults'/, 'it takes the answer')
+  assert.match(app, /\$\('new-cwd'\)\.addEventListener\('change', askDefaults\)/, 'when the folder is settled')
+  assert.match(app, /newTouched\.clear\(\)/, 'a form opened again starts with nothing set by hand')
+  for (const key of ['ncDefaultsUsed', 'ncDefaultsReset']) assert.equal((app.match(new RegExp(key + ':', 'g')) || []).length, 2, `${key} in both languages`)
+  for (const id of ['new-defaults-note', 'new-defaults-reset']) assert.ok(html.includes(`id="${id}"`), id)
+  assert.ok(!/permission[^\n]*bypassPermissions[^\n]*fill\./.test(app), 'the mode that skips checks is never filled in from the answer')
 })

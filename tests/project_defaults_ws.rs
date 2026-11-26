@@ -16,7 +16,6 @@ struct Fx {
     _dir: tempfile::TempDir,
     server: Running,
     project: std::path::PathBuf,
-    env_log: std::path::PathBuf,
     data: std::path::PathBuf,
 }
 
@@ -24,16 +23,15 @@ async fn fixture() -> Fx {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     std::fs::write(root.join("scenario.jsonl"), "{\"$wait\":\"user\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}\n{\"$wait\":\"user\"}\n").unwrap();
-    let env_log = root.join("env.log");
     let wrapper = root.join("claude");
-    std::fs::write(&wrapper, format!("#!/bin/sh\nFAKE_SCENARIO='{}' FAKE_ENV_LOG='{}' exec '{}' \"$@\"\n", root.join("scenario.jsonl").display(), env_log.display(), FAKE)).unwrap();
+    std::fs::write(&wrapper, format!("#!/bin/sh\nFAKE_SCENARIO='{}' exec '{}' \"$@\"\n", root.join("scenario.jsonl").display(), FAKE)).unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
     let project = root.join("project");
     std::fs::create_dir_all(&project).unwrap();
     let data = root.join("data");
     let server = start(Config { port: 0, data_dir: data.clone(), bin: Some(wrapper.display().to_string()), mcp_bin: None, extract: Default::default(), propose: Default::default(), sched: Default::default() }).await.unwrap();
-    Fx { _dir: dir, server, project, env_log, data }
+    Fx { _dir: dir, server, project, data }
 }
 
 type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
