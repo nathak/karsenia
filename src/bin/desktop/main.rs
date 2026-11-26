@@ -98,6 +98,12 @@ thread_local! {
 }
 
 fn main() {
+    // macOS: a program opened from Finder has the system's short PATH, not the shell's: add where `claude` and `node` usually are.
+    #[cfg(target_os = "macos")]
+    {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        std::env::set_var("PATH", tenrec::platform::with_usual_program_dirs(&path, tenrec::platform::home_dir().as_deref()));
+    }
     // In the app the built-in workbench is the only one: the plug-in is never used (before anything can start a `claude`).
     tenrec::settings::force_native();
     // `karsenia-desktop mcp`: the MCP server claude starts for a chat (stdio), not the window.

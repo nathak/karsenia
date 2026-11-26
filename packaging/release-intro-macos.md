@@ -1,0 +1,2 @@
+
+**macOS (experimental):** `karsenia-desktop-@VERSION@-macos-universal.zip` (Apple silicon and Intel), also built by GitHub Actions. It has **never been run on a Mac by its author**: please report what you see. It is not signed by an Apple developer and not notarized (ad-hoc signature only), so macOS asks you to allow it (right-click → Open); `READ-ME-FIRST.txt` in the zip says how, and where the app looks for `claude` (a program opened from Finder does not get your shell's `PATH`). On a company-managed Mac, ask its administrator.

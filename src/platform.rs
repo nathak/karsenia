@@ -65,6 +65,24 @@ pub fn find_program(path_var: &std::ffi::OsStr, stem: &str) -> Option<PathBuf> {
     std::env::split_paths(path_var).map(|dir| dir.join(&name)).find(|p| p.is_file() && runnable_claude(p))
 }
 
+/// The `PATH` for a program opened from Finder (macOS): it starts with the system's short list, not the shell's, so `claude` (and the
+/// `node` an npm-installed one runs on) are not found where they usually live. `current` with the places such programs are usually put
+/// added after it (only those that exist, and only if they are not there already); a place of the person's own `PATH` still comes first.
+pub fn with_usual_program_dirs(current: &std::ffi::OsStr, home: Option<&Path>) -> std::ffi::OsString {
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(current).collect();
+    let mut usual: Vec<PathBuf> = Vec::new();
+    if let Some(home) = home {
+        usual.extend([".local/bin", ".claude/local", ".npm-global/bin", ".bun/bin", ".volta/bin"].iter().map(|d| home.join(d)));
+    }
+    usual.extend(["/opt/homebrew/bin", "/usr/local/bin"].iter().map(PathBuf::from));
+    for dir in usual {
+        if dir.is_dir() && !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    std::env::join_paths(dirs).unwrap_or_else(|_| current.to_owned())
+}
+
 /// Windows only: the data folder must sit inside the user's profile, whose default access list names the user, the
 /// system and the administrators. No mode bits are set there, so a folder elsewhere would hold whatever its parent says.
 pub fn data_dir_in_profile(data: &Path, profile: &Path) -> bool {
@@ -85,6 +103,23 @@ pub fn data_dir_in_profile(data: &Path, profile: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_places_claude_usually_lives_are_added_after_the_given_path_and_only_when_they_exist() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".local/bin")).unwrap();
+        std::fs::create_dir_all(home.path().join(".bun/bin")).unwrap();
+        let got = with_usual_program_dirs(std::ffi::OsStr::new("/usr/bin:/bin"), Some(home.path()));
+        let dirs: Vec<PathBuf> = std::env::split_paths(&got).collect();
+        assert_eq!(&dirs[..2], [PathBuf::from("/usr/bin"), PathBuf::from("/bin")], "what was there stays first");
+        assert!(dirs.contains(&home.path().join(".local/bin")) && dirs.contains(&home.path().join(".bun/bin")));
+        assert!(!dirs.contains(&home.path().join(".volta/bin")), "a folder that does not exist is not added");
+        // Nothing is added twice.
+        let again = with_usual_program_dirs(&got, Some(home.path()));
+        assert_eq!(std::env::split_paths(&again).count(), dirs.len());
+        // No home folder: only the system places.
+        assert!(std::env::split_paths(&with_usual_program_dirs(std::ffi::OsStr::new(""), None)).all(|d| d.starts_with("/opt/homebrew") || d.starts_with("/usr/local") || d.as_os_str().is_empty()));
+    }
 
     #[test]
     fn strip_verbatim_only_short_drive_paths() {

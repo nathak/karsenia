@@ -1,0 +1,72 @@
+name: macOS build
+
+# Builds the macOS desktop app (a universal app: Apple silicon and Intel) and keeps karsenia-desktop-<version>-macos-universal.zip (+ .sha256) as a
+# workflow artifact for 14 days. Called by the release workflow, and startable by hand (Actions -> macOS build -> Run workflow) to try the build
+# without a release. It is a separate workflow so that a macOS problem never stops the Windows release. The app is not signed by a developer and
+# not notarized (ad-hoc signature only): no key or certificate is used anywhere here.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # The Rust the program is built with, pinned (see release.yml).
+  RUST_VERSION: "1.98.1"
+
+jobs:
+  macos:
+    name: Build the macOS app
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Version and commit
+        id: meta
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          commit=$(git rev-parse --short=7 HEAD)
+          if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.]+)?$'; then
+            echo "::error::the version in Cargo.toml is not a plain version: ${version}"
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::the tag ${GITHUB_REF_NAME} does not match the version ${version} in Cargo.toml"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+      - name: Rust toolchain with both Mac targets
+        run: rustup toolchain install "${RUST_VERSION}" --profile minimal --target aarch64-apple-darwin --target x86_64-apple-darwin && rustup default "${RUST_VERSION}"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: macos-release
+      - name: cargo build --release (Apple silicon)
+        run: cargo build --release --target aarch64-apple-darwin --features desktop --bin karsenia-desktop --locked
+      - name: cargo build --release (Intel)
+        run: cargo build --release --target x86_64-apple-darwin --features desktop --bin karsenia-desktop --locked
+      - name: One universal program
+        run: |
+          mkdir -p target/universal
+          lipo -create -output target/universal/karsenia-desktop target/aarch64-apple-darwin/release/karsenia-desktop target/x86_64-apple-darwin/release/karsenia-desktop
+          lipo -info target/universal/karsenia-desktop
+      - name: Make the app, the zip and its checksum
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          COMMIT: ${{ steps.meta.outputs.commit }}
+        run: |
+          packaging/make-macos-zip.sh "${VERSION}" "${COMMIT}" target/universal/karsenia-desktop dist
+          (cd dist && shasum -a 256 -c ./*.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: karsenia-desktop-${{ steps.meta.outputs.version }}-macos-universal
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,22 @@
+Karsenia desktop for macOS (native app, Slint UI): EXPERIMENTAL
+
+Version @VERSION@, made from commit @COMMIT@ (Settings -> About shows it). What is new is in the release notes on the release page.
+
+This build was made by GitHub Actions (a universal app: Apple silicon and Intel) and has NEVER been run on a Mac by its author: the Linux tests
+ran before it was built, and nothing else was tried. Please report what you see.
+
+Install: check the zip against its .sha256 file, unzip, move Karsenia.app to Applications and open it.
+The app is not signed by an Apple developer and not notarized (it carries only an ad-hoc signature, which proves nothing about who made it), so macOS
+says that it cannot check it for malicious software. On your own Mac you can allow it: right-click Karsenia.app -> Open -> Open, or System Settings ->
+Privacy & Security -> "Open Anyway". On a Mac managed by a company, ask its administrator: do not try to get around the company's security product.
+
+Needs claude (Claude Code) installed. A program opened from Finder does not get your shell's PATH: the app looks for claude where it is usually put
+(~/.local/bin, ~/.claude/local, ~/.npm-global/bin, ~/.bun/bin, ~/.volta/bin, /opt/homebrew/bin, /usr/local/bin). If yours is somewhere else
+(for example under nvm), start the app from a terminal:  open -a Karsenia  after  export TENREC_CLAUDE=/full/path/to/claude  (or run
+Karsenia.app/Contents/MacOS/karsenia-desktop from that terminal).
+
+Data and settings are kept in ~/.local/share/tenrec (the folder keeps its old name on purpose, so earlier chats show up).
+Not done on macOS: notifications (the app says nothing outside its window), the tray icon, and the terminal page has never been tried here.
+Only one app runs per data folder.
+
+If something goes wrong: the app writes what it reports and any crash to ~/.local/share/tenrec/logs/desktop.log - please send that file.
