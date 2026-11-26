@@ -594,6 +594,12 @@ test('the new-chat form asks for the folder\'s remembered settings and tells whe
   assert.ok(!/permission[^\n]*bypassPermissions[^\n]*fill\./.test(app), 'the mode that skips checks is never filled in from the answer')
 })
 
+test('a form opened again takes back what it filled in itself before it closed', () => {
+  const app = readFileSync(new URL('../ui/app.js', import.meta.url), 'utf8')
+  const open = app.slice(app.indexOf("$('new-toggle').addEventListener('click'"), app.indexOf("$('new-worktree').addEventListener"))
+  assert.ok(open.indexOf('unfill(newFilled, newTouched)') !== -1 && open.indexOf('unfill(newFilled, newTouched)') < open.indexOf('newFilled = new Set()'), 'the fields it filled go back to the start before the record of them is cleared')
+})
+
 test('what the form filled in for one folder is taken back when the folder changes, but never what the person set by hand', () => {
   assert.deepEqual(unfill(new Set(['model', 'account', 'permission']), new Set(['account'])), ['model', 'permission'])
   assert.deepEqual(unfill(new Set(), new Set(['model'])), [])

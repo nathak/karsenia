@@ -588,6 +588,7 @@ $('new-toggle').addEventListener('click', () => {
   // The account shown is the one a new chat starts on (when it can be chosen).
   // The permission mode starts on the default every time; the project's remembered settings (askDefaults, below) may fill in a mode, never
   // the one that skips every check: a chat never skips its checks because the last one did.
+  for (const field of unfill(newFilled, newTouched)) newStart[field]()
   newTouched.clear()
   newFilled = new Set()
   $('new-defaults-note').hidden = true
@@ -601,8 +602,9 @@ $('new-toggle').addEventListener('click', () => {
 })
 // What the form takes from what the core remembers for the folder: the fields the person set by hand in this form stay as they are.
 const newTouched = new Set()
-// The fields the form filled in itself for the folder it last asked about.
+// The fields the form filled in itself for the folder it last asked about, and how each goes back to where the form starts.
 let newFilled = new Set()
+const newStart = { model: () => { $('new-model').value = '' }, account: () => { if (!$('new-provider').value) $('new-account').value = [...$('new-account').options].some(o => o.value === (S.acct || '')) ? (S.acct || '') : '' }, permission: () => { $('new-perm').value = 'default' }, worktree: () => { $('new-worktree').checked = false } }
 for (const [id, field] of [['new-model', 'model'], ['new-account', 'account'], ['new-perm', 'permission'], ['new-worktree', 'worktree']]) $(id).addEventListener('change', () => newTouched.add(field))
 function askDefaults() {
   const cwd = $('new-cwd').value.trim()
@@ -613,8 +615,7 @@ function applyDefaults(answer) {
   // An answer for a folder that is not the one in the field any more is a late one: it changes nothing.
   if ($('new-form').hidden || answer.cwd !== $('new-cwd').value.trim()) return
   // What was filled in for the folder before goes back to the start first, so a folder with nothing remembered does not keep the last one's settings.
-  const start = { model: () => { $('new-model').value = '' }, account: () => { if (!$('new-provider').value) $('new-account').value = [...$('new-account').options].some(o => o.value === (S.acct || '')) ? (S.acct || '') : '' }, permission: () => { $('new-perm').value = 'default' }, worktree: () => { $('new-worktree').checked = false } }
-  for (const field of unfill(newFilled, newTouched)) start[field]()
+  for (const field of unfill(newFilled, newTouched)) newStart[field]()
   const have = { models: [...$('new-model').options].map(o => o.value), accounts: [...$('new-account').options].map(o => o.value), perms: permChoices() }
   const fill = formFill(answer, $('new-cwd').value.trim(), newTouched, have)
   // A chat is of an account or of a provider: an account is only filled in while no provider is chosen.

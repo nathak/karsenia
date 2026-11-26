@@ -406,7 +406,7 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
                     }
                     let info = handle.info().await;
                     if let Some(info) = &info {
-                        state.registry.remember_defaults(&info.meta);
+                        state.registry.remember_defaults(&info.meta, Some(cwd));
                     }
                     let mut data = serde_json::to_value(info).unwrap_or(Value::Null);
                     if let (Some(map), Some(notice)) = (data.as_object_mut(), notice) {

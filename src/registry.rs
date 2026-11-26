@@ -903,11 +903,14 @@ impl Registry {
 
     /// Remembers what a chat made from the new-chat form was made with, for the next form of the same project. Not for a chat on a provider
     /// or in a container (not put on a third party or in a box by what was chosen last time), and never the mode that skips every check.
-    pub fn remember_defaults(&self, meta: &Meta) {
+    /// `asked` is the folder the form was made for (a worktree chat may have been made from a subfolder of its repository: the next form for
+    /// that subfolder must find it); without it, or when it is not a folder that is there, the chat's project is used.
+    pub fn remember_defaults(&self, meta: &Meta, asked: Option<&str>) {
         if meta.provider.is_some() || meta.container {
             return;
         }
-        let key = crate::project_defaults::key_of(&meta.project_dir()).unwrap_or_else(|| meta.project_key());
+        let asked = asked.map(std::path::Path::new).filter(|p| p.is_absolute()).and_then(crate::project_defaults::key_of);
+        let key = asked.or_else(|| crate::project_defaults::key_of(&meta.project_dir())).unwrap_or_else(|| meta.project_key());
         let entry = crate::project_defaults::Entry {
             model: meta.model.clone(),
             account: meta.account.as_ref().map(|a| a.id.clone()),

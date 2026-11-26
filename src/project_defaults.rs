@@ -77,23 +77,38 @@ pub fn form_json(cwd: &str, entry: Option<Entry>, account_usable: impl Fn(&str) 
 
 pub struct DefaultsStore {
     path: PathBuf,
-    /// One writer at a time; the file is read again under it, so another program using the same data folder is not written over.
+    /// One writer at a time in this program; the file is read again under it, so what another program using the same data folder wrote
+    /// earlier is kept (two writes at the very same moment can still lose one of them: only a project's latest settings).
     lock: Mutex<()>,
 }
 
 impl DefaultsStore {
     /// A file that cannot be read is kept as `.broken` (the next write must not be what destroys it) and the store starts empty.
     pub fn open(path: PathBuf) -> Self {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if serde_json::from_str::<File>(&text).is_err() {
-                let _ = std::fs::rename(&path, path.with_extension("json.broken"));
-            }
+        let store = Self { path, lock: Mutex::new(()) };
+        let _ = store.read_or_set_aside();
+        store
+    }
+
+    /// The file as it is: Some(empty) when there is none or it cannot be read as this file (a file that is there but is not this file's text, or
+    /// not text at all, is first moved to `.broken`, so what is written next never destroys it). None when it exists but cannot be read now
+    /// (a permission or disk error): nothing is written over it then.
+    fn read_or_set_aside(&self) -> Option<File> {
+        match std::fs::read(&self.path) {
+            Ok(bytes) => match serde_json::from_slice::<File>(&bytes) {
+                Ok(file) => Some(file),
+                Err(_) => {
+                    let _ = std::fs::rename(&self.path, self.path.with_extension("json.broken"));
+                    Some(File::default())
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(File::default()),
+            Err(_) => None,
         }
-        Self { path, lock: Mutex::new(()) }
     }
 
     fn load(&self) -> File {
-        std::fs::read_to_string(&self.path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+        std::fs::read(&self.path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
     }
 
     /// What the project `key` was last made with, as it may be used now (see `safe_mode`, `clean_model`). None for a project never seen.
@@ -108,7 +123,7 @@ impl DefaultsStore {
 
     fn record_at(&self, key: &str, entry: Entry, used: u64) {
         let _guard = self.lock.lock().unwrap_or_else(|p| p.into_inner());
-        let mut file = self.load();
+        let Some(mut file) = self.read_or_set_aside() else { return };
         file.v = 1;
         file.projects.insert(key.to_owned(), Entry { used, ..entry.cleaned() });
         while file.projects.len() > MAX_PROJECTS {
@@ -225,6 +240,21 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.path().join("project_defaults.json.broken")).unwrap(), "{ not json");
         store.record("/p", entry("haiku", "plan"));
         assert!(DefaultsStore::open(path).get("/p").is_some());
+    }
+
+    #[test]
+    fn a_file_that_goes_bad_while_running_is_set_aside_before_the_next_write_and_never_written_over() {
+        let (dir, store) = store();
+        let path = dir.path().join("project_defaults.json");
+        store.record("/a", entry("haiku", "plan"));
+        // Not text at all, and a text that is not what this file holds: both are kept as they were.
+        std::fs::write(&path, [0xff, 0xfe, 0x00, 0x41]).unwrap();
+        store.record("/b", entry("opus", "plan"));
+        assert_eq!(std::fs::read(dir.path().join("project_defaults.json.broken")).unwrap(), vec![0xff, 0xfe, 0x00, 0x41], "the bad file is what was kept");
+        assert!(store.get("/b").is_some(), "and the write went on into a fresh file");
+        std::fs::write(&path, "{ \"projects\": [1, 2] }").unwrap();
+        store.record("/c", entry("opus", "plan"));
+        assert_eq!(std::fs::read_to_string(dir.path().join("project_defaults.json.broken")).unwrap(), "{ \"projects\": [1, 2] }");
     }
 
     #[test]

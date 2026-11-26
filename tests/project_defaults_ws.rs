@@ -147,13 +147,13 @@ async fn a_chat_on_a_provider_or_in_a_container_is_not_remembered_and_a_worktree
     let fx = fixture().await;
     let cwd = fx.project.display().to_string();
     let provider = ProviderRef { id: "p1".into(), name: "Third".into(), host: "api.example".into(), login: false };
-    fx.server.registry.remember_defaults(&new_meta(fx.project.clone(), None, Some(provider), false, None));
-    fx.server.registry.remember_defaults(&new_meta(fx.project.clone(), None, None, true, None));
+    fx.server.registry.remember_defaults(&new_meta(fx.project.clone(), None, Some(provider), false, None), None);
+    fx.server.registry.remember_defaults(&new_meta(fx.project.clone(), None, None, true, None), None);
     assert_eq!(fx.server.registry.project_defaults(&cwd)["found"], false, "neither is what the next chat starts with");
 
     let mut meta = new_meta(fx._dir.path().join("elsewhere"), Some("opus".into()), None, false, None);
     meta.worktree = Some(tenrec::worktree::WorktreeRef { repo: fx.project.clone(), branch: "tenrec/x".into(), base_branch: "main".into(), base_commit: "c".into(), removed: false, root: None, config_hash: String::new() });
-    fx.server.registry.remember_defaults(&meta);
+    fx.server.registry.remember_defaults(&meta, None);
     let got = fx.server.registry.project_defaults(&cwd);
     assert_eq!((got["found"].clone(), got["worktree"].clone(), got["model"].clone()), (json!(true), json!(true), json!("opus")), "a worktree chat is of the folder it was made from: {got}");
 }
@@ -165,8 +165,23 @@ async fn an_account_that_is_gone_is_not_named_to_the_form() {
     let fx = fixture().await;
     let cwd = fx.project.display().to_string();
     let account = AccountRef { id: "0123456789abcdef".into(), name: "Gone".into() };
-    fx.server.registry.remember_defaults(&new_meta(fx.project.clone(), None, None, false, Some(account)));
+    fx.server.registry.remember_defaults(&new_meta(fx.project.clone(), None, None, false, Some(account)), None);
     let got = fx.server.registry.project_defaults(&cwd);
     assert_eq!(got["found"], true);
     assert!(got.get("account").is_none(), "the form keeps its own account: {got}");
+}
+
+#[tokio::test]
+async fn a_worktree_chat_made_from_a_subfolder_is_remembered_for_that_subfolder() {
+    use tenrec::session::new_meta;
+    let fx = fixture().await;
+    let sub = fx.project.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let mut meta = new_meta(fx._dir.path().join("elsewhere"), Some("opus".into()), None, false, None);
+    // The worktree remembers the repository's top folder, but the form was asked about the subfolder.
+    meta.worktree = Some(tenrec::worktree::WorktreeRef { repo: fx.project.clone(), branch: "tenrec/x".into(), base_branch: "main".into(), base_commit: "c".into(), removed: false, root: None, config_hash: String::new() });
+    fx.server.registry.remember_defaults(&meta, Some(&sub.display().to_string()));
+    let got = fx.server.registry.project_defaults(&sub.display().to_string());
+    assert_eq!((got["found"].clone(), got["worktree"].clone()), (json!(true), json!(true)), "the form for the folder it was made from finds it: {got}");
+    assert_eq!(fx.server.registry.project_defaults(&fx.project.display().to_string())["found"], false, "and the top folder is not told what the subfolder was made with");
 }

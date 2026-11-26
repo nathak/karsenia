@@ -533,7 +533,7 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
                     remember_folder(&a.data, &cwd);
                     // What the chat was made with is what the next form for this project starts with.
                     if let Some(info) = handle.info().await {
-                        a.registry.remember_defaults(&info.meta);
+                        a.registry.remember_defaults(&info.meta, Some(&cwd));
                     }
                     let sid = handle.sid.clone();
                     let b = a.clone();
