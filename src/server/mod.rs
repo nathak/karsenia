@@ -447,6 +447,15 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
             }
             None => fail("no such session"),
         },
+        // Put a chat away from the list (refused while a turn runs or a question waits) or bring it back; the chat tells its subscribers.
+        "archive" | "unarchive" => match state.registry.get(&sid) {
+            Some(handle) => {
+                if let Err(message) = handle.set_archived(op["op"].as_str() == Some("archive")).await {
+                    fail(&message);
+                }
+            }
+            None => fail("no such session"),
+        },
         "delete" => match state.registry.delete(&sid).await {
             Ok(()) => {
                 let _ = out.send(plain("deleted", Some(&sid), json!({})));

@@ -38,7 +38,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, StyledText, VecModel}
 use tenrec::registry::Registry;
 use tenrec::view::i18n::{fill, tr, Lang};
 use tenrec::view::new_form::{differs, prefill, revert, unseen, Fill, Touched};
-use tenrec::view::panels::{ago, attention, in_context, Known, Mark, View};
+use tenrec::view::panels::{ago, attention, in_context, listed, Known, Mark, View};
 use tenrec::view::transcript::{model_label, Row, Transcript};
 
 /// What the core side keeps about the chat on screen.
@@ -85,6 +85,8 @@ thread_local! {
     // The project folders of the chat list that are closed.
     static COLLAPSED: RefCell<std::collections::HashSet<String>> = RefCell::new(std::collections::HashSet::new());
     static ALL: RefCell<Vec<(SessionItem, Mark)>> = const { RefCell::new(Vec::new()) };
+    // Whether the chat list shows the archived chats.
+    static SHOW_ARCHIVED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ROWS: RefCell<Option<Rc<VecModel<ChatRow>>>> = const { RefCell::new(None) };
     // Set when a chat is opened or a message is sent: the list follows the end until that turn is over.
     // What was typed in the composer of each chat that was left, put back when the chat is opened again.
@@ -639,6 +641,26 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
             }
             refresh_sessions(&a).await;
         });
+    });
+    // Archive / unarchive the open chat (refused by the chat while it works or waits), and show or hide the archive in the list.
+    let a = app.clone();
+    ui.on_archive_chat(move |on| {
+        let Some(sid) = a.current.lock().expect("current").sid.clone() else { return };
+        let a = a.clone();
+        tokio::spawn(async move {
+            let Some(handle) = a.registry.get(&sid) else { return };
+            match handle.set_archived(on).await {
+                Ok(()) => refresh_sessions(&a).await,
+                Err(_) => toast_later(&a.weak, tr(a.lang, "archive_refused")),
+            }
+        });
+    });
+    let a = app.clone();
+    ui.on_show_archived_changed(move |on| {
+        SHOW_ARCHIVED.with(|s| s.set(on));
+        if let Some(ui) = a.weak.upgrade() {
+            show_sessions(&ui, &a);
+        }
     });
     let a = app.clone();
     ui.on_delete_chat(move || {
@@ -1658,6 +1680,7 @@ async fn refresh_sessions(app: &Arc<App>) {
     // The open chat's permission mode when it is not the default: shown in the header, so a chat that never asks is never a surprise.
     let chat_model = active.and_then(|i| i.meta.model.clone());
     let chat_perm = active.map(|i| i.meta.permission_mode).filter(|m| !m.is_default());
+    let chat_archived = active.is_some_and(|i| i.meta.archived);
     // The account's name for the header chip ("" for the default account: nothing to tell apart).
     let chat_acct_name = active
         .and_then(|i| i.meta.account.as_ref().map(|a| a.name.clone()))
@@ -1710,7 +1733,7 @@ async fn refresh_sessions(app: &Arc<App>) {
                 };
                 (title.clone(), m.cwd.display().to_string(), m.model.clone().unwrap_or_default(), prov)
             });
-            let mark = Mark { account: m.account.as_ref().map(|a| a.id.clone()), running: state == "running", pending: info.pending };
+            let mark = Mark { account: m.account.as_ref().map(|a| a.id.clone()), running: state == "running", pending: info.pending, archived: m.archived };
             let item = SessionItem { sid: m.sid.clone().into(), folder: folder.into(), title: title.into(), when: ago(m.created, now, lang).into(), state: state.into(), active, tags: tags.join(" · ").into(), pending: info.pending as i32, head: false, group: group.into(), open: false, count: 0, wt: m.worktree.is_some(), sub: SharedString::new() };
             (item, head, mark)
         })
@@ -1753,6 +1776,7 @@ async fn refresh_sessions(app: &Arc<App>) {
         if ui.get_chat_account() != chat_acct_name.as_str() {
             ui.set_chat_account(chat_acct_name.into());
         }
+        ui.set_chat_archived(chat_archived);
         // The panels follow a newly opened chat's account, if that chat is still the one on screen.
         if let Some(sid) = followed.filter(|sid| b.current.lock().expect("current").sid.as_deref() == Some(sid.as_str())) {
             accounts::follow_chat(&ui, &b, &sid, chat_acct);
@@ -1820,7 +1844,7 @@ pub(crate) fn show_sessions(ui: &AppWindow, app: &App) {
     let view = accounts::ctx(app);
     let known_accounts = accounts::known();
     let known = Known { accounts: known_accounts.as_deref() };
-    let chats: Vec<SessionItem> = ALL.with(|all| all.borrow().iter().filter(|(_, m)| in_context(m, &view, known)).map(|(item, _)| item.clone()).collect());
+    let chats: Vec<SessionItem> = ALL.with(|all| all.borrow().iter().filter(|(item, m)| in_context(m, &view, known) && listed(m, SHOW_ARCHIVED.with(std::cell::Cell::get), item.active)).map(|(item, _)| item.clone()).collect());
     let list = grouped(&chats);
     ui.set_no_chats(chats.is_empty() && known_accounts.as_ref().is_some_and(|k| !k.is_empty()));
     if !ui.get_sessions().iter().eq(list.iter().cloned()) {

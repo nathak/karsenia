@@ -426,6 +426,14 @@ export function unfill(filled, touched) {
   return [...filled].filter(field => !touched.has(field))
 }
 
+/**
+ * Whether a chat entry is in the list: not archived, or the archive is shown, or it works or waits for the person, or it is the open one
+ * (it goes when another chat is opened).
+ */
+export function listed(s, showArchived, open) {
+  return !s.archived || showArchived || s.state === 'running' || (s.pending || 0) > 0 || open
+}
+
 /** The mode a chat entry carries, or null for the default (nothing stored). Only a name from the list counts. */
 export const permOf = session => (session && PERM_MODES.includes(session.permission_mode) && session.permission_mode !== 'default' ? session.permission_mode : null)
 

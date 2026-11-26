@@ -123,6 +123,10 @@ pub struct Meta {
     /// first message does not replace it. False: the title is the first message's words (see `Meta::cli_name` for what the CLI is told).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub named: bool,
+    /// Put away by the person: left out of the chat list unless the archive is shown (its conversation, search entries and notes are kept).
+    /// Only set between turns, and cleared by a message sent to the chat.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
     /// The chat this one continues in another account (see `Registry::continue_as`) and the fingerprint of that chat's session file when
     /// this one was made: coming back is a fast-forward of that chat only while its file is still what it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -194,6 +198,8 @@ enum Cmd {
     /// The person's decision about the project's configuration the last `project_check` event showed (`hash`), or to leave it out.
     ProjectDecide { hash: String, without: bool, reply: oneshot::Sender<Result<(), String>> },
     SetPermMode { mode: crate::claude::perm::PermMode, reply: oneshot::Sender<Result<(), String>> },
+    /// Puts the chat away (or brings it back); refused while a turn runs or a question waits.
+    Archive { on: bool, reply: oneshot::Sender<Result<(), String>> },
     /// Stops one background job of the chat's process (ids come from `background_tasks_changed`).
     StopTask { task_id: String, reply: oneshot::Sender<Result<(), String>> },
     /// A control request got no answer in time.
@@ -306,6 +312,12 @@ impl SessionHandle {
     /// Answers a `project_check` event: trust the configuration as it was shown (refused when it changed since), or start without it.
     pub async fn project_decide(&self, hash: String, without: bool) -> Result<(), String> {
         ask(&self.tx, |reply| Cmd::ProjectDecide { hash, without, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    }
+
+    /// Puts the chat away from the list, or brings it back. Putting away is refused while a turn runs or a question waits, so a chat that needs
+    /// the person is never hidden.
+    pub async fn set_archived(&self, on: bool) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::Archive { on, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
     }
 
     /// Changes the permission mode of the chat; between turns only.
@@ -437,7 +449,7 @@ impl Meta {
 }
 
 pub fn new_meta(cwd: PathBuf, model: Option<String>, provider: Option<ProviderRef>, container: bool, account: Option<AccountRef>) -> Meta {
-    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider, container, worktree: None, account, imported_from: None, permission_mode: Default::default(), named: false, handed: None, slash_commands: Vec::new(), project_cfg: None }
+    Meta { sid: random_hex(8), cwd, model, claude_session_id: None, title: String::new(), created: now_ms(), provider, container, worktree: None, account, imported_from: None, permission_mode: Default::default(), named: false, archived: false, handed: None, slash_commands: Vec::new(), project_cfg: None }
 }
 
 pub fn log_path(dir: &std::path::Path, sid: &str) -> PathBuf {
@@ -803,6 +815,10 @@ impl Actor {
     fn command(&mut self, command: Cmd) -> Option<mpsc::UnboundedReceiver<ProcEvent>> {
         match command {
             Cmd::Send { text, images, reply } => {
+                // A chat that is being used is not put away.
+                if self.meta.archived {
+                    self.set_archive_flag(false);
+                }
                 // `/model name` is done by the app itself (the header and the saved model stay right), not left to the program.
                 if images.is_empty() {
                     if let crate::view::slash::Routed::Model(name) = crate::view::slash::route(&text) {
@@ -850,6 +866,15 @@ impl Actor {
                 return self.command(Cmd::SetModelSlow { model, reply });
             }
             Cmd::SetPermMode { mode, reply } => self.set_permission_mode(mode, reply),
+            Cmd::Archive { on, reply } => {
+                let result = if on && (self.state == State::Running || !self.pending.is_empty()) {
+                    Err("a turn is running or a question waits: archive the chat when it is idle".to_owned())
+                } else {
+                    self.set_archive_flag(on);
+                    Ok(())
+                };
+                let _ = reply.send(result);
+            }
             Cmd::ProjectDecide { hash, without, reply } => {
                 let _ = reply.send(self.project_decide(&hash, without));
             }
@@ -1849,6 +1874,14 @@ impl Actor {
         Ok(())
     }
 
+    fn set_archive_flag(&mut self, on: bool) {
+        if self.meta.archived != on {
+            self.meta.archived = on;
+            self.save_meta();
+            self.emit("archived", json!({"archived": on}));
+        }
+    }
+
     fn set_permission_mode(&mut self, mode: crate::claude::perm::PermMode, reply: oneshot::Sender<Result<(), String>>) {
         if self.state == State::Running || !self.pending.is_empty() {
             let _ = reply.send(Err("the permission mode can be changed between turns, not while one runs or a question waits".into()));
@@ -2017,6 +2050,17 @@ mod tests {
         let mut meta = new_meta(PathBuf::from(cwd), None, None, false, None);
         meta.worktree = Some(crate::worktree::WorktreeRef { repo: PathBuf::from(repo), branch: "tenrec/x".into(), base_branch: "main".into(), base_commit: "c".into(), removed: false, root: None, config_hash: String::new() });
         meta
+    }
+
+    #[test]
+    fn an_old_meta_without_archived_reads_false_and_false_is_not_written() {
+        let old = r#"{"sid":"a1","cwd":"/tmp","model":null,"claude_session_id":null,"title":"t","created":1}"#;
+        let meta: Meta = serde_json::from_str(old).unwrap();
+        assert!(!meta.archived);
+        assert!(!serde_json::to_string(&meta).unwrap().contains("archived"));
+        let mut meta = meta;
+        meta.archived = true;
+        assert!(serde_json::to_string(&meta).unwrap().contains("\"archived\":true"));
     }
 
     #[test]

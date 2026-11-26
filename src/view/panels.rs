@@ -532,6 +532,14 @@ pub struct Mark {
     pub account: Option<String>,
     pub running: bool,
     pub pending: usize,
+    /// Put away by the person (see `listed`).
+    pub archived: bool,
+}
+
+/// Whether a chat is in the list: not archived, or the archive is shown, or it needs the person's eyes anyway (it works, or a question
+/// waits), or it is the open one (it goes when another chat is opened). What the account choice counts (`attention`) is not affected.
+pub fn listed(chat: &Mark, show_archived: bool, open: bool) -> bool {
+    !chat.archived || show_archived || chat.running || chat.pending > 0 || open
 }
 
 /// The account a chat is listed under: its own, or the default one when it has none or its account was deleted, so no chat becomes
@@ -729,7 +737,7 @@ mod tests {
         assert!(!accounts_view(&full, &HashMap::new(), &HashMap::new(), Lang::En).0.can_add);
     }
     fn mark(account: Option<&str>, running: bool, pending: usize) -> Mark {
-        Mark { account: account.map(str::to_owned), running, pending }
+        Mark { account: account.map(str::to_owned), running, pending, archived: false }
     }
 
     fn acct(id: Option<&str>) -> View {
@@ -783,6 +791,17 @@ mod tests {
         assert_eq!(tab_label("Work", seen.get(&acct(Some("a1")))), "⚠ 1 Work");
         assert_eq!(tab_label("Work", Some(&(0, 3))), "● Work");
         assert_eq!(tab_label("Work", None), "Work");
+    }
+
+    #[test]
+    fn an_archived_chat_is_hidden_unless_shown_running_waiting_or_open() {
+        let chat = |archived, running, pending| Mark { account: None, running, pending, archived };
+        assert!(listed(&chat(false, false, 0), false, false), "a chat that is not archived is listed");
+        assert!(!listed(&chat(true, false, 0), false, false), "an archived one is not");
+        assert!(listed(&chat(true, false, 0), true, false), "unless the archive is shown");
+        assert!(listed(&chat(true, true, 0), false, false), "or it is working");
+        assert!(listed(&chat(true, false, 2), false, false), "or it waits for the person");
+        assert!(listed(&chat(true, false, 0), false, true), "or it is the open one");
     }
 
     #[test]

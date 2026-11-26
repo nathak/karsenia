@@ -91,6 +91,11 @@ export component AppWindow inherits Window {
     in property <string> chat-title;
     // The name of the open chat's account when it is not the default one (the Stitch header's account chip).
     in property <string> chat-account;
+    // The open chat is archived (the more menu then offers to bring it back), and whether the list shows archived chats.
+    in property <bool> chat-archived;
+    in-out property <bool> show-archived;
+    callback archive-chat(bool);
+    callback show-archived-changed(bool);
     in property <string> pwd-path;
     // The folder as the host wrote it, for the copy button; and the breadcrumb's two names.
     in property <string> pwd-full;
@@ -191,7 +196,8 @@ export component AppWindow inherits Window {
     property <bool> in-gw: root.hw >= 720px;
     property <bool> in-dbg: root.hw >= 860px;
     property <bool> in-cont: root.hw >= 900px;
-    property <bool> more-shown: !root.in-copy || !root.in-dbg || (root.gw-shown && !root.in-gw) || (Acct.names.length > 1 && !root.in-cont);
+    // The menu is always there: it holds archive and unarchive, and what the window is too narrow for.
+    property <bool> more-shown: true;
     changed more-shown => { if (!root.more-shown) { root.more-open = false; } }
     // The menu's gateway box takes the keyboard focus when it is used: a menu that goes away (a click outside, Esc, a wider window) or a box
     // that leaves the row hands it back, or the window's keys would not work until the next click.
@@ -338,6 +344,7 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         padding-left: 6px; padding-right: 2px; padding-bottom: 8px; padding-top: 12px; spacing: 6px;
                         Label { text: T.sessions; vertical-alignment: center; horizontal-stretch: 1; }
+                        Btn { text: T.tr("archive_shown"); height: 22px; primary: root.show-archived; clicked => { root.show-archived = !root.show-archived; root.show-archived-changed(root.show-archived); } }
                         Rectangle { width: 7px; height: 7px; y: (parent.height - 7px) / 2; border-radius: 3.5px; background: Theme.ok; }
                         IconBtn { y: -4px; icon: @image-url("icons/plus.svg"); clicked => { root.new-acct = Acct.pre-acct; root.new-prov = 0; Imp.open = false; root.new-open = true; } }
                     }
@@ -873,6 +880,7 @@ export component AppWindow inherits Window {
                         ComboBox { horizontal-stretch: 1; model: root.gw-names; current-index <=> root.gw-idx; enabled: root.state != "running"; selected(v) => { root.gw-picked(self.current-index, v); root.more-open = false; root.refocus(); } }
                     }
                     if !root.in-dbg: Btn { text: T.tr("dbg_btn"); height: 30px; primary: root.debug-view; clicked => { root.debug-view = !root.debug-view; if (root.debug-view && root.text-view) { root.text-view = false; root.text-view-set(false); } root.debug-view-set(root.debug-view); root.more-open = false; } }
+                    Btn { text: root.chat-archived ? T.tr("unarchive") : T.tr("archive"); height: 30px; enabled: root.chat-archived || root.state != "running"; clicked => { root.more-open = false; root.archive-chat(!root.chat-archived); } }
                     if !root.in-copy: Btn { text: T.tr("copy_all"); height: 30px; clicked => { root.more-open = false; root.copy-all(); } }
                     if !root.in-cont && Acct.names.length > 1: Btn { text: T.tr("cont_btn"); height: 30px; enabled: root.state != "running"; clicked => { root.more-open = false; root.cont-open = true; } }
                 }

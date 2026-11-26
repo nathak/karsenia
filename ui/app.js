@@ -3,7 +3,7 @@ import DOMPurify from './vendor/purify.js'
 import { initFiles } from './files.js'
 import { initTerm } from './term.js'
 import { initWt } from './wt.js'
-import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, wtText, accountName, accountOf, forAccount, inContext, viewOf, attn, permChoices, permNeedsConfirm, permOf, formFill, unfill, fillDiffers, justFilled, grantButtons, modelChoices, withAccount, baseName, chatHost, checkImage, isLocalHost, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, parseSites, pathsInText, resultBlocks, skillMd, toolSummary, dayKey, clock, ago, modelLabel, turnLine, codeLines, tailPath } from './util.js'
+import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, wtText, accountName, accountOf, forAccount, inContext, viewOf, attn, permChoices, permNeedsConfirm, permOf, formFill, unfill, fillDiffers, justFilled, listed, grantButtons, modelChoices, withAccount, baseName, chatHost, checkImage, isLocalHost, daysToMask, fmtBytes, fmtMinute, maskToDays, parseHHMM, fmtTurn, imagePaths, lineDiff, markParts, nearestSeq, numberedLines, parseSites, pathsInText, resultBlocks, skillMd, toolSummary, dayKey, clock, ago, modelLabel, turnLine, codeLines, tailPath } from './util.js'
 // The reason the host gives a web task made before sites were listed (src/sched_store.rs NEEDS_DOMAINS); shown translated.
 const NEEDS_SITES = 'needs the sites it may open: edit the task and list them'
 
@@ -14,7 +14,7 @@ const TEXT = {
     placeholder: '메시지를 입력하세요 (Enter 전송, Shift+Enter 줄바꿈). 이미지는 붙여넣기·끌어놓기', send: '보내기', stop: '중단', attach: '이미지 첨부',
     idle: '대기', running: '작업 중', exited: '종료됨', connected: '연결됨', reconnecting: '다시 연결하는 중…', untitled: '(새 대화)', acctNoChats: '이 계정에는 대화가 없습니다.',
     plugTitle: '플러그인', plugIntro: '기본 계정에 설치된 플러그인 중 이 계정에 없는 것입니다. 계정마다 설정 폴더가 따로라 직접 설치해야 합니다.', plugNone: '설치할 플러그인이 없습니다.', plugInstall: '설치', plugBusy: '설치 중…', plugConfirm: '{p} 플러그인을 이 계정에 설치합니다. 플러그인은 코드를 실행할 수 있습니다. 계속할까요?', plugDone: '설치했습니다', plugFailed: '설치하지 못했습니다',
-    chatName: '대화 이름 (선택)', renameBtn: '이름 변경', renamePrompt: '새 이름 (60자까지)', deleteBtn: '삭제', deleteConfirm: '이 대화를 삭제합니다. 기록이 모두 지워지고 되돌릴 수 없습니다. 계속할까요?',
+    chatName: '대화 이름 (선택)', renameBtn: '이름 변경', archiveBtn: '보관', unarchiveBtn: '보관 해제', archiveShown: '보관함', renamePrompt: '새 이름 (60자까지)', deleteBtn: '삭제', deleteConfirm: '이 대화를 삭제합니다. 기록이 모두 지워지고 되돌릴 수 없습니다. 계속할까요?',
     modelDefault: '기본 모델', modelNow: '모델 변경', modelNote: '다음 메시지부터 이어서 이 모델로 실행합니다',
     perm: '권한 모드', permTag: '권한',
     permM_default: '기본 (읽기만 자동 허용)', permN_default: '읽기만 묻지 않고 실행합니다. 나머지는 매번 묻습니다.',
@@ -101,7 +101,7 @@ const TEXT = {
     placeholder: 'Message (Enter to send, Shift+Enter for a new line). Paste or drop images', send: 'Send', stop: 'Stop', attach: 'Attach image',
     idle: 'idle', running: 'working', exited: 'ended', connected: 'connected', reconnecting: 'reconnecting…', untitled: '(new chat)', acctNoChats: 'No chats under this account.',
     plugTitle: 'Plugins', plugIntro: 'Plugins the default account has and this account lacks. Each account has its own settings folder, so they are installed here separately.', plugNone: 'Nothing to install.', plugInstall: 'Install', plugBusy: 'Installing…', plugConfirm: 'Install the plugin {p} into this account? A plugin can run code. Continue?', plugDone: 'Installed', plugFailed: 'Could not install',
-    chatName: 'Chat name (optional)', renameBtn: 'Rename', renamePrompt: 'New name (60 characters at most)', deleteBtn: 'Delete', deleteConfirm: 'Delete this chat? Its whole history is erased and this cannot be undone. Continue?',
+    chatName: 'Chat name (optional)', renameBtn: 'Rename', archiveBtn: 'Archive', unarchiveBtn: 'Unarchive', archiveShown: 'Archive', renamePrompt: 'New name (60 characters at most)', deleteBtn: 'Delete', deleteConfirm: 'Delete this chat? Its whole history is erased and this cannot be undone. Continue?',
     modelDefault: 'default model', modelNow: 'Model changed', modelNote: 'the next message continues the chat with this model',
     perm: 'Permission mode', permTag: 'permission',
     permM_default: 'Default (only reads run without asking)', permN_default: 'Only reads run without asking. Everything else asks each time.',
@@ -249,7 +249,7 @@ DOMPurify.addHook('afterSanitizeAttributes', node => {
 const markdown = source => DOMPurify.sanitize(marked.parse(source, { gfm: true, breaks: true }), { FORBID_TAGS: ['style', 'form', 'input', 'button', 'img'], FORBID_ATTR: ['style', 'id', 'name'] })
 
 // ---- state ----
-const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, liveThink: null, thinkMs: null, sysTurn: new Set(), sysWin: new Map(), curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, skills: null, sched: null, providers: null, pvEditing: null, scEditing: 0, scRunId: 0, skEditing: 0, skHistory: null, skDraft: null, skEditReport: null, images: [], debug: [], connected: false, wasConnected: false, acct: null, accounts: null, acctStatus: new Map(), acctRid: 0, acctHow: new Set(), acctPlug: new Set(), acctPlugins: new Map(), acctPlugBusy: new Set(), acctOps: new Map(), acctReq: 0, curTs: 0, day: '', asstMeta: false, model: null }
+const S = { ws: null, sessions: [], cur: null, lastSeq: 0, replaying: false, state: 'idle', pending: new Map(), tools: new Map(), live: null, liveThink: null, thinkMs: null, sysTurn: new Set(), sysWin: new Map(), curSeq: 0, jumpTo: null, searchReq: 0, side: 'chats', mem: null, memRid: 0, memOps: new Map(), editing: 0, skills: null, sched: null, providers: null, pvEditing: null, scEditing: 0, scRunId: 0, skEditing: 0, skHistory: null, skDraft: null, skEditReport: null, images: [], debug: [], connected: false, wasConnected: false, acct: null, showArchived: false, accounts: null, acctStatus: new Map(), acctRid: 0, acctHow: new Set(), acctPlug: new Set(), acctPlugins: new Map(), acctPlugBusy: new Set(), acctOps: new Map(), acctReq: 0, curTs: 0, day: '', asstMeta: false, model: null }
 
 const messages = $('messages')
 const files = initFiles({ $, el, t, send: op => wsSend(op), toast: (text, action) => toast(text, action), sid: () => S.cur })
@@ -501,7 +501,7 @@ function renderSessions() {
   list.replaceChildren()
   const known = knownAccounts()
   // Only the chats of the account being shown are listed: nothing is shown merged (the badge on the others says if one needs you).
-  const shown = S.sessions.filter(s => inContext(s, S.acct, known))
+  const shown = S.sessions.filter(s => inContext(s, S.acct, known) && listed(s, S.showArchived, s.sid === S.cur))
   if (!shown.length && known && known.length) list.appendChild(el('div', 'muted', t('acctNoChats')))
   for (const s of shown) {
     const b = el('button', 'sess' + (s.sid === S.cur ? ' on' : ''))
@@ -691,6 +691,11 @@ function handle(m) {
       if (cur) { cur.title = d.title; $('title').textContent = d.title; renderSessions() }
       return
     }
+    case 'archived': {
+      const cur = curSession()
+      if (cur) { cur.archived = d.archived || undefined; showModelPicker(cur); renderSessions() }
+      return
+    }
     case 'model': {
       const cur = curSession()
       if (cur) { cur.model = d.model || undefined; showModelPicker(cur) }
@@ -709,19 +714,32 @@ function handle(m) {
 function showModelPicker(s) {
   const pick = $('chat-model')
   pick.hidden = !s || Boolean(s.provider)
-  $('chat-rename').hidden = $('chat-delete').hidden = !s
+  $('chat-rename').hidden = $('chat-delete').hidden = $('chat-archive').hidden = !s
   if (!s) return
   pick.replaceChildren(...modelChoices(s.model || '').map(m => Object.assign(el('option', '', m || t('modelDefault')), { value: m })))
   pick.value = s.model || ''
   pick.disabled = S.state === 'running'
   pick.title = t('modelNote')
   $('chat-rename').textContent = '✎ ' + t('renameBtn')
+  $('chat-archive').textContent = s.archived ? t('unarchiveBtn') : t('archiveBtn')
+  $('chat-archive').disabled = !s.archived && S.state === 'running'
   $('chat-delete').textContent = '🗑 ' + t('deleteBtn')
 }
 $('chat-rename').addEventListener('click', () => {
   const s = curSession()
   const name = s && prompt(t('renamePrompt'), s.title || '')
   if (name && name.trim()) wsSend({ op: 'rename', sid: S.cur, title: name.trim() })
+})
+// Put the open chat away from the list, or bring it back (the chat refuses to be put away while a turn runs or a question waits).
+$('chat-archive').addEventListener('click', () => {
+  const s = curSession()
+  if (s) wsSend({ op: s.archived ? 'unarchive' : 'archive', sid: S.cur })
+})
+$('archive-toggle').addEventListener('click', () => {
+  S.showArchived = !S.showArchived
+  $('archive-toggle').setAttribute('aria-pressed', String(S.showArchived))
+  $('archive-toggle').classList.toggle('on', S.showArchived)
+  renderSessions()
 })
 $('chat-delete').addEventListener('click', () => {
   if (S.cur && S.state !== 'running' && confirm(t('deleteConfirm'))) wsSend({ op: 'delete', sid: S.cur })

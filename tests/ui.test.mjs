@@ -3,7 +3,7 @@ import { test } from 'node:test'
 
 import { readFileSync } from 'node:fs'
 
-import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, accountName, accountOf, forAccount, inContext, viewOf, attn, PERM_MODES, permChoices, permNeedsConfirm, permOf, grantButtons, MODEL_ALIASES, modelChoices, needsAccount, withAccount, wtBlockerText, wtRemovePrompts, wtText, termFeed, termState, termText, asTextarea, diffWithin, gutterText, lineCount, relJoin, relParent, isUnder, toCrlf, baseName, checkImage, fmtTurn, imagePaths, parseSites, pathsInText, resultBlocks, toolSummary, formFill, unfill, fillDiffers, justFilled} from '../ui/util.js'
+import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, accountName, accountOf, forAccount, inContext, viewOf, attn, PERM_MODES, permChoices, permNeedsConfirm, permOf, grantButtons, MODEL_ALIASES, modelChoices, needsAccount, withAccount, wtBlockerText, wtRemovePrompts, wtText, termFeed, termState, termText, asTextarea, diffWithin, gutterText, lineCount, relJoin, relParent, isUnder, toCrlf, baseName, checkImage, fmtTurn, imagePaths, parseSites, pathsInText, resultBlocks, toolSummary, formFill, unfill, fillDiffers, justFilled, listed} from '../ui/util.js'
 
 test('a tool call is summed up by what it works on', () => {
   assert.equal(toolSummary('Bash', { command: 'ls -la\nmore' }), 'ls -la')
@@ -615,4 +615,25 @@ test('a click right after the form filled itself in is held back, one a moment l
   assert.equal(justFilled(1000, 1500), true)
   assert.equal(justFilled(1000, 1700), false)
   assert.equal(justFilled(0, 5000), false, 'nothing was filled')
+})
+
+test('an archived chat is hidden unless the archive is shown, it works, it waits, or it is the open one', () => {
+  const chat = (archived, state, pending) => ({ sid: 'a', archived, state, pending })
+  assert.equal(listed(chat(false, 'idle', 0), false, false), true)
+  assert.equal(listed(chat(undefined, 'idle', 0), false, false), true, 'a chat made before archiving existed')
+  assert.equal(listed(chat(true, 'idle', 0), false, false), false)
+  assert.equal(listed(chat(true, 'idle', 0), true, false), true, 'the archive is shown')
+  assert.equal(listed(chat(true, 'running', 0), false, false), true, 'it works')
+  assert.equal(listed(chat(true, 'idle', 1), false, false), true, 'it waits')
+  assert.equal(listed(chat(true, 'idle', 0), false, true), true, 'it is open')
+})
+
+test('the web page can archive and bring back a chat, and the archive can be shown', () => {
+  const app = readFileSync(new URL('../ui/app.js', import.meta.url), 'utf8')
+  const html = readFileSync(new URL('../ui/index.html', import.meta.url), 'utf8')
+  assert.match(app, /op: s\.archived \? 'unarchive' : 'archive'/)
+  assert.match(app, /case 'archived':/, 'the chat tells the page')
+  assert.match(app, /listed\(s, S\.showArchived, s\.sid === S\.cur\)/, 'the list leaves archived chats out unless shown or open')
+  for (const key of ['archiveBtn', 'unarchiveBtn', 'archiveShown']) assert.equal((app.match(new RegExp('(?<![A-Za-z])' + key + ':', 'g')) || []).length, 2, `${key} in both languages`)
+  for (const id of ['chat-archive', 'archive-toggle']) assert.ok(html.includes(`id="${id}"`), id)
 })
