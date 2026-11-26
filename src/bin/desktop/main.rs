@@ -700,7 +700,9 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
         }
         let form = ui.global::<NewForm>();
         let touched = Touched { model: form.get_touched_model(), account: form.get_touched_acct(), permission: form.get_touched_perm(), worktree: form.get_touched_wt() };
-        let fill = prefill(&a.registry.project_defaults(&cwd), &cwd, touched, &accounts::ids());
+        let answer = a.registry.project_defaults(&cwd);
+        form.set_trusted(answer["trusted"].as_bool() == Some(true));
+        let fill = prefill(&answer, &cwd, touched, &accounts::ids());
         // The fields filled in for the folder before go back to the form's start unless this folder fills them again (or the person took over).
         let start = Fill { model: Some(0), account: Some(ui.global::<Acct>().get_pre_acct()), permission: Some(0), worktree: Some(false) };
         let back = revert(&filled_here.get(), &fill, touched, &start);
@@ -738,6 +740,17 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
             }
         }
         form.set_used(fill.any());
+    });
+    // "Forget": the trust remembered for this folder (for the account its remembered settings name) goes; new chats ask again.
+    let a = app.clone();
+    ui.global::<NewForm>().on_forget_trust(move || {
+        let Some(ui) = a.weak.upgrade() else { return };
+        let cwd = ui.get_new_cwd().trim().to_owned();
+        let account = a.registry.project_defaults(&cwd)["account"].as_str().map(str::to_owned);
+        if a.registry.forget_trust(&cwd, account.as_deref()) {
+            ui.global::<NewForm>().set_trusted(false);
+            toast(&ui, tr(a.lang, "nc_trust_forgotten"));
+        }
     });
     // "Use defaults": the form's own starting values, and the fields stay as they are even if the folder is settled again.
     let a = app.clone();

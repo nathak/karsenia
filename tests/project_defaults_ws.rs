@@ -185,3 +185,36 @@ async fn a_worktree_chat_made_from_a_subfolder_is_remembered_for_that_subfolder(
     assert_eq!((got["found"].clone(), got["worktree"].clone()), (json!(true), json!(true)), "the form for the folder it was made from finds it: {got}");
     assert_eq!(fx.server.registry.project_defaults(&fx.project.display().to_string())["found"], false, "and the top folder is not told what the subfolder was made with");
 }
+
+async fn forget(ws: &mut Ws, cwd: &str) {
+    ws.send(Message::Text(json!({"op": "project_trust_forget", "cwd": cwd, "account": null}).to_string())).await.unwrap();
+}
+
+#[tokio::test]
+async fn the_form_can_forget_the_trust_remembered_for_a_folder() {
+    let fx = fixture().await;
+    let mut ws = good(&fx).await;
+    assert_eq!(next_json(&mut ws).await["kind"], "hello");
+    let cwd = fx.project.display().to_string();
+    forget(&mut ws, &cwd).await;
+    loop {
+        let got = next_json(&mut ws).await;
+        if got["kind"] == "project_trust_forgot" {
+            assert_eq!(got["data"]["forgot"], false, "nothing was remembered");
+            break;
+        }
+    }
+    // A remembered entry (written as the core writes it) is what the form is told about, and what forgetting removes.
+    let key = format!("\n{cwd}");
+    std::fs::write(fx.data.join("project_trust.json"), json!({"v": 1, "projects": {key: {"hash": "h", "strong": "s"}}}).to_string()).unwrap();
+    assert_eq!(ask(&mut ws, &cwd).await["trusted"], true);
+    forget(&mut ws, &cwd).await;
+    loop {
+        let got = next_json(&mut ws).await;
+        if got["kind"] == "project_trust_forgot" {
+            assert_eq!(got["data"]["forgot"], true);
+            break;
+        }
+    }
+    assert!(ask(&mut ws, &cwd).await.get("trusted").is_none(), "and the form is not told any more");
+}

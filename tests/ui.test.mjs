@@ -589,8 +589,9 @@ test('the new-chat form asks for the folder\'s remembered settings and tells whe
   assert.match(app, /m\.kind === 'project_defaults'/, 'it takes the answer')
   assert.match(app, /\$\('new-cwd'\)\.addEventListener\('change', askDefaults\)/, 'when the folder is settled')
   assert.match(app, /newTouched\.clear\(\)/, 'a form opened again starts with nothing set by hand')
-  for (const key of ['ncDefaultsUsed', 'ncDefaultsReset', 'ncDefaultsHold']) assert.equal((app.match(new RegExp(key + ':', 'g')) || []).length, 2, `${key} in both languages`)
-  for (const id of ['new-defaults-note', 'new-defaults-reset']) assert.ok(html.includes(`id="${id}"`), id)
+  for (const key of ['ncDefaultsUsed', 'ncDefaultsReset', 'ncDefaultsHold', 'ncTrustRemembered', 'ncTrustForget', 'ncTrustForgotten']) assert.equal((app.match(new RegExp(key + ':', 'g')) || []).length, 2, `${key} in both languages`)
+  assert.match(app, /op: 'project_trust_forget'/, 'the way to forget a remembered trust')
+  for (const id of ['new-defaults-note', 'new-defaults-reset', 'new-trust-note', 'new-trust-forget']) assert.ok(html.includes(`id="${id}"`), id)
   assert.ok(!/permission[^\n]*bypassPermissions[^\n]*fill\./.test(app), 'the mode that skips checks is never filled in from the answer')
 })
 

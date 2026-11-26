@@ -4,6 +4,13 @@ use serde_json::Value;
 
 use crate::view::i18n::{tr, Lang};
 
+/// Whether the card may offer to remember a decision for the project: the core refuses it for a link, a file too big to read and a file that
+/// is not valid (see `project_trust::remember_allowed`), so the card does not offer it then.
+pub fn can_remember(data: &Value) -> bool {
+    let findings = data["findings"].as_array().map(Vec::as_slice).unwrap_or_default();
+    !findings.is_empty() && !findings.iter().any(|f| matches!(f["key"].as_str(), Some("link" | "too_big" | "malformed")))
+}
+
 pub fn lines(data: &Value, lang: Lang) -> Vec<(String, bool)> {
     let mut out: Vec<(String, bool)> = Vec::new();
     for f in data["findings"].as_array().into_iter().flatten() {
@@ -23,6 +30,15 @@ pub fn lines(data: &Value, lang: Lang) -> Vec<(String, bool)> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn remembering_is_offered_unless_a_file_is_a_link_too_big_or_not_valid() {
+        assert!(can_remember(&json!({"findings": [{"key": "hooks", "severity": "danger"}]})));
+        for key in ["link", "too_big", "malformed"] {
+            assert!(!can_remember(&json!({"findings": [{"key": "hooks"}, {"key": key}]})), "{key}");
+        }
+        assert!(!can_remember(&json!({"findings": []})) && !can_remember(&json!({})));
+    }
 
     #[test]
     fn a_finding_is_one_line_with_its_severity_file_rule_and_text_and_warnings_come_first() {

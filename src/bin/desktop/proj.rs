@@ -8,7 +8,7 @@ use std::rc::Rc;
 use serde_json::Value;
 use slint::{ComponentHandle, ModelRc, VecModel};
 use tenrec::view::i18n::tr;
-use tenrec::view::project_check::lines;
+use tenrec::view::project_check::{can_remember, lines};
 
 use crate::{App, AppWindow, Proj, WtLine};
 
@@ -26,6 +26,7 @@ pub fn reset(ui: &AppWindow) {
     let p = ui.global::<Proj>();
     p.set_show(false);
     p.set_busy(false);
+    p.set_can_remember(false);
     p.set_lines(ModelRc::default());
 }
 
@@ -41,6 +42,7 @@ pub fn show(ui: &AppWindow, app: &App, data: &Value) {
     HASH.with(|h| *h.borrow_mut() = data["hash"].as_str().unwrap_or_default().to_owned());
     let p = ui.global::<Proj>();
     p.set_lines(ModelRc::from(Rc::new(VecModel::from(rows))));
+    p.set_can_remember(can_remember(data));
     p.set_busy(false);
     p.set_show(true);
 }
@@ -52,14 +54,14 @@ pub fn close(ui: &AppWindow) {
     p.set_busy(false);
 }
 
-fn decide(ui: &AppWindow, app: &Arc<App>, without: bool) {
+fn decide(ui: &AppWindow, app: &Arc<App>, without: bool, remember: bool) {
     let Some(sid) = app.current.lock().expect("current").sid.clone() else { return };
     let hash = HASH.with(|h| h.borrow().clone());
     ui.global::<Proj>().set_busy(true);
     let a = app.clone();
     tokio::spawn(async move {
         let result = match a.registry.get(&sid) {
-            Some(handle) => handle.project_decide(hash, without, false).await,
+            Some(handle) => handle.project_decide(hash, without, remember).await,
             None => Err("the chat is gone".into()),
         };
         let b = a.clone();
@@ -85,7 +87,18 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         let (b, w) = (a.clone(), weak.clone());
         crate::panels::ask(&ui, tr(a.lang, "proj_trust_confirm"), tr(a.lang, "proj_trust"), true, Box::new(move |yes| {
             if let (true, Some(ui)) = (yes, w.upgrade()) {
-                decide(&ui, &b, false);
+                decide(&ui, &b, false, false);
+            }
+        }));
+    });
+    // "Remember for this project": new chats in the folder skip the question for exactly these files; asked in stronger words.
+    let (weak, a) = (ui.as_weak(), app.clone());
+    p.on_trust_project(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        let (b, w) = (a.clone(), weak.clone());
+        crate::panels::ask(&ui, tr(a.lang, "proj_trust_project_confirm"), tr(a.lang, "proj_trust_project"), true, Box::new(move |yes| {
+            if let (true, Some(ui)) = (yes, w.upgrade()) {
+                decide(&ui, &b, false, true);
             }
         }));
     });
@@ -95,7 +108,7 @@ pub fn wire(ui: &AppWindow, app: &Arc<App>) {
         let (b, w) = (a.clone(), weak.clone());
         crate::panels::ask(&ui, tr(a.lang, "proj_without_note"), tr(a.lang, "proj_without_ok"), false, Box::new(move |yes| {
             if let (true, Some(ui)) = (yes, w.upgrade()) {
-                decide(&ui, &b, true);
+                decide(&ui, &b, true, false);
             }
         }));
     });

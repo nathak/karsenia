@@ -232,7 +232,18 @@ fn scenes(ui: &AppWindow, window: &MinimalSoftwareWindow, out: &std::path::Path)
     ui.global::<NewForm>().set_used(true);
     save(window, &out.join("17-1280x800-newchat-defaults-dark.png"), 1280, 1000);
     ui.global::<NewForm>().set_used(false);
+    // A trust remembered for the folder, and the way to forget it.
+    ui.global::<NewForm>().set_trusted(true);
+    save(window, &out.join("17b-newchat-trusted-dark.png"), 1280, 1000);
+    ui.global::<NewForm>().set_trusted(false);
     ui.set_new_open(false);
+    // The card that asks about the project's own settings, with the choice to remember the decision for the project.
+    let proj = ui.global::<Proj>();
+    proj.set_lines(ModelRc::from(Rc::new(VecModel::from(vec![WtLine { text: "위험 · .claude/settings.json · 훅이 명령을 실행합니다: Stop → ./x.sh".into(), bad: true }]))));
+    proj.set_can_remember(true);
+    proj.set_show(true);
+    save(window, &out.join("18-1280x800-project-card-dark.png"), 1280, 800);
+    proj.set_show(false);
     open_chat(ui, &many);
     ui.global::<Theme>().set_mode(1);
     save(window, &out.join("11-1280x800-12acct-light.png"), 1280, 800);

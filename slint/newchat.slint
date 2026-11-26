@@ -97,6 +97,11 @@ export component NewChatCard inherits Rectangle {
         Text { text: T.tr("perm_label"); color: Theme.on-var; font-size: 13px; font-weight: 600; }
         ComboBox { model: [T.tr("perm_m_default"), T.tr("perm_m_acceptEdits"), T.tr("perm_m_plan"), T.tr("perm_m_auto"), T.tr("perm_m_dontAsk"), T.tr("perm_m_bypassPermissions")]; current-index <=> root.perm; selected(v) => { NewForm.touched-perm = true; } }
         WText { text: [T.tr("perm_n_default"), T.tr("perm_n_acceptEdits"), T.tr("perm_n_plan"), T.tr("perm_n_auto"), T.tr("perm_n_dontAsk"), T.tr("perm_n_bypassPermissions")][root.perm]; size: 11px; fg: root.perm == 5 ? Theme.error : Theme.outline; }
+        if NewForm.trusted: HorizontalLayout {
+            spacing: 8px;
+            WText { horizontal-stretch: 1; text: T.tr("nc_trust_remembered"); size: 11px; fg: Theme.warn-soft; }
+            Btn { text: T.tr("nc_trust_forget"); height: 26px; clicked => { NewForm.forget-trust(); } }
+        }
         if NewForm.used: HorizontalLayout {
             spacing: 8px;
             WText { horizontal-stretch: 1; text: T.tr("nc_defaults_used"); size: 11px; fg: Theme.info; }

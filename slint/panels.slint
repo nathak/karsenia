@@ -35,6 +35,9 @@ export global NewForm {
     // The folder is settled (picked, typed and accepted, the field left, or the form opened on it): ask what is remembered for it.
     callback cwd-settled(string);
     callback reset-defaults();
+    // A trust in the folder's own configuration is remembered for its new chats (and the way to forget it).
+    in-out property <bool> trusted;
+    callback forget-trust();
 }
 
 // The Claude logins (personal, work...). Each has its own notes, skills and history; the panels show one of them.
@@ -621,7 +624,10 @@ export global Proj {
     in-out property <bool> show;
     in property <[WtLine]> lines;
     in property <bool> busy;
+    // The core would remember a decision for the project's new chats (not for a link, a file too big or not valid).
+    in property <bool> can-remember;
     callback trust();
+    callback trust-project();
     callback without();
 }
 
@@ -642,6 +648,10 @@ export component ProjCard inherits Card {
                 spacing: 8px;
                 for l in Proj.lines: WText { text: l.text; fg: l.bad ? Theme.warn-soft : Theme.on-var; size: 11px; mono: true; }
             }
+        }
+        if Proj.can-remember: HorizontalLayout {
+            alignment: end; padding-top: 6px;
+            Btn { text: T.tr("proj_trust_project"); height: 30px; danger: true; enabled: !Proj.busy; clicked => { Proj.trust-project(); } }
         }
         HorizontalLayout {
             spacing: 6px; alignment: end; padding-top: 6px;

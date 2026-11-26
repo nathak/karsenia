@@ -420,6 +420,12 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
                 Err(message) => fail(&message),
             }
         }
+        // The trust remembered for a project folder (and an account) is forgotten: new chats there ask again.
+        "project_trust_forget" => {
+            let cwd = op["cwd"].as_str().unwrap_or_default();
+            let forgot = state.registry.forget_trust(cwd, op["account"].as_str().filter(|a| !a.is_empty()));
+            let _ = out.send(plain("project_trust_forgot", None, json!({"cwd": cwd, "forgot": forgot})));
+        }
         // What the new-chat form starts with for a folder (the answer says which folder it is for, so a late one can be told).
         "project_defaults" => {
             let cwd = op["cwd"].as_str().unwrap_or_default();
