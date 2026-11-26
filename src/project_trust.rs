@@ -113,11 +113,8 @@ impl TrustStore {
     pub fn forget(&self, key: &str) -> bool {
         let _guard = self.lock.lock().unwrap_or_else(|p| p.into_inner());
         let Some(mut file) = self.read_or_set_aside() else { return false };
-        let had = file.projects.remove(key).is_some();
-        if had {
-            let _ = serde_json::to_string_pretty(&file).map(|text| crate::private::write_atomic(&self.path, &text));
-        }
-        had
+        // True only when the project had a trust and the file without it was written: otherwise the trust is still in force.
+        file.projects.remove(key).is_some() && serde_json::to_string_pretty(&file).is_ok_and(|text| crate::private::write_atomic(&self.path, &text).is_ok())
     }
 
     /// Whether the project has a recorded trust (for the form to say so; not a decision to skip anything).
@@ -201,6 +198,24 @@ mod tests {
         assert!(!store.has("\n/a") && store.has("\n/b"));
         assert!(!store.forget("\n/a"), "nothing left to forget");
         assert!(!store.trusts("\n/a", &s));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forgetting_says_so_only_when_the_change_was_written() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, store) = store();
+        let s = scan("hooks", Severity::Danger, "x");
+        store.record("\n/a", &s);
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        // A program that may write anyway (root) cannot show a failed write: nothing to check then.
+        let can_still_write = std::fs::File::create(dir.path().join(".probe")).is_ok();
+        let forgot = store.forget("\n/a");
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        if !can_still_write {
+            assert!(!forgot, "the file could not be written, so the trust is still there and must not be reported forgotten");
+            assert!(store.trusts("\n/a", &s));
+        }
     }
 
     #[test]

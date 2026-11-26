@@ -434,7 +434,7 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
         // What the new-chat form starts with for a folder (the answer says which folder it is for, so a late one can be told).
         "project_defaults" => {
             let cwd = op["cwd"].as_str().unwrap_or_default();
-            let _ = out.send(plain("project_defaults", None, state.registry.project_defaults(cwd)));
+            let _ = out.send(plain("project_defaults", None, state.registry.project_defaults(cwd, op.get("account").map(|a| a.as_str().filter(|id| !id.is_empty())))));
         }
         "attach" => match (state.registry.get(&sid), attached) {
             (_, None) => fail("this connection does not follow chats"),

@@ -149,12 +149,12 @@ async fn a_chat_on_a_provider_or_in_a_container_is_not_remembered_and_a_worktree
     let provider = ProviderRef { id: "p1".into(), name: "Third".into(), host: "api.example".into(), login: false };
     fx.server.registry.remember_defaults(&new_meta(fx.project.clone(), None, Some(provider), false, None), None);
     fx.server.registry.remember_defaults(&new_meta(fx.project.clone(), None, None, true, None), None);
-    assert_eq!(fx.server.registry.project_defaults(&cwd)["found"], false, "neither is what the next chat starts with");
+    assert_eq!(fx.server.registry.project_defaults(&cwd, None)["found"], false, "neither is what the next chat starts with");
 
     let mut meta = new_meta(fx._dir.path().join("elsewhere"), Some("opus".into()), None, false, None);
     meta.worktree = Some(tenrec::worktree::WorktreeRef { repo: fx.project.clone(), branch: "tenrec/x".into(), base_branch: "main".into(), base_commit: "c".into(), removed: false, root: None, config_hash: String::new() });
     fx.server.registry.remember_defaults(&meta, None);
-    let got = fx.server.registry.project_defaults(&cwd);
+    let got = fx.server.registry.project_defaults(&cwd, None);
     assert_eq!((got["found"].clone(), got["worktree"].clone(), got["model"].clone()), (json!(true), json!(true), json!("opus")), "a worktree chat is of the folder it was made from: {got}");
 }
 
@@ -166,7 +166,7 @@ async fn an_account_that_is_gone_is_not_named_to_the_form() {
     let cwd = fx.project.display().to_string();
     let account = AccountRef { id: "0123456789abcdef".into(), name: "Gone".into() };
     fx.server.registry.remember_defaults(&new_meta(fx.project.clone(), None, None, false, Some(account)), None);
-    let got = fx.server.registry.project_defaults(&cwd);
+    let got = fx.server.registry.project_defaults(&cwd, None);
     assert_eq!(got["found"], true);
     assert!(got.get("account").is_none(), "the form keeps its own account: {got}");
 }
@@ -181,9 +181,9 @@ async fn a_worktree_chat_made_from_a_subfolder_is_remembered_for_that_subfolder(
     // The worktree remembers the repository's top folder, but the form was asked about the subfolder.
     meta.worktree = Some(tenrec::worktree::WorktreeRef { repo: fx.project.clone(), branch: "tenrec/x".into(), base_branch: "main".into(), base_commit: "c".into(), removed: false, root: None, config_hash: String::new() });
     fx.server.registry.remember_defaults(&meta, Some(&sub.display().to_string()));
-    let got = fx.server.registry.project_defaults(&sub.display().to_string());
+    let got = fx.server.registry.project_defaults(&sub.display().to_string(), None);
     assert_eq!((got["found"].clone(), got["worktree"].clone()), (json!(true), json!(true)), "the form for the folder it was made from finds it: {got}");
-    assert_eq!(fx.server.registry.project_defaults(&fx.project.display().to_string())["found"], false, "and the top folder is not told what the subfolder was made with");
+    assert_eq!(fx.server.registry.project_defaults(&fx.project.display().to_string(), None)["found"], false, "and the top folder is not told what the subfolder was made with");
 }
 
 async fn forget(ws: &mut Ws, cwd: &str) {
@@ -243,4 +243,17 @@ async fn the_recent_projects_are_the_folders_of_the_chats_newest_first_and_only_
     };
     let folders: Vec<String> = got["folders"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_owned()).collect();
     assert_eq!(folders, [other.display().to_string(), fx.project.display().to_string()], "newest first, and the folder that is gone is not offered: {got}");
+}
+
+#[tokio::test]
+async fn the_trust_the_form_reports_is_the_one_of_the_account_it_has_selected() {
+    let fx = fixture().await;
+    let cwd = fx.project.display().to_string();
+    let key_of = |account: &str| format!("{account}\n{cwd}");
+    std::fs::write(fx.data.join("project_trust.json"), json!({"v": 1, "projects": {key_of("0123456789abcdef"): {"hash": "h", "strong": "s"}}}).to_string()).unwrap();
+    let r = &fx.server.registry;
+    assert!(r.project_defaults(&cwd, Some(Some("0123456789abcdef")))["trusted"].as_bool().unwrap_or(false), "trusted for the account that was selected");
+    assert!(r.project_defaults(&cwd, Some(None)).get("trusted").is_none(), "not for the default account");
+    assert!(!r.forget_trust(&cwd, None), "forgetting as the default account removes nothing of the other account's");
+    assert!(r.forget_trust(&cwd, Some("0123456789abcdef")));
 }

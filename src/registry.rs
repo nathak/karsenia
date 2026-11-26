@@ -933,12 +933,14 @@ impl Registry {
 
     /// What the form starts with for the folder `cwd` (see `project_defaults::form_json`); `found: false` for a folder that is not there, not
     /// absolute, or never made a chat from the form.
-    pub fn project_defaults(&self, cwd: &str) -> serde_json::Value {
+    /// `account` is the account the form has selected, for the trust it reports (`Some(None)` is the default account); without it, the account the
+    /// remembered settings name.
+    pub fn project_defaults(&self, cwd: &str, account: Option<Option<&str>>) -> serde_json::Value {
         let path = std::path::Path::new(cwd);
         let entry = path.is_absolute().then(|| crate::project_defaults::key_of(path)).flatten().and_then(|key| self.defaults.get(&key));
-        // Whether a trust is remembered for the folder, for the account the remembered settings name (the default one when none).
-        let account = entry.as_ref().and_then(|e| e.account.clone());
-        let trusted = path.is_absolute() && crate::project_defaults::key_of(path).is_some_and(|key| self.trust.has(&crate::project_trust::key(account.as_deref(), &key)));
+        // Whether a trust is remembered for the folder, for the account the form has selected.
+        let account = account.unwrap_or_else(|| entry.as_ref().and_then(|e| e.account.as_deref()));
+        let trusted = path.is_absolute() && crate::project_defaults::key_of(path).is_some_and(|key| self.trust.has(&crate::project_trust::key(account, &key)));
         crate::project_defaults::form_json(cwd, entry, |id| self.accounts.get(id).is_some_and(|a| a.kind.has_realm()), trusted)
     }
 

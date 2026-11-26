@@ -261,7 +261,7 @@ async fn forgetting_the_trust_asks_again_for_new_chats_only() {
     second.send("hi".into(), vec![]).await.unwrap();
     idle(&mut rx2).await;
 
-    assert!(r.server.registry.project_defaults(r.project.to_str().unwrap())["trusted"].as_bool().unwrap_or(false), "the form can say it is remembered");
+    assert!(r.server.registry.project_defaults(r.project.to_str().unwrap(), None)["trusted"].as_bool().unwrap_or(false), "the form can say it is remembered");
     assert!(r.server.registry.forget_trust(r.project.to_str().unwrap(), None));
     assert!(!r.server.registry.forget_trust(r.project.to_str().unwrap(), None), "nothing left");
     assert!(another(&r).send("hi".into(), vec![]).await.is_err(), "a new chat asks again");

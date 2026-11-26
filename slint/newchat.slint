@@ -103,7 +103,7 @@ export component NewChatCard inherits Rectangle {
                         Rectangle { width: 20px; height: 20px; border-radius: 10px; background: Theme.primary; Image { source: @image-url("icons/check.svg"); width: 12px; height: 12px; colorize: Theme.on-primary; } }
                     }
                 }
-                ta := TouchArea { mouse-cursor: pointer; clicked => { root.acct = i; NewForm.touched-acct = true; } }
+                ta := TouchArea { mouse-cursor: pointer; clicked => { root.acct = i; NewForm.touched-acct = true; NewForm.cwd-settled(root.cwd); } }
             }
         }
         CheckBox { text: T.tr("new_worktree"); enabled: !root.container; checked <=> root.worktree; toggled => { NewForm.touched-wt = true; } }

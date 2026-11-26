@@ -627,21 +627,22 @@ const newTouched = new Set()
 let newFilled = new Set()
 // When the form last changed fields by itself (ms; 0: not since it was opened): a create right after is held back, the person has not seen it.
 let newFilledAt = 0
-// The account the remembered trust of the folder is filed under (null: the default one), for "forget".
-let newTrustAccount = null
 const newStart = { model: () => { $('new-model').value = '' }, account: () => { if (!$('new-provider').value) $('new-account').value = [...$('new-account').options].some(o => o.value === (S.acct || '')) ? (S.acct || '') : '' }, permission: () => { $('new-perm').value = 'default' }, worktree: () => { $('new-worktree').checked = false } }
 for (const [id, field] of [['new-model', 'model'], ['new-account', 'account'], ['new-perm', 'permission'], ['new-worktree', 'worktree']]) $(id).addEventListener('change', () => newTouched.add(field))
 function askDefaults() {
   const cwd = $('new-cwd').value.trim()
-  if (cwd && !$('new-form').hidden) wsSend({ op: 'project_defaults', cwd })
+  // The account selected now is the one whose remembered trust the answer reports.
+  if (cwd && !$('new-form').hidden) wsSend({ op: 'project_defaults', cwd, account: $('new-account').value || null })
 }
 $('new-cwd').addEventListener('change', askDefaults)
+// Another account may have its own remembered trust for the folder.
+$('new-account').addEventListener('change', askDefaults)
 function applyDefaults(answer) {
   // An answer for a folder that is not the one in the field any more is a late one: it changes nothing.
   if ($('new-form').hidden || answer.cwd !== $('new-cwd').value.trim()) return
+  const accountBefore = $('new-account').value
   // A trust remembered for the folder is said, with the way to forget it.
   $('new-trust-note').hidden = answer.trusted !== true
-  newTrustAccount = typeof answer.account === 'string' ? answer.account : null
   // What was filled in for the folder before goes back to the start first, so a folder with nothing remembered does not keep the last one's settings.
   const current = { model: $('new-model').value, account: $('new-account').value, permission: $('new-perm').value, worktree: $('new-worktree').checked }
   const reverted = unfill(newFilled, newTouched)
@@ -659,10 +660,12 @@ function applyDefaults(answer) {
   fillPerm()
   if (reverted.length || fillDiffers(fill, current)) newFilledAt = Date.now()
   $('new-defaults-note').hidden = newFilled.size === 0
+  // Another account was filled in: its own remembered trust is what the note should say.
+  if ($('new-account').value !== accountBefore) askDefaults()
 }
 $('new-trust-forget').addEventListener('click', () => {
   const cwd = $('new-cwd').value.trim()
-  if (cwd) wsSend({ op: 'project_trust_forget', cwd, account: newTrustAccount })
+  if (cwd) wsSend({ op: 'project_trust_forget', cwd, account: $('new-account').value || null })
 })
 $('new-defaults-reset').addEventListener('click', () => {
   $('new-model').value = ''

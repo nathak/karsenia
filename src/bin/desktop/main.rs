@@ -700,7 +700,10 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
         }
         let form = ui.global::<NewForm>();
         let touched = Touched { model: form.get_touched_model(), account: form.get_touched_acct(), permission: form.get_touched_perm(), worktree: form.get_touched_wt() };
-        let answer = a.registry.project_defaults(&cwd);
+        // The trust reported is the one of the account the form has selected.
+        let selected = |ui: &AppWindow| accounts::ids().get(ui.get_new_acct().max(0) as usize).cloned();
+        let account_before = ui.get_new_acct();
+        let answer = a.registry.project_defaults(&cwd, selected(&ui).as_ref().map(|id| id.as_deref()));
         form.set_trusted(answer["trusted"].as_bool() == Some(true));
         let fill = prefill(&answer, &cwd, touched, &accounts::ids());
         // The fields filled in for the folder before go back to the form's start unless this folder fills them again (or the person took over).
@@ -740,6 +743,11 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
             }
         }
         form.set_used(fill.any());
+        // Filling in another account asks for that account's trust.
+        if ui.get_new_acct() != account_before {
+            let again = a.registry.project_defaults(&cwd, selected(&ui).as_ref().map(|id| id.as_deref()));
+            form.set_trusted(again["trusted"].as_bool() == Some(true));
+        }
     });
     // The folders chats were lately made in, offered under the folder field when the form opens; a click fills the folder like picking it.
     let a = app.clone();
@@ -764,7 +772,8 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
     ui.global::<NewForm>().on_forget_trust(move || {
         let Some(ui) = a.weak.upgrade() else { return };
         let cwd = ui.get_new_cwd().trim().to_owned();
-        let account = a.registry.project_defaults(&cwd)["account"].as_str().map(str::to_owned);
+        // Forgotten for the account the form has selected, the one whose trust it reported.
+        let account = accounts::ids().get(ui.get_new_acct().max(0) as usize).cloned().flatten();
         if a.registry.forget_trust(&cwd, account.as_deref()) {
             ui.global::<NewForm>().set_trusted(false);
             toast(&ui, tr(a.lang, "nc_trust_forgotten"));
