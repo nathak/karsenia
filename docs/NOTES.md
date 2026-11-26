@@ -417,6 +417,23 @@ crash has its open requests cancelled. On Ctrl-C or SIGTERM the host kills every
   time), a name. An account that is gone or a model the form does not list is left alone. The key is the project (`Meta::project_key`, so a worktree
   chat is of the folder it was made from); a chat made in a subfolder of a repo with its own worktree is recorded under the repo's top folder and the
   form for the subfolder does not find it (known gap). The desktop picker lists four models, so a chat made on the web with another model name does not fill the box.
+- **Archive** (`Meta.archived`, ops `archive` / `unarchive`, desktop "⋯" menu and web header button): a chat can be put away instead of deleted. It is left out of the
+  chat list unless the archive is shown (a "보관함" toggle), the chat works or waits for the person, or it is the open one (it goes when another chat is opened);
+  what the account choice counts does not change. Putting away is refused while a turn runs or a question waits, and a message sent to an archived chat brings it
+  back, so a chat that needs the person is never hidden. Its conversation, search entries and notes are untouched; it can still be continued in another
+  account and deleted. The flag is written only when set (`serde(default)`), so older chat files read as not archived.
+- **Project trust** (`project_trust.rs`, `<data>/project_trust.json`, `0600`; desktop only, as the card is): the card that asks about a project's own Claude Code settings
+  can also "remember for this project". Only then are the hashes of exactly what was shown recorded (`Scan.hash` and the SHA-256 `Scan.strong`, own implementation in
+  `sha256.rs`, tested on the published vectors), per account and project folder, at most 200. A new chat in the folder skips the question only when the files as they
+  are **now** give the same two hashes (the file is never read as what the files say; an entry without the strong hash, or a hand-written one that does not match,
+  asks); any change of the risky parts asks again, as before. Never remembered: a declined question or "start without", a link, a file too big to read, a file that
+  is not valid, a chat on a provider or in a container (they read nothing of the project). Danger-level findings can be remembered, with stronger words in the
+  confirmation. The new-chat form says when a trust is remembered for the folder and can forget it (op `project_trust_forget`, web and desktop); chats already
+  made keep what they were told. The web page has no card (it never had one: it says to decide in the desktop app). A project's trust is for the account that
+  made the decision. `WorktreeRef.config_hash` is the git-settings fingerprint of a worktree, a different thing, and is not touched.
+- **Recent projects** (op `recent_projects`, `view::new_form::recent_projects`): the new-chat form lists the eight folders chats were lately made in, newest first, one per
+  project (a worktree chat counts for the folder it was made from), worked out from the chats' own records (so imported and continued chats count, archived ones too,
+  and nothing extra is stored), leaving out folders that are gone. A click fills the folder and asks for its remembered settings like picking it does.
 - **Permission mode of a chat** (new chat → "권한 모드" / Permission mode, web and desktop): chosen when the chat is made and fixed for the app (the badge always shows the mode the chat was made with), passed to every start of its `claude` as `--permission-mode <name>` (also after a restart and with `--resume`). Claude Code may change the mode itself while the chat runs (for example when a plan is approved); the app does not follow that (UNVERIFIED how it shows). The default adds no argument, so a chat that never chose runs as it always did. The names are the ones Claude Code 2.1.325 takes (checked against its `--help` and its documentation):
 
   | Mode | What the documentation says it does |
