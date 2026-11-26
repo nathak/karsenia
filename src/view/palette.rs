@@ -19,6 +19,7 @@ const ALL: &[Cmd] = &[
     Cmd { id: "go_files", key: "pal_go_files", hint: "⌥5" },
     Cmd { id: "go_team", key: "pal_go_team", hint: "⌥6" },
     Cmd { id: "go_vhdb", key: "pal_go_vhdb", hint: "⌥7" },
+    Cmd { id: "go_board", key: "pal_go_board", hint: "⌥8" },
     Cmd { id: "new_chat", key: "pal_new_chat", hint: "" },
     Cmd { id: "settings", key: "pal_settings", hint: "" },
     Cmd { id: "terminal", key: "pal_terminal", hint: "" },

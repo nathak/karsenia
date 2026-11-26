@@ -120,16 +120,16 @@ Row { sid, title(마스킹·80자), project(폴더 이름), account: Option<Stri
 |---|---|---|---|---|
 | 0 | `wt.removed` | `Gone` | 정리됨 | 중립. **git을 실행하지 않는다**(`wt_status`도 removed면 `verify` 전에 거절한다, `wt_ops.rs:37`) |
 | 1 | `facts.missing`, 또는 `verify`가 `not_owned`이고 읽기 전용 `can_forget`이 참(폴더를 손으로 지우고 prune함) | `Gone` | 정리됨 | 중립 |
-| 2 | `blockers ∋ conflict` | `Conflict(n)` | ⚠ 충돌 n | 나쁨 |
-| 3 | `blockers ∋ uncommitted` | `Uncommitted(n)` | ✎ 미커밋 n | 주의 |
-| 4 | `blockers ∋ wrong_branch/main_dirty/mid_merge` | `Blocked` | ⛔ 막힘 | 주의 |
+| 2 | `blockers ∋ conflict` | `Conflict(n)` | 충돌 n | 나쁨 |
+| 3 | `blockers ∋ uncommitted` | `Uncommitted(n)` | 미커밋 n | 주의 |
+| 4 | `blockers ∋ wrong_branch/main_dirty/mid_merge` | `Blocked` | 막힘 | 주의 |
 | 5 | `blockers ∋ nothing` | `Nothing` | — 변경 없음 | 중립 |
-| 6 | 차단 없음, `behind>0` | `Behind(n)` | ⏳ 뒤처짐 n (병합은 가능) | 주의 |
-| 7 | 차단 없음 | `Ready` | ✓ 가능 | 좋음 |
+| 6 | 차단 없음, `behind>0` | `Behind(n)` | 가능 · 뒤처짐 n | 주의 |
+| 7 | 차단 없음 | `Ready` | 가능 | 좋음 |
 | — | 아직 계산 전 | `Unknown` | … | 중립 |
-| — | `verify`가 `config_changed` | `Unsafe(config)` | ⚠ git 설정 변경 — 채팅에서 확인 | 나쁨 |
-| — | `verify`가 `not_owned`(`can_forget` 거짓) | `Unsafe(owner)` | ⚠ 확인 필요 | 나쁨 |
-| — | git 오류·시간 초과 | `Failed` | ? 확인 실패 | 주의 |
+| — | `verify`가 `config_changed` | `UnsafeConfig` | git 설정 변경 | 나쁨 |
+| — | `verify`가 `not_owned`(`can_forget` 거짓) | `UnsafeOwner` | 확인 필요 | 나쁨 |
+| — | git 오류·시간 초과 | `Failed` | 확인 실패 | 주의 |
 | — | worktree 아님 | `Na`(`wt=None`) | 해당 없음 | 중립 |
 
 제안서 예시의 "뒤처짐 4"는 차단이 아니라 정보이므로 `Ready`보다 낮은 단계의 별도 표시로 두되 병합 가능함은 유지한다. 모든 상태는 **글자/기호가 함께** 나온다(색만으로 구분하지 않는다).
@@ -240,7 +240,7 @@ Row { sid, title(마스킹·80자), project(폴더 이름), account: Option<Stri
 
 ### 6.3 상호작용
 - 행 클릭 = 해당 채팅 열기(`side=0`, 새 채팅 폼 닫기, `open-chat(sid)`). 질문 대기 행도 같은 동작이며 채팅 화면에서 권한 카드가 이미 보인다.
-- 병합 칸 클릭 = 채팅 열기 + 기존 worktree 카드(`Wt.open`) 열기 가능하면 열기. 변경 보기·병합 점검은 기존 `wt_status`/`wt_merge`를 쓴다. 보드는 **승인·병합 버튼이 없다**.
+- 병합 칸을 눌러도 같은 동작(채팅 열기)이다. 변경 보기·병합 점검은 채팅의 기존 worktree 카드(`wt_status`/`wt_merge`)에서 한다. 보드는 **승인·병합 버튼이 없다**.
 - 키보드: 위/아래로 행 이동, Enter로 열기(Slint `FocusScope`). 기존 `refocus()`는 `side≠0`이면 채팅 키 입력창으로 포커스를 보내므로(`app.slint:255`) **`side==8` 분기를 추가해 보드의 `FocusScope`에 포커스를 준다.** 그렇지 않으면 방향키·Enter가 동작하지 않는다. 접근 가능한 이름은 상태+제목+병합 문구를 합쳐 만든다.
 - 연결 지점(빠뜨리기 쉬운 곳): `page-name` 삼항 연쇄(`app.slint:107`)의 기본값은 설정이므로 `side==8` 분기를 넣지 않으면 "설정"으로 표시된다. ⌥ 단축키 블록(`app.slint:276`)에 `"8"`을 추가한다.
 - 빈 상태: "진행 중인 채팅이 없습니다. 새 채팅에서 작업 트리 사용을 켜면 여기에 모입니다."
@@ -317,7 +317,7 @@ Row { sid, title(마스킹·80자), project(폴더 이름), account: Option<Stri
 - **스크린샷**: `examples/shots.rs`에 보드 장면 추가(넓음/좁음, 어두움/밝음, 빈 상태, 신호 줄 포함). 사람이 모양을 확인한다.
 
 ### 11.2 부하 측정 (구현 후 실제로 잰다)
-무시(`#[ignore]`) 테스트로 worktree 1/5/12개 저장소에서 `verify+facts` 소요 시간을 동시성 1/3/6으로 측정하고 결과를 이 문서 12장에 기록한다. 기준: 12개 채팅의 전체 갱신이 20초 안, 동시 git 프로세스가 3개를 넘지 않음.
+무시(`#[ignore]`) 테스트 `board_load`로 한 프로젝트의 worktree 채팅 1/5/12개를 처음 확인하는 데 걸리는 시간을 재고 결과를 12장에 기록했다. 기준: 12개 채팅의 전체 갱신이 20초 안, 동시 git 프로세스가 3개를 넘지 않음. (같은 저장소의 확인은 줄을 서므로 동시성 1/3/6 비교는 하지 않았다. 여러 저장소를 동시에 보는 경우와 loose 객체 증가량은 측정하지 않았다.)
 
 ### 11.3 Windows 수동 확인 목록 (자동 테스트 없음)
 1. 보드 열기/닫기, 단축키 ⌥8, 다른 페이지 이동 시 루프 중지.
@@ -329,7 +329,26 @@ Row { sid, title(마스킹·80자), project(폴더 이름), account: Option<Stri
 7. 보드가 열린 채 새 채팅 폼을 열었다 닫을 때, 그리고 ⌥8을 빠르게 반복할 때 갱신이 겹치거나 멈추지 않는지, 방향키·Enter가 동작하는지.
 
 ## 12. 측정 결과와 한계
-(구현 후 기록)
+
+### 12.1 부하 측정 (`cargo test --test board -- --ignored --nocapture board_load`)
+환경: Linux, SSD, git 2.53, 작은 저장소(파일 1~13개), 한 프로젝트의 worktree 채팅 N개. 값은 `settled()`가 100ms마다 확인한 값이라 해상도는 약 0.1초다.
+
+| 채팅 수 | 첫 갱신(모두 한 번씩 확인) | 이미 신선할 때의 `board()` 호출 |
+|---|---|---|
+| 1 | 0.10초 | 약 30µs |
+| 5 | 0.20초 | 약 70µs |
+| 12 | 1.23초 | 약 140µs |
+
+- 같은 저장소의 채팅은 한 줄로 서서 하나씩 확인되므로(4.3) 위 값이 곧 "한 번에 git 하나"의 처리 속도다(채팅당 약 0.1초, git 약 18회).
+- 기준(12개 채팅의 전체 갱신 20초 이내, 동시 git 3개 이하)을 만족한다. 단 **작은 저장소의 Linux 값**이다. 큰 저장소, 느린 디스크, Windows(Trend Micro 실시간 검사 포함)에서는 같은 18회 git 호출이 몇 배 느릴 수 있다. 그 경우에도 보드 요청은 기다리지 않고 캐시로 답하므로 화면이 멈추지는 않고 병합 칸이 `…`로 더 오래 남는다.
+- 측정하지 않은 것: `merge-tree --write-tree`가 만드는 loose 객체의 증가량, 큰 저장소에서의 갱신 시간, Windows. 값을 얻으면 이 표에 추가한다.
+
+### 12.2 알려진 한계 (최종 보고에도 적는다)
+1. 4.4의 설정 검사와 `git status` 사이의 틈은 줄였을 뿐 막지 못했다(`filter.*.clean`은 git 호출 플래그로 꺼져 있지 않다). 완전한 해결은 `facts`의 `status`를 하드닝하는 별도 과제다.
+2. 웹 화면은 없다(`board` WebSocket 메시지만 있다).
+3. Windows는 직접 확인하지 못했다(11.3 목록).
+4. 병합 칸을 눌러도 워크트리 카드가 자동으로 열리지는 않는다. 채팅을 열 뿐이고 카드는 헤더의 기존 칩으로 연다.
+5. 행의 키보드 이동은 방향키와 Enter만이고, 스크린 리더 동작은 확인하지 못했다.
 
 ## 13. 위험 요약
 | 위험 | 대응 |
@@ -341,5 +360,5 @@ Row { sid, title(마스킹·80자), project(폴더 이름), account: Option<Stri
 | 이상 신호 규칙이 화면마다 갈라짐 | `Watch` 한 곳 재사용, 보드는 읽기만 |
 | Windows 미검증 | 스크린샷은 모양만, 수동 목록(11.3) 제공 |
 | 자동 갱신이 git 설정 검사의 틈(TOCTOU)을 반복해서 연다 | 실행 중 30초 간격·`key` 변경 시 즉시 재검증·`try_lock`. **완전 해결은 별도 하드닝 과제**(4.4) |
-| `merge-tree --write-tree`가 loose 객체를 쌓는다 | 갱신 간격을 길게 유지하고 보드가 닫히면 중단. git 자체의 `gc.auto`는 꺼져 있으므로 실제 증가량을 측정(11.2)하고 NOTES에 적는다 |
+| `merge-tree --write-tree`가 loose 객체를 쌓는다 | 갱신 간격을 길게 유지하고 보드가 닫히면 중단. 앱의 git 호출은 `gc.auto`를 끄므로 쌓일 수 있다. **증가량은 측정하지 않았다**(12.1) |
 | 경쟁 앱과 겹침 | 가드 차단·권한 대기·비용·`config_changed` 안전 표시를 보드의 차별점으로 유지, 계정 한도는 다음 작업 |

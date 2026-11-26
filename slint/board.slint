@@ -1,0 +1,169 @@
+// The board: one line for every chat of every account (what it is doing, what it has done to its worktree, whether it can be merged, what it
+// has cost, whether something is worth a look). It only shows: a click goes to the chat, and nothing here approves, merges or removes
+// anything. The words and the numbers come ready from Rust (src/view/board.rs); this file draws them.
+import { ScrollView, ComboBox } from "std-widgets.slint";
+import { Theme, T, Badge, Btn, EmptyState } from "base.slint";
+
+export struct BoardLine {
+    sid: string,
+    title: string,
+    project: string,
+    // The account's name, when the board has chats of more than one.
+    chip: string,
+    // run, ok, warn, err or neutral: the dot before the state.
+    state-tone: string,
+    state-text: string,
+    progress: string,
+    // The signals in words ("" for none).
+    notes: string,
+    change: string,
+    // The change column is old, or being looked at again.
+    dim: bool,
+    merge: string,
+    merge-tone: string,
+    cost: string,
+    ask: bool,
+    worktree: bool,
+    // What a screen reader says for the whole line.
+    spoken: string,
+}
+
+export global Board {
+    in property <[BoardLine]> lines;
+    in property <string> summary;
+    // Chats on the board (before the filter).
+    in property <int> total;
+    in property <[string]> filters;
+    in property <[string]> sorts;
+    in-out property <int> filter: 0;
+    in-out property <int> sort: 0;
+    // The page is on screen (set by the window; the host asks for lines only then).
+    in-out property <bool> shown;
+    callback visible(bool);
+    callback view-changed();
+    callback refresh();
+}
+
+component Dot inherits Rectangle {
+    in property <string> tone;
+    width: 8px; height: 8px; border-radius: 4px;
+    background: root.tone == "run" ? Theme.info : root.tone == "ok" ? Theme.ok : root.tone == "warn" ? Theme.warn : root.tone == "err" ? Theme.error : Theme.outline;
+}
+
+component HeadCell inherits Text {
+    color: Theme.outline; font-size: 11px; font-weight: 600; vertical-alignment: center; overflow: elide;
+}
+
+component LineView inherits Rectangle {
+    in property <BoardLine> l;
+    in property <bool> selected;
+    // 2: every column; 1: without the change column; 0: without the progress column too (it goes under the title).
+    in property <int> tier;
+    callback clicked();
+    height: 60px;
+    border-radius: 10px;
+    background: root.selected ? Theme.high : (ta.has-hover ? Theme.container : Theme.low);
+    border-width: root.l.ask ? 1px : 0px;
+    border-color: Theme.warn;
+    accessible-role: list-item;
+    accessible-label: root.l.spoken;
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        padding-left: 14px; padding-right: 14px; spacing: 12px;
+        // state
+        HorizontalLayout {
+            width: root.tier == 0 ? 80px : 92px; spacing: 8px; alignment: start;
+            VerticalLayout { alignment: center; Dot { tone: root.l.state-tone; } }
+            Text { text: root.l.state-text; color: root.l.state-tone == "err" ? Theme.error : root.l.state-tone == "warn" ? Theme.warn-soft : Theme.on-surface; font-size: 12px; font-weight: 600; vertical-alignment: center; overflow: elide; }
+        }
+        // the chat: the title, and under it the project (or, in a narrow window, the progress), the account and what is worth a look
+        VerticalLayout {
+            horizontal-stretch: 1; min-width: 40px; alignment: center; spacing: 3px;
+            Text { text: root.l.title; color: Theme.on-surface; font-size: 13px; font-weight: 600; overflow: elide; }
+            HorizontalLayout {
+                spacing: 8px;
+                if root.tier > 0: Text { text: root.l.project; color: Theme.outline; font-size: 11px; overflow: elide; vertical-alignment: center; }
+                if root.tier == 0: Text { text: root.l.progress; color: Theme.on-var; font-size: 11px; overflow: elide; vertical-alignment: center; }
+                if root.l.chip != "": Badge { text: root.l.chip; mono: false; }
+                if root.l.notes != "": Text { text: root.l.notes; color: Theme.warn-soft; font-size: 11px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+                if root.l.notes == "": Rectangle { horizontal-stretch: 1; }
+            }
+        }
+        // progress
+        if root.tier > 0: Text { width: root.tier == 2 ? 170px : 150px; text: root.l.progress; color: Theme.on-var; font-size: 12px; vertical-alignment: center; overflow: elide; }
+        // change
+        if root.tier == 2: Text { width: 112px; text: root.l.change; color: root.l.dim ? Theme.outline : Theme.on-var; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; }
+        // merge
+        VerticalLayout { width: root.tier == 2 ? 170px : root.tier == 1 ? 150px : 128px; alignment: center; HorizontalLayout { alignment: start; Badge { text: root.l.merge; tone: root.l.merge-tone; mono: false; } } }
+        // cost
+        Text { width: root.tier == 0 ? 54px : 60px; text: root.l.cost; color: Theme.on-var; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; horizontal-alignment: right; }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component BoardPage inherits Rectangle {
+    // The chat to open (the window goes to it).
+    callback open(string);
+    // The line the keyboard is on (-1: none).
+    property <int> sel: -1;
+    // How much of a line fits: 2 from 960px, 1 from 760px, else 0.
+    property <int> tier: root.width >= 960px ? 2 : root.width >= 760px ? 1 : 0;
+    background: Theme.surface;
+    // Whatever was on the page before, the keys are the list's now.
+    init => { fs.focus(); }
+    TouchArea { }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.DownArrow) { root.sel = min(root.sel + 1, Board.lines.length - 1); root.reveal(); return accept; }
+            if (event.text == Key.UpArrow) { root.sel = max(root.sel - 1, 0); root.reveal(); return accept; }
+            if (event.text == Key.Return && root.sel >= 0 && root.sel < Board.lines.length) { root.open(Board.lines[root.sel].sid); return accept; }
+            reject
+        }
+        VerticalLayout {
+            padding-left: max(24px, (root.width - 1280px) / 2 + 24px); padding-right: max(24px, (root.width - 1280px) / 2 + 24px); padding-top: 24px; padding-bottom: 20px; spacing: 12px;
+            HorizontalLayout {
+                spacing: 12px;
+                Text { text: T.tr("board_title"); color: Theme.on-surface; font-size: 22px; font-weight: 600; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                if root.tier > 0: ComboBox { width: 140px; model: Board.filters; current-index <=> Board.filter; selected(v) => { root.sel = -1; Board.view-changed(); } }
+                if root.tier > 0: ComboBox { width: 140px; model: Board.sorts; current-index <=> Board.sort; selected(v) => { root.sel = -1; Board.view-changed(); } }
+                Btn { text: T.tr("board_refresh"); height: 32px; clicked => { Board.refresh(); } }
+            }
+            // A narrow window: the filter and the order go under the title.
+            if root.tier == 0: HorizontalLayout {
+                spacing: 8px;
+                ComboBox { horizontal-stretch: 1; model: Board.filters; current-index <=> Board.filter; selected(v) => { root.sel = -1; Board.view-changed(); } }
+                ComboBox { horizontal-stretch: 1; model: Board.sorts; current-index <=> Board.sort; selected(v) => { root.sel = -1; Board.view-changed(); } }
+            }
+            Text { text: T.tr("board_sub"); color: Theme.on-var; font-size: 12px; wrap: word-wrap; }
+            Text { text: Board.summary; color: Theme.on-surface; font-size: 13px; font-weight: 600; }
+            if Board.total == 0: EmptyState { text: T.tr("board_empty"); }
+            if Board.total > 0: HorizontalLayout {
+                padding-left: 14px; padding-right: 14px; spacing: 12px;
+                HeadCell { width: root.tier == 0 ? 80px : 92px; text: T.tr("board_c_state"); }
+                HeadCell { horizontal-stretch: 1; text: T.tr("board_c_chat"); }
+                if root.tier > 0: HeadCell { width: root.tier == 2 ? 170px : 150px; text: T.tr("board_c_progress"); }
+                if root.tier == 2: HeadCell { width: 112px; text: T.tr("board_c_change"); }
+                HeadCell { width: root.tier == 2 ? 170px : root.tier == 1 ? 150px : 128px; text: T.tr("board_c_merge"); }
+                HeadCell { width: root.tier == 0 ? 54px : 60px; text: T.tr("board_c_cost"); horizontal-alignment: right; }
+            }
+            if Board.total > 0 && Board.lines.length == 0: EmptyState { text: T.tr("board_empty_filter"); }
+            sv := ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 6px; alignment: start;
+                    for l[i] in Board.lines: LineView {
+                        l: l; selected: i == root.sel; tier: root.tier;
+                        clicked => { root.sel = i; fs.focus(); root.open(l.sid); }
+                    }
+                }
+            }
+        }
+    }
+
+    // Scrolls so that the line under the keyboard is in view (every line is 60px, with 6px between).
+    function reveal() {
+        if (root.sel < 0) { return; }
+        sv.content-y = clamp(sv.content-y, -(root.sel * 66px), -(root.sel * 66px + 60px - sv.visible-height));
+    }
+}

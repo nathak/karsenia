@@ -184,6 +184,68 @@ fn open_chat(ui: &AppWindow, accounts: &[&str]) {
     ui.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
 }
 
+/// The lines of the board, made the way the app makes them (`view::board::page`) from sample rows.
+fn board_rows(now: u64) -> Vec<tenrec::board::Row> {
+    use tenrec::board::{Counters, Merge, Row, Signal, WtRow};
+    let base = |sid: &str, title: &str, project: &str| Row { sid: sid.into(), title: title.into(), project: project.into(), account: None, account_name: None, created: now - 3_600_000, worktree: true, provider: false, container: false, state: "idle", pending: 0, archived: false, counters: Counters::default(), cost: 0.0, ctx_pct: None, wt: None, signals: Vec::new() };
+    let wt = |merge: Merge, ins: usize, del: usize, files: usize| Some(WtRow { insertions: ins, deletions: del, files, ..WtRow::of(merge) });
+    let mut ask = base("a", "add-search", "karsenia");
+    ask.state = "running";
+    ask.pending = 1;
+    ask.cost = 1.10;
+    ask.counters = Counters { last_ts: now - 5_000, run_ts: now - 9 * 60_000, ..Counters::default() };
+    ask.wt = wt(Merge::Conflict { n: 2 }, 310, 40, 9);
+    ask.signals = vec![Signal { kind: "ask", n: 1 }];
+    let mut run = base("b", "fix-login", "karsenia");
+    run.state = "running";
+    run.cost = 0.42;
+    run.counters = Counters { last_ts: now - 2_000, run_ts: now - 4 * 60_000, top_tool: Some(("Edit".into(), 12)), ..Counters::default() };
+    run.wt = wt(Merge::Ready, 120, 8, 5);
+    let mut slow = base("c", "migrate-db — 긴 제목이 들어가도 줄이 깨지지 않아야 합니다", "karsenia");
+    slow.state = "running";
+    slow.cost = 0.88;
+    slow.account = Some("w".into());
+    slow.account_name = Some("업무".into());
+    slow.counters = Counters { last_ts: now - 1_000, run_ts: now - 14 * 60_000, top_tool: Some(("Bash".into(), 30)), loops: 1, ..Counters::default() };
+    slow.wt = wt(Merge::Behind { n: 4 }, 12, 0, 2);
+    slow.signals = vec![Signal { kind: "loop", n: 1 }, Signal { kind: "long", n: 14 }];
+    let mut done = base("d", "refactor-db", "karsenia");
+    done.cost = 0.31;
+    done.counters = Counters { last_ts: now - 2 * 60_000, last_ok: Some(true), ..Counters::default() };
+    done.wt = wt(Merge::Uncommitted { n: 1 }, 80, 90, 3);
+    let mut failed = base("e", "flaky-test", "blog");
+    failed.cost = 0.05;
+    failed.worktree = false;
+    failed.counters = Counters { last_ts: now - 3_600_000, last_ok: Some(false), ..Counters::default() };
+    failed.signals = vec![Signal { kind: "failed", n: 1 }];
+    let mut notes = base("f", "notes", "blog");
+    notes.worktree = false;
+    notes.cost = 0.0;
+    notes.counters = Counters { last_ts: now - 26 * 3_600_000, ..Counters::default() };
+    let mut unsafe_ = base("g", "needs-look", "acme");
+    unsafe_.cost = 0.02;
+    unsafe_.counters = Counters { last_ts: now - 30 * 60_000, ..Counters::default() };
+    unsafe_.wt = wt(Merge::UnsafeConfig, 0, 0, 0);
+    vec![ask, run, slow, done, failed, notes, unsafe_]
+}
+
+fn show_board(ui: &AppWindow, lines: bool) {
+    let board = ui.global::<Board>();
+    let now = tenrec::now_ms();
+    let rows = if lines { board_rows(now) } else { Vec::new() };
+    let page = tenrec::view::board::page(&rows, tenrec::view::board::Filter::All, tenrec::view::board::Sort::Attention, now, Lang::Ko);
+    let items: Vec<BoardLine> = page
+        .lines
+        .into_iter()
+        .map(|l| BoardLine { sid: l.sid.into(), title: l.title.into(), project: l.project.into(), chip: l.chip.into(), state_tone: l.state_tone.into(), state_text: l.state_text.into(), progress: l.progress.into(), notes: l.notes.into(), change: l.change.into(), dim: l.dim, merge: l.merge.into(), merge_tone: l.merge_tone.into(), cost: l.cost.into(), ask: l.ask, worktree: l.worktree, spoken: l.spoken.into() })
+        .collect();
+    board.set_filters(strings(&tenrec::view::board::Filter::names(Lang::Ko).iter().map(String::as_str).collect::<Vec<_>>()));
+    board.set_sorts(strings(&tenrec::view::board::Sort::names(Lang::Ko).iter().map(String::as_str).collect::<Vec<_>>()));
+    board.set_lines(ModelRc::from(Rc::new(VecModel::from(items))));
+    board.set_summary(page.summary.into());
+    board.set_total(i32::try_from(page.total).unwrap_or(0));
+}
+
 fn scenes(ui: &AppWindow, window: &MinimalSoftwareWindow, out: &std::path::Path) {
     let few = ["기본 계정", "업무", "개인"];
     let many = [
@@ -245,6 +307,20 @@ fn scenes(ui: &AppWindow, window: &MinimalSoftwareWindow, out: &std::path::Path)
     proj.set_show(true);
     save(window, &out.join("18-1280x800-project-card-dark.png"), 1280, 800);
     proj.set_show(false);
+    // The board: lines of every kind (a question waiting, working, long and repeating, done with uncommitted work, failed, not a worktree,
+    // settings not looked at), at a wide and at a narrow window, empty, and in the light look.
+    ui.set_side(8);
+    show_board(ui, true);
+    save(window, &out.join("19-1280x800-board-dark.png"), 1280, 800);
+    save(window, &out.join("20-1000x700-board-dark.png"), 1000, 700);
+    save(window, &out.join("21-760x640-board-dark.png"), 760, 640);
+    show_board(ui, false);
+    save(window, &out.join("22-1000x700-board-empty-dark.png"), 1000, 700);
+    ui.global::<Theme>().set_mode(1);
+    show_board(ui, true);
+    save(window, &out.join("23-1280x800-board-light.png"), 1280, 800);
+    ui.global::<Theme>().set_mode(0);
+    ui.set_side(0);
     open_chat(ui, &many);
     ui.global::<Theme>().set_mode(1);
     save(window, &out.join("11-1280x800-12acct-light.png"), 1280, 800);

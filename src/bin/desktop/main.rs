@@ -8,6 +8,7 @@ slint::include_modules!();
 
 mod accounts;
 mod attach;
+mod board;
 mod files;
 mod live;
 mod import;
@@ -185,6 +186,7 @@ fn main() {
     wt::wire(&ui, &app);
     term::wire(&ui, &app);
     vhdb::wire(&ui, &app);
+    board::wire(&ui, &app);
     palette::wire(&ui, &app);
     slash::wire(&ui, &app);
     proj::wire(&ui, &app);
@@ -1685,6 +1687,8 @@ async fn sessions_loop(app: Arc<App>) {
     let mut events = app.registry.events.subscribe();
     loop {
         refresh_sessions(&app).await;
+        // The board is asked for only while its page is on screen.
+        board::tick(&app);
         tokio::select! {
             _ = events.recv() => {}
             _ = tokio::time::sleep(Duration::from_millis(1500)) => {}

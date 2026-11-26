@@ -226,3 +226,26 @@ async fn the_websocket_board_message_carries_the_same_rows() {
     assert_eq!((rows[0]["sid"].as_str().unwrap(), rows[0]["state"].as_str().unwrap(), rows[0]["worktree"].as_bool().unwrap()), (chat.sid.as_str(), "idle", false));
     assert!(rows[0]["wt"].is_null() && rows[0]["cost"].as_f64().unwrap() > 0.0);
 }
+
+/// How long the first look at N worktree chats of one project takes (and a second round that finds everything fresh).
+/// `cargo test --test board -- --ignored --nocapture board_load`: for the numbers in docs/design/board.md, not for CI.
+#[tokio::test]
+#[ignore = "a measurement, not a check"]
+async fn board_load() {
+    for n in [1usize, 5, 12] {
+        let (r, config) = rig(WAIT);
+        let registry = start_core(config).unwrap();
+        let cwd = r.project.to_str().unwrap();
+        for i in 0..n {
+            let (chat, _) = registry.create_isolated(cwd, None, None, None).await.unwrap();
+            let folder = chat.info().await.unwrap().meta.cwd;
+            commit_in(&folder, &format!("f{i}.txt"), "x\n", "x");
+        }
+        let started = std::time::Instant::now();
+        let rows = settled(&registry).await;
+        let first = started.elapsed();
+        let again = std::time::Instant::now();
+        let _ = registry.board(false).await;
+        println!("board_load n={n}: first look of every worktree {first:?} ({} rows); an ask that finds everything fresh {:?}", rows.len(), again.elapsed());
+    }
+}

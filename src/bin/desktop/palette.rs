@@ -44,6 +44,7 @@ fn run(ui: &AppWindow, app: &Arc<App>, index: i32) {
         "settings" => page(ui, 5),
         "go_team" => page(ui, 6),
         "go_vhdb" => page(ui, 7),
+        "go_board" => page(ui, 8),
         "new_chat" => {
             ui.set_new_acct(ui.global::<crate::Acct>().get_pre_acct());
             ui.set_new_prov(0);
