@@ -68,6 +68,8 @@ pub struct Registry {
     settings: Arc<SettingsStore>,
     /// What the new-chat form starts with for each project (see `project_defaults`).
     defaults: Arc<crate::project_defaults::DefaultsStore>,
+    /// What the person chose to trust in projects' own configuration for new chats (see `project_trust`).
+    trust: Arc<crate::project_trust::TrustStore>,
     /// Messages every page should hear (a note changed, an auto-save happened): `{v, kind, data}`.
     pub events: tokio::sync::broadcast::Sender<serde_json::Value>,
     /// The default account's notes, skills and history, and one realm for every extra account. `realm()` is the only way to one:
@@ -222,7 +224,8 @@ impl Registry {
         };
         let (providers, providers_notice) = ProviderStore::open(dir.join("providers.json"));
         let defaults = Arc::new(crate::project_defaults::DefaultsStore::open(dir.join("project_defaults.json")));
-        let registry = Self { dir: dir.clone(), bin, gate, settings, defaults, events, default_realm, realms: RwLock::new(realms), shared, accounts, accounts_notice, sched_notice, sched, providers: Arc::new(providers), providers_notice, instance, sessions };
+        let trust = Arc::new(crate::project_trust::TrustStore::open(dir.join("project_trust.json")));
+        let registry = Self { dir: dir.clone(), bin, gate, settings, defaults, trust, events, default_realm, realms: RwLock::new(realms), shared, accounts, accounts_notice, sched_notice, sched, providers: Arc::new(providers), providers_notice, instance, sessions };
         let mut metas: Vec<(String, Option<String>, bool)> = Vec::new();
         for entry in std::fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
@@ -241,7 +244,7 @@ impl Registry {
             if let Some(index) = realm.as_ref().and_then(|r| r.index.as_ref()) {
                 index.catch_up(sid, &meta.cwd.to_string_lossy(), meta.created, log.clone());
             }
-            let handle = session::spawn(Setup { costs: Some(registry.shared.costs.clone()), meta, bin: registry.bin.clone(), dir: dir.clone(), log, realm, mcp: registry.gate.clone(), providers: Some(registry.providers.clone()), settings: Some(registry.settings.clone()), instance: registry.instance.clone() });
+            let handle = session::spawn(Setup { costs: Some(registry.shared.costs.clone()), meta, bin: registry.bin.clone(), dir: dir.clone(), log, realm, mcp: registry.gate.clone(), providers: Some(registry.providers.clone()), settings: Some(registry.settings.clone()), trust: Some(registry.trust.clone()), instance: registry.instance.clone() });
             registry.sessions.lock().expect("registry lock").insert(sid.to_owned(), handle);
         }
         // Each realm's index keeps only its own account's chats: an entry of another account that got there is removed.
@@ -366,7 +369,7 @@ impl Registry {
         let realm = self.realm_of_meta(&meta);
         let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
         crate::private::write(&session::meta_path(&self.dir, &meta.sid), &text).map_err(|e| e.to_string())?;
-        let handle = session::spawn(Setup { costs: Some(self.shared.costs.clone()), meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), instance: self.instance.clone() });
+        let handle = session::spawn(Setup { costs: Some(self.shared.costs.clone()), meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), trust: Some(self.trust.clone()), instance: self.instance.clone() });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok(handle)
     }
@@ -423,7 +426,7 @@ impl Registry {
         if let Some(index) = realm.as_ref().and_then(|r| r.index.as_ref()) {
             index.catch_up(&meta.sid, &meta.cwd.to_string_lossy(), meta.created, log.clone());
         }
-        let handle = session::spawn(Setup { costs: Some(self.shared.costs.clone()), meta, bin: self.bin.clone(), dir: self.dir.clone(), log, realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), instance: self.instance.clone() });
+        let handle = session::spawn(Setup { costs: Some(self.shared.costs.clone()), meta, bin: self.bin.clone(), dir: self.dir.clone(), log, realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), trust: Some(self.trust.clone()), instance: self.instance.clone() });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok(handle)
     }
@@ -590,7 +593,7 @@ impl Registry {
             return Err(error);
         }
         let realm = self.realm_of_meta(&meta);
-        let handle = session::spawn(Setup { costs: Some(self.shared.costs.clone()), meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), instance: self.instance.clone() });
+        let handle = session::spawn(Setup { costs: Some(self.shared.costs.clone()), meta, bin: self.bin.clone(), dir: self.dir.clone(), log: Vec::new(), realm, mcp: self.gate.clone(), providers: Some(self.providers.clone()), settings: Some(self.settings.clone()), trust: Some(self.trust.clone()), instance: self.instance.clone() });
         self.sessions.lock().expect("registry lock").insert(handle.sid.clone(), handle.clone());
         Ok((handle, source.below_top.then_some("below_top")))
     }
@@ -926,7 +929,17 @@ impl Registry {
     pub fn project_defaults(&self, cwd: &str) -> serde_json::Value {
         let path = std::path::Path::new(cwd);
         let entry = path.is_absolute().then(|| crate::project_defaults::key_of(path)).flatten().and_then(|key| self.defaults.get(&key));
-        crate::project_defaults::form_json(cwd, entry, |id| self.accounts.get(id).is_some_and(|a| a.kind.has_realm()))
+        // Whether a trust is remembered for the folder, for the account the remembered settings name (the default one when none).
+        let account = entry.as_ref().and_then(|e| e.account.clone());
+        let trusted = path.is_absolute() && crate::project_defaults::key_of(path).is_some_and(|key| self.trust.has(&crate::project_trust::key(account.as_deref(), &key)));
+        crate::project_defaults::form_json(cwd, entry, |id| self.accounts.get(id).is_some_and(|a| a.kind.has_realm()), trusted)
+    }
+
+    /// Forgets what was trusted for the project folder `cwd` as the account `account` (None: the default one): new chats there ask again.
+    /// Chats already made keep what they were told.
+    pub fn forget_trust(&self, cwd: &str, account: Option<&str>) -> bool {
+        let path = std::path::Path::new(cwd);
+        path.is_absolute() && crate::project_defaults::key_of(path).is_some_and(|key| self.trust.forget(&crate::project_trust::key(account, &key)))
     }
 
     pub fn get(&self, sid: &str) -> Option<SessionHandle> {

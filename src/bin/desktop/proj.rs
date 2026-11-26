@@ -59,7 +59,7 @@ fn decide(ui: &AppWindow, app: &Arc<App>, without: bool) {
     let a = app.clone();
     tokio::spawn(async move {
         let result = match a.registry.get(&sid) {
-            Some(handle) => handle.project_decide(hash, without).await,
+            Some(handle) => handle.project_decide(hash, without, false).await,
             None => Err("the chat is gone".into()),
         };
         let b = a.clone();

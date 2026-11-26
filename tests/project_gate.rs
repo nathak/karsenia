@@ -69,8 +69,8 @@ async fn a_risky_project_asks_first_and_trust_holds_only_for_what_was_shown() {
     let hash = shown(&mut rx).expect("the findings were sent");
 
     // A decision on a hash that is not the current one is refused.
-    assert!(chat.project_decide("0000".into(), false).await.is_err());
-    chat.project_decide(hash.clone(), false).await.unwrap();
+    assert!(chat.project_decide("0000".into(), false, false).await.is_err());
+    chat.project_decide(hash.clone(), false, false).await.unwrap();
     let info = r.server.registry.list().await.into_iter().find(|i| i.meta.sid == chat.sid).unwrap();
     assert_eq!(info.meta.project_cfg, Some(tenrec::session::ProjectChoice::Trusted { hash: hash.clone() }));
 
@@ -81,8 +81,8 @@ async fn a_risky_project_asks_first_and_trust_holds_only_for_what_was_shown() {
     let again = shown(&mut rx).expect("shown again");
     assert_ne!(again, hash);
     // Deciding on the old hash is refused now; on the new one the chat starts, with the project's settings read as always.
-    assert!(chat.project_decide(hash, false).await.is_err());
-    chat.project_decide(again, false).await.unwrap();
+    assert!(chat.project_decide(hash, false, false).await.is_err());
+    chat.project_decide(again, false, false).await.unwrap();
     chat.send("hi".into(), vec![]).await.unwrap();
     idle(&mut rx).await;
     assert_eq!(r.starts().len(), 1);
@@ -95,7 +95,7 @@ async fn starting_without_the_project_settings_passes_user_only_sources() {
     let chat = r.server.registry.create_in(r.project.to_str().unwrap(), None, None, false, None).unwrap();
     let (_, mut rx) = chat.subscribe(0).await.unwrap();
     assert!(chat.send("hi".into(), vec![]).await.is_err());
-    chat.project_decide(String::new(), true).await.unwrap();
+    chat.project_decide(String::new(), true, false).await.unwrap();
     chat.send("hi".into(), vec![]).await.unwrap();
     idle(&mut rx).await;
     let starts = r.starts();
@@ -135,10 +135,10 @@ async fn a_linked_settings_file_is_never_trusted_only_left_out() {
     let (_, mut rx) = chat.subscribe(0).await.unwrap();
     assert!(chat.send("hi".into(), vec![]).await.is_err());
     let hash = shown(&mut rx).expect("shown");
-    let err = chat.project_decide(hash, false).await.unwrap_err();
+    let err = chat.project_decide(hash, false, false).await.unwrap_err();
     assert!(err.contains("link"), "{err}");
     assert!(chat.send("hi".into(), vec![]).await.is_err(), "still asks");
-    chat.project_decide(String::new(), true).await.unwrap();
+    chat.project_decide(String::new(), true, false).await.unwrap();
     chat.send("hi".into(), vec![]).await.unwrap();
     idle(&mut rx).await;
     assert!(r.starts()[0].contains("--setting-sources user"));
@@ -153,7 +153,7 @@ async fn leaving_the_settings_out_is_refused_while_the_process_runs_and_a_named_
     assert!(named.warm().await.is_err());
     assert!(r.starts().is_empty());
     let (_, mut rx) = named.subscribe(0).await.unwrap();
-    named.project_decide(String::new(), true).await.unwrap();
+    named.project_decide(String::new(), true, false).await.unwrap();
     named.send("hi".into(), vec![]).await.unwrap();
     idle(&mut rx).await;
     assert_eq!(r.starts().len(), 1);
@@ -163,5 +163,107 @@ async fn leaving_the_settings_out_is_refused_while_the_process_runs_and_a_named_
     let (_, mut rx) = chat.subscribe(0).await.unwrap();
     chat.send("hi".into(), vec![]).await.unwrap();
     idle(&mut rx).await;
-    assert!(chat.project_decide(String::new(), true).await.is_err());
+    assert!(chat.project_decide(String::new(), true, false).await.is_err());
+}
+
+// ---- trust remembered for the project (only when the person chose "remember for this project") ----
+
+/// A second chat in the same folder; the question is asked again, or not.
+fn another(r: &Rig) -> tenrec::session::SessionHandle {
+    r.server.registry.create_in(r.project.to_str().unwrap(), None, None, false, None).unwrap()
+}
+
+#[tokio::test]
+async fn a_remembered_trust_lets_a_new_chat_in_the_same_folder_start_without_asking_and_any_change_asks_again() {
+    let r = rig(Some(RISKY)).await;
+    let first = another(&r);
+    let (_, mut rx) = first.subscribe(0).await.unwrap();
+    assert!(first.send("hi".into(), vec![]).await.is_err());
+    let hash = shown(&mut rx).unwrap();
+    first.project_decide(hash.clone(), false, true).await.unwrap();
+
+    let second = another(&r);
+    let (_, mut rx2) = second.subscribe(0).await.unwrap();
+    second.send("hi".into(), vec![]).await.unwrap();
+    idle(&mut rx2).await;
+    assert_eq!(r.starts().len(), 1, "the second chat started without a question");
+    let info = r.server.registry.list().await.into_iter().find(|i| i.meta.sid == second.sid).unwrap();
+    assert_eq!(info.meta.project_cfg, Some(tenrec::session::ProjectChoice::Trusted { hash: hash.clone() }), "and it holds what it was told, like any chat");
+
+    // A harmless change does not change the hash.
+    std::fs::write(r.project.join(".claude/settings.json"), RISKY.replacen("{\"hooks\"", "{\"cleanupPeriodDays\":5,\"hooks\"", 1)).unwrap();
+    let third = another(&r);
+    let (_, mut rx3) = third.subscribe(0).await.unwrap();
+    third.send("hi".into(), vec![]).await.unwrap();
+    idle(&mut rx3).await;
+    // A change of the risky part asks again, with a new hash.
+    std::fs::write(r.project.join(".claude/settings.json"), RISKY.replace("x.sh", "y.sh")).unwrap();
+    let fourth = another(&r);
+    let (_, mut rx4) = fourth.subscribe(0).await.unwrap();
+    assert!(fourth.send("hi".into(), vec![]).await.is_err());
+    assert_ne!(shown(&mut rx4).unwrap(), hash);
+}
+
+#[tokio::test]
+async fn trust_that_was_not_asked_to_be_remembered_stays_with_its_chat() {
+    let r = rig(Some(RISKY)).await;
+    let first = another(&r);
+    let (_, mut rx) = first.subscribe(0).await.unwrap();
+    assert!(first.send("hi".into(), vec![]).await.is_err());
+    let hash = shown(&mut rx).unwrap();
+    first.project_decide(hash, false, false).await.unwrap();
+    assert!(another(&r).send("hi".into(), vec![]).await.is_err(), "a plain trust is for that chat only");
+
+    // Leaving the settings out is never remembered either.
+    let left_out = another(&r);
+    assert!(left_out.send("hi".into(), vec![]).await.is_err());
+    left_out.project_decide(String::new(), true, true).await.unwrap();
+    assert!(another(&r).send("hi".into(), vec![]).await.is_err());
+    assert!(!r.root.join("data/project_trust.json").exists() || !std::fs::read_to_string(r.root.join("data/project_trust.json")).unwrap().contains("hash"), "nothing was recorded");
+}
+
+#[tokio::test]
+async fn a_hand_written_trust_only_skips_the_question_when_the_files_as_they_are_match_it() {
+    let r = rig(Some(RISKY)).await;
+    let key = format!("\n{}", r.project.display());
+    let write = |hash: &str, strong: Option<&str>| {
+        let mut entry = serde_json::json!({"hash": hash});
+        if let Some(strong) = strong {
+            entry["strong"] = strong.into();
+        }
+        std::fs::create_dir_all(r.root.join("data")).unwrap();
+        std::fs::write(r.root.join("data/project_trust.json"), serde_json::json!({"v": 1, "projects": {key.clone(): entry}}).to_string()).unwrap();
+    };
+    let scan = tenrec::project_check::scan(&r.project);
+    write("0000", Some("ffff"));
+    assert!(another(&r).send("hi".into(), vec![]).await.is_err(), "wrong hashes");
+    write(&scan.hash, None);
+    assert!(another(&r).send("hi".into(), vec![]).await.is_err(), "a weak hash alone");
+    write(&scan.hash, Some("ffff"));
+    assert!(another(&r).send("hi".into(), vec![]).await.is_err(), "the strong one must agree");
+    write(&scan.hash, Some(&scan.strong));
+    let chat = another(&r);
+    let (_, mut rx) = chat.subscribe(0).await.unwrap();
+    chat.send("hi".into(), vec![]).await.unwrap();
+    idle(&mut rx).await;
+}
+
+#[tokio::test]
+async fn forgetting_the_trust_asks_again_for_new_chats_only() {
+    let r = rig(Some(RISKY)).await;
+    let first = another(&r);
+    let (_, mut rx) = first.subscribe(0).await.unwrap();
+    assert!(first.send("hi".into(), vec![]).await.is_err());
+    let hash = shown(&mut rx).unwrap();
+    first.project_decide(hash, false, true).await.unwrap();
+    let second = another(&r);
+    let (_, mut rx2) = second.subscribe(0).await.unwrap();
+    second.send("hi".into(), vec![]).await.unwrap();
+    idle(&mut rx2).await;
+
+    assert!(r.server.registry.project_defaults(r.project.to_str().unwrap())["trusted"].as_bool().unwrap_or(false), "the form can say it is remembered");
+    assert!(r.server.registry.forget_trust(r.project.to_str().unwrap(), None));
+    assert!(!r.server.registry.forget_trust(r.project.to_str().unwrap(), None), "nothing left");
+    assert!(another(&r).send("hi".into(), vec![]).await.is_err(), "a new chat asks again");
+    second.send("again".into(), vec![]).await.unwrap();
 }

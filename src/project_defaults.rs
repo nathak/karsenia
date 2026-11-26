@@ -61,8 +61,8 @@ impl Entry {
 /// What the new-chat form is told about a folder: the remembered entry cleaned for use now. The JSON has `found`; `account` is left out when it
 /// is not known to be there any more (the form keeps its own), `null` when it is the default account; `permission` is left out when none
 /// may be filled in (the form keeps the default, and never the mode that skips checks).
-pub fn form_json(cwd: &str, entry: Option<Entry>, account_usable: impl Fn(&str) -> bool) -> serde_json::Value {
-    let Some(entry) = entry else { return serde_json::json!({"cwd": cwd, "found": false}) };
+pub fn form_json(cwd: &str, entry: Option<Entry>, account_usable: impl Fn(&str) -> bool, trusted: bool) -> serde_json::Value {
+    let Some(entry) = entry else { return with_trust(serde_json::json!({"cwd": cwd, "found": false}), trusted) };
     let mut out = serde_json::json!({"cwd": cwd, "found": true, "model": entry.model, "worktree": entry.worktree});
     match entry.account.as_deref() {
         None => out["account"] = serde_json::Value::Null,
@@ -71,6 +71,14 @@ pub fn form_json(cwd: &str, entry: Option<Entry>, account_usable: impl Fn(&str) 
     }
     if let Some(mode) = entry.permission {
         out["permission"] = serde_json::json!(mode);
+    }
+    with_trust(out, trusted)
+}
+
+/// `trusted: true` when what the person trusted in the project's own configuration is remembered (the form offers to forget it); left out otherwise.
+fn with_trust(mut out: serde_json::Value, trusted: bool) -> serde_json::Value {
+    if trusted {
+        out["trusted"] = serde_json::json!(true);
     }
     out
 }
@@ -154,12 +162,14 @@ mod tests {
     fn the_form_is_told_the_account_only_while_it_is_usable_and_a_mode_only_when_one_may_be_filled_in() {
         use serde_json::json;
         let e = Entry { account: Some("a1".into()), ..entry("haiku", "plan") }.cleaned();
-        assert_eq!(form_json("/p", Some(e.clone()), |id| id == "a1"), json!({"cwd": "/p", "found": true, "model": "haiku", "worktree": false, "account": "a1", "permission": "plan"}));
-        let gone = form_json("/p", Some(e), |_| false);
+        assert_eq!(form_json("/p", Some(e.clone()), |id| id == "a1", false), json!({"cwd": "/p", "found": true, "model": "haiku", "worktree": false, "account": "a1", "permission": "plan"}));
+        let gone = form_json("/p", Some(e), |_| false, false);
         assert!(gone.get("account").is_none(), "an account that is gone is not named: the form keeps its own: {gone}");
-        let plain = form_json("/p", Some(Entry::default()), |_| false);
+        let plain = form_json("/p", Some(Entry::default()), |_| false, false);
         assert_eq!(plain, json!({"cwd": "/p", "found": true, "model": null, "worktree": false, "account": null}), "the default account is null; no mode is left out");
-        assert_eq!(form_json("/p", None, |_| true), json!({"cwd": "/p", "found": false}));
+        assert_eq!(form_json("/p", None, |_| true, false), json!({"cwd": "/p", "found": false}));
+        assert_eq!(form_json("/p", None, |_| true, true), json!({"cwd": "/p", "found": false, "trusted": true}), "a project can be trusted without ever having been made from the form");
+        assert_eq!(form_json("/p", Some(Entry::default()), |_| false, true)["trusted"], true);
     }
 
     #[test]

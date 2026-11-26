@@ -43,6 +43,8 @@ pub struct Finding {
 pub struct Scan {
     pub findings: Vec<Finding>,
     pub hash: String,
+    /// SHA-256 of the same material as `hash`: what a trust that outlives one chat is compared with (see `project_trust`).
+    pub strong: String,
 }
 
 impl Scan {
@@ -311,7 +313,7 @@ pub fn scan(cwd: &Path) -> Scan {
         }
     }
     let joined = format!("{}\n{}", state.join("\n"), Value::Object(material));
-    Scan { findings, hash: crate::worktree::fnv(joined.as_bytes()) }
+    Scan { findings, hash: crate::worktree::fnv(joined.as_bytes()), strong: crate::sha256::hex(joined.as_bytes()) }
 }
 
 #[cfg(test)]

@@ -196,7 +196,8 @@ enum Cmd {
     /// `SetModel` by ending the process (the way that always works).
     SetModelSlow { model: Option<String>, reply: oneshot::Sender<Result<(), String>> },
     /// The person's decision about the project's configuration the last `project_check` event showed (`hash`), or to leave it out.
-    ProjectDecide { hash: String, without: bool, reply: oneshot::Sender<Result<(), String>> },
+    /// `remember`: also trust this configuration for new chats of the project (only for a decision to trust, never to leave it out).
+    ProjectDecide { hash: String, without: bool, remember: bool, reply: oneshot::Sender<Result<(), String>> },
     SetPermMode { mode: crate::claude::perm::PermMode, reply: oneshot::Sender<Result<(), String>> },
     /// Puts the chat away (or brings it back); refused while a turn runs or a question waits.
     Archive { on: bool, reply: oneshot::Sender<Result<(), String>> },
@@ -310,8 +311,8 @@ impl SessionHandle {
     }
 
     /// Answers a `project_check` event: trust the configuration as it was shown (refused when it changed since), or start without it.
-    pub async fn project_decide(&self, hash: String, without: bool) -> Result<(), String> {
-        ask(&self.tx, |reply| Cmd::ProjectDecide { hash, without, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
+    pub async fn project_decide(&self, hash: String, without: bool, remember: bool) -> Result<(), String> {
+        ask(&self.tx, |reply| Cmd::ProjectDecide { hash, without, remember, reply }).await.unwrap_or_else(|| Err("the session is gone".into()))
     }
 
     /// Puts the chat away from the list, or brings it back. Putting away is refused while a turn runs or a question waits, so a chat that needs
@@ -425,6 +426,8 @@ pub struct Setup {
     pub providers: Option<Arc<ProviderStore>>,
     /// Read when a container chat starts: the runtime and the image are the person's settings.
     pub settings: Option<Arc<crate::settings::SettingsStore>>,
+    /// What the person trusted in projects' own configuration for new chats (None: nothing is ever remembered).
+    pub trust: Option<Arc<crate::project_trust::TrustStore>>,
     /// One tag per run of the app, part of every container's name.
     pub instance: String,
 }
@@ -465,7 +468,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, instance: setup.instance, secrets: Vec::new(), cli_key: None, log_failed: false, init_seen: false, spawned_resume: None, last_stderr: String::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, trust: setup.trust, instance: setup.instance, secrets: Vec::new(), cli_key: None, log_failed: false, init_seen: false, spawned_resume: None, last_stderr: String::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -480,6 +483,7 @@ struct Actor {
     mcp: Option<Arc<McpGate>>,
     providers: Option<Arc<ProviderStore>>,
     settings: Option<Arc<crate::settings::SettingsStore>>,
+    trust: Option<Arc<crate::project_trust::TrustStore>>,
     instance: String,
     /// The key of this chat's provider while its process runs: whatever the chat shows or stores has it replaced.
     /// The key and the subscription token of this chat's provider: replaced wherever the chat would show or store them.
@@ -875,8 +879,8 @@ impl Actor {
                 };
                 let _ = reply.send(result);
             }
-            Cmd::ProjectDecide { hash, without, reply } => {
-                let _ = reply.send(self.project_decide(&hash, without));
+            Cmd::ProjectDecide { hash, without, remember, reply } => {
+                let _ = reply.send(self.project_decide(&hash, without, remember));
             }
             Cmd::StopTask { task_id, reply } => {
                 if let Err(Ctl::StopTask { reply }) = self.control(|id| protocol::stop_task(id, &task_id), Ctl::StopTask { reply }) {
@@ -1836,6 +1840,14 @@ impl Actor {
         if !scan.has_link() && matches!(&self.meta.project_cfg, Some(ProjectChoice::Trusted { hash }) if *hash == scan.hash) {
             return Ok(());
         }
+        // Trust the person chose to remember for this project: it skips the question only for the files exactly as they were shown (the hashes are
+        // those of the files as they are now, not what the stored entry says), and the chat then holds it like a decision of its own.
+        if self.remembered_trust(&scan) {
+            self.meta.project_cfg = Some(ProjectChoice::Trusted { hash: scan.hash });
+            self.save_meta();
+            self.emit("project_cfg", json!({"choice": "trusted", "from": "project"}));
+            return Ok(());
+        }
         self.emit_project_check(&scan);
         Err(format!("this project's Claude Code settings need a decision before claude starts (decide in the desktop app): {}", scan.summary()))
     }
@@ -1845,7 +1857,24 @@ impl Actor {
         self.emit_transient("project_check", json!({"hash": scan.hash, "findings": findings}));
     }
 
-    fn project_decide(&mut self, hash: &str, without: bool) -> Result<(), String> {
+    /// The key this chat's project is filed under in the trust store (its account and its project folder), None for a chat that cannot use it
+    /// (a provider or container chat reads nothing of the project, and a folder that is not there has no key).
+    fn trust_key(&self) -> Option<String> {
+        if self.meta.provider.is_some() || self.meta.container {
+            return None;
+        }
+        let project = crate::project_defaults::key_of(&self.meta.project_dir())?;
+        Some(crate::project_trust::key(self.meta.account.as_ref().map(|a| a.id.as_str()), &project))
+    }
+
+    fn remembered_trust(&self, scan: &crate::project_check::Scan) -> bool {
+        match (&self.trust, self.trust_key()) {
+            (Some(store), Some(key)) => store.trusts(&key, scan),
+            _ => false,
+        }
+    }
+
+    fn project_decide(&mut self, hash: &str, without: bool, remember: bool) -> Result<(), String> {
         if self.meta.provider.is_some() {
             return Err("a provider chat does not read the project's settings".into());
         }
@@ -1868,9 +1897,17 @@ impl Actor {
             self.emit_project_check(&scan);
             return Err("the settings changed again; look at them again".into());
         }
+        // "Remember for this project": recorded from the scan just made (the hashes of what is on disk now, which is what was shown), and only
+        // for what `remember_allowed` lets be remembered; asking for it when it may not be is refused rather than quietly ignored.
+        if remember {
+            let (Some(store), Some(key)) = (&self.trust, self.trust_key()) else { return Err("trust cannot be remembered for this chat".into()) };
+            if !store.record(&key, &scan) {
+                return Err("this configuration cannot be remembered for the project; trust it for this chat only".into());
+            }
+        }
         self.meta.project_cfg = Some(ProjectChoice::Trusted { hash: scan.hash });
         self.save_meta();
-        self.emit("project_cfg", json!({"choice": "trusted"}));
+        self.emit("project_cfg", json!({"choice": "trusted", "remembered": remember}));
         Ok(())
     }
 
