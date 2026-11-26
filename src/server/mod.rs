@@ -420,6 +420,11 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
                 Err(message) => fail(&message),
             }
         }
+        // The board: one line for every listed chat (see `board`). Read only; it never approves, merges or removes anything.
+        "board" => {
+            let rows = state.registry.board(op["force"].as_bool() == Some(true)).await;
+            let _ = out.send(plain("board", None, json!({"rows": rows})));
+        }
         // The folders chats were lately made in, for the new-chat form to offer.
         "recent_projects" => {
             let folders = state.registry.recent_projects().await;

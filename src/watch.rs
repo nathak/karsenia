@@ -73,6 +73,16 @@ impl Watch {
         out
     }
 
+    /// How many different calls were seen in the chat so far.
+    pub fn calls(&self) -> usize {
+        self.seen.len()
+    }
+
+    /// How many different files the chat edited so far.
+    pub fn edited(&self) -> usize {
+        self.files.len()
+    }
+
     fn scope(&mut self, name: &str, input: &Value) -> Option<Alert> {
         if !EDIT_TOOLS.contains(&name) {
             return None;

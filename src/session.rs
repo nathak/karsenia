@@ -227,6 +227,8 @@ enum Cmd {
     ProposalInput { since: u64, gateway: Gateway, reply: oneshot::Sender<ProposalInput> },
     Subscribe { after: u64, reply: oneshot::Sender<(Vec<Envelope>, broadcast::Receiver<Envelope>)> },
     Info { reply: oneshot::Sender<Info> },
+    /// What the board shows of the chat (see `board`).
+    Board { reply: oneshot::Sender<crate::board::BoardSnap> },
     /// The end of the CLI's own debug log of this chat (see `Settings::debug_api`), with the provider key replaced.
     DebugLog { reply: oneshot::Sender<Option<String>> },
     /// Before a chat of an extra account starts its process: what is needed to ask the program whether the account is logged in.
@@ -397,6 +399,11 @@ impl SessionHandle {
         ask(&self.tx, |reply| Cmd::Info { reply }).await
     }
 
+    /// What the board shows of this chat: its `Info`, what its log adds up to, and what it has cost.
+    pub async fn board(&self) -> Option<crate::board::BoardSnap> {
+        ask(&self.tx, |reply| Cmd::Board { reply }).await
+    }
+
     /// The end of the CLI's debug log of this chat, when it writes one (None: it does not, or nothing was written).
     pub async fn debug_log(&self) -> Option<String> {
         ask(&self.tx, |reply| Cmd::DebugLog { reply }).await.flatten()
@@ -473,7 +480,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, trust: setup.trust, shown_strong: None, instance: setup.instance, secrets: Vec::new(), cli_key: None, log_failed: false, init_seen: false, spawned_resume: None, last_stderr: String::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, trust: setup.trust, shown_strong: None, instance: setup.instance, secrets: Vec::new(), cli_key: None, log_failed: false, init_seen: false, spawned_resume: None, last_stderr: String::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, digest: None, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -531,6 +538,9 @@ struct Actor {
     cost_alt: Option<f64>,
     /// What this chat has cost so far.
     cost_chat: f64,
+    /// What the log adds up to for the board (see `board::Digest`): made the first time the board asks, from the whole log, and fed every
+    /// event after that. None while the board has never asked, so a chat nobody looks at on the board pays nothing.
+    digest: Option<crate::board::Digest>,
     /// Who waits for the process to end before the worktree is removed.
     retire_reply: Option<oneshot::Sender<Result<(), String>>>,
     /// Control requests sent to the process and not answered yet, by request id.
@@ -604,6 +614,9 @@ impl Actor {
         let written = serde_json::to_string(&envelope).map_err(std::io::Error::other).and_then(|line| crate::private::append_line(&log_path(&self.dir, &self.meta.sid), &line));
         if let Some(index) = self.realm.as_ref().and_then(|r| r.index.as_ref()) {
             index.add(&self.meta.cwd.to_string_lossy(), self.meta.created, &envelope);
+        }
+        if let Some(digest) = &mut self.digest {
+            digest.feed(&envelope);
         }
         self.log.push(envelope.clone());
         let _ = self.bcast.send(envelope);
@@ -1031,6 +1044,11 @@ impl Actor {
             }
             Cmd::Info { reply } => {
                 let _ = reply.send(self.info());
+            }
+            Cmd::Board { reply } => {
+                let info = self.info();
+                let digest = self.digest.get_or_insert_with(|| crate::board::Digest::from_log(&self.log));
+                let _ = reply.send(crate::board::BoardSnap { info, counters: digest.counters(), cost: self.cost_chat });
             }
             Cmd::DebugLog { reply } => {
                 let _ = reply.send(self.debug_tail());

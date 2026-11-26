@@ -70,6 +70,8 @@ pub struct Registry {
     defaults: Arc<crate::project_defaults::DefaultsStore>,
     /// What the person chose to trust in projects' own configuration for new chats (see `project_trust`).
     trust: Arc<crate::project_trust::TrustStore>,
+    /// What the board knows of the chats' worktrees (see `board`).
+    board: Arc<crate::board::FactsCache>,
     /// Messages every page should hear (a note changed, an auto-save happened): `{v, kind, data}`.
     pub events: tokio::sync::broadcast::Sender<serde_json::Value>,
     /// The default account's notes, skills and history, and one realm for every extra account. `realm()` is the only way to one:
@@ -225,7 +227,7 @@ impl Registry {
         let (providers, providers_notice) = ProviderStore::open(dir.join("providers.json"));
         let defaults = Arc::new(crate::project_defaults::DefaultsStore::open(dir.join("project_defaults.json")));
         let trust = Arc::new(crate::project_trust::TrustStore::open(dir.join("project_trust.json")));
-        let registry = Self { dir: dir.clone(), bin, gate, settings, defaults, trust, events, default_realm, realms: RwLock::new(realms), shared, accounts, accounts_notice, sched_notice, sched, providers: Arc::new(providers), providers_notice, instance, sessions };
+        let registry = Self { dir: dir.clone(), bin, gate, settings, defaults, trust, board: Arc::new(crate::board::FactsCache::new()), events, default_realm, realms: RwLock::new(realms), shared, accounts, accounts_notice, sched_notice, sched, providers: Arc::new(providers), providers_notice, instance, sessions };
         let mut metas: Vec<(String, Option<String>, bool)> = Vec::new();
         for entry in std::fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
@@ -972,6 +974,77 @@ impl Registry {
         Ok(())
     }
 
+    /// The lines of the board, one for every chat that is listed (an archived chat only while it works or waits). Answers at once from what
+    /// the chats and the cache hold; a worktree whose facts are old is looked at in the background (a few at a time, never while the board
+    /// is not being asked for), and the next call shows what was found. `force`: look again at every worktree (not oftener than every few
+    /// seconds for one chat).
+    pub async fn board(self: &Arc<Self>, force: bool) -> Vec<crate::board::Row> {
+        use crate::board::{row, Key, Now};
+        let now = crate::now_ms();
+        self.board.asked(now);
+        let handles: Vec<SessionHandle> = self.sessions.lock().expect("registry lock").values().cloned().collect();
+        // Asked together: a chat that is busy writing its log answers late, and then its last answer stands in.
+        let answers = futures_util::future::join_all(handles.iter().map(|h| async {
+            match tokio::time::timeout(crate::board::SNAP_WAIT, h.board()).await {
+                Ok(Some(snap)) => {
+                    self.board.remember(&snap);
+                    Some((h.clone(), snap))
+                }
+                Ok(None) => None,
+                Err(_) => self.board.recall(&h.sid).map(|snap| (h.clone(), snap)),
+            }
+        }))
+        .await;
+        let known: std::collections::HashSet<String> = handles.iter().map(|h| h.sid.clone()).collect();
+        self.board.keep_only(&known);
+        let mut rows = Vec::new();
+        for (handle, snap) in answers.into_iter().flatten() {
+            let meta = &snap.info.meta;
+            let running = matches!(snap.info.state, session::State::Running);
+            let shown = crate::view::panels::listed(&crate::view::panels::Mark { account: meta.account.as_ref().map(|a| a.id.clone()), running, pending: snap.info.pending, archived: meta.archived }, false, false);
+            // Only a chat that is shown is looked at (a hidden archived chat costs no git).
+            if let Some(wt) = meta.worktree.as_ref().filter(|w| !w.removed && shown) {
+                let key = Key { config_hash: wt.config_hash.clone(), removed: false, cwd: meta.cwd.clone() };
+                let n = Now { at: now, running, last_ts: snap.counters.last_ts, key: &key };
+                if let Some(flight) = self.board.begin(&meta.sid, &n, force) {
+                    tokio::spawn(look_at(self.clone(), handle.clone(), meta.clone(), key.clone(), running, snap.counters.last_ts, flight));
+                }
+            }
+            if shown {
+                let wt = self.board.view(&meta.sid, now);
+                rows.push(row(&snap, wt, now));
+            }
+        }
+        rows.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| a.sid.cmp(&b.sid)));
+        rows
+    }
+
+    /// One look at a worktree (see `board`): the same steps as the check a person asks for in the chat, in the same order (removed, root,
+    /// `verify` with the settings check, `facts`), and never without the project's lock: a merge or a removal under way is not disturbed.
+    async fn look(&self, meta: &Meta) -> crate::board::Outcome {
+        use crate::board::{Last, Merge, Outcome, WtRow};
+        let failed = || Outcome::Done(WtRow::of(Merge::Failed), Last::Failed);
+        let Some(wt) = meta.worktree.as_ref().filter(|w| !w.removed) else { return failed() };
+        let lock = crate::worktree::repo_lock(&wt.repo);
+        let Ok(_guard) = lock.try_lock() else { return Outcome::Busy };
+        let Ok(root) = self.worktree_root(&wt.repo, wt.root.as_deref()) else { return failed() };
+        match crate::worktree::verify(meta, &root, true).await {
+            Ok(owned) => match crate::worktree::facts(&owned).await {
+                Ok(facts) => Outcome::Done(WtRow::from_facts(&facts), Last::Facts),
+                Err(_) => failed(),
+            },
+            Err(code) if code == "not_owned" => {
+                if crate::worktree::can_forget(meta, &root).await {
+                    Outcome::Done(WtRow::of(Merge::Gone), Last::Facts)
+                } else {
+                    Outcome::Done(WtRow::of(Merge::UnsafeOwner), Last::Unsafe)
+                }
+            }
+            Err(code) if code == "config_changed" => Outcome::Done(WtRow::of(Merge::UnsafeConfig), Last::Unsafe),
+            Err(_) => failed(),
+        }
+    }
+
     pub async fn list(&self) -> Vec<Info> {
         let handles: Vec<SessionHandle> = self.sessions.lock().expect("registry lock").values().cloned().collect();
         let mut all = Vec::new();
@@ -982,6 +1055,30 @@ impl Registry {
         }
         all.sort_by_key(|s| std::cmp::Reverse(s.meta.created));
         all
+    }
+}
+
+/// The background look at one worktree: waits its turn (a few at a time), gives up when the board is no longer asked for, stops after a
+/// while, and keeps what it found only if the chat is still the one it looked at (not removed, same settings hash).
+async fn look_at(registry: Arc<Registry>, handle: SessionHandle, meta: Meta, key: crate::board::Key, running: bool, last_ts: u64, flight: crate::board::Flight) {
+    use crate::board::{Last, Merge, Now, Outcome, WtRow};
+    let _flight = flight;
+    let cache = registry.board.clone();
+    // First the turn in the project's own line (so a project's chats do not take every permit while they wait), then a permit.
+    let Some(repo) = meta.worktree.as_ref().map(|w| w.repo.clone()) else { return };
+    let gate = cache.gate(&repo);
+    let _turn = gate.lock().await;
+    let Ok(_permit) = cache.permits.acquire().await else { return };
+    if cache.abandoned(crate::now_ms()) {
+        return;
+    }
+    let outcome = match tokio::time::timeout(crate::board::REFRESH_LIMIT, registry.look(&meta)).await {
+        Ok(outcome) => outcome,
+        Err(_) => Outcome::Done(WtRow::of(Merge::Failed), Last::Failed),
+    };
+    let same = handle.info().await.is_some_and(|i| i.meta.cwd == key.cwd && i.meta.worktree.as_ref().is_some_and(|w| !w.removed && w.config_hash == key.config_hash));
+    if same {
+        cache.finish(&meta.sid, &Now { at: crate::now_ms(), running, last_ts, key: &key }, outcome);
     }
 }
 

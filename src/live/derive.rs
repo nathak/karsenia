@@ -137,7 +137,7 @@ impl Deriver {
             let open = self.calls.remove(id);
             let status = if is_error {
                 let kind = crate::view::transcript::guard_kind(&text);
-                if text.trim_start().starts_with(GUARD_PREFIX) || matches!(kind, Some("team" | "vhdb")) {
+                if blocked_by(&text, kind) {
                     Status::Blocked
                 } else if self.declined.remove(id) || kind == Some("swb_ask") {
                     Status::Declined
@@ -204,8 +204,19 @@ fn risk_name(risk: Risk) -> &'static str {
     }
 }
 
+/// Whether the text of an error result says a guard held the call (the SmartWorkbench guard, or a team-mode / VHDB rule): the one
+/// judgement the live view and the board both make.
+fn blocked_by(text: &str, kind: Option<&str>) -> bool {
+    text.trim_start().starts_with(GUARD_PREFIX) || matches!(kind, Some("team" | "vhdb"))
+}
+
+/// As above, for the text alone.
+pub(crate) fn blocked(text: &str) -> bool {
+    blocked_by(text, crate::view::transcript::guard_kind(text))
+}
+
 /// A tool result's content as text: a string, or the text blocks of a list.
-fn result_text(content: &Value) -> String {
+pub(crate) fn result_text(content: &Value) -> String {
     match content {
         Value::String(s) => s.clone(),
         Value::Array(list) => list.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n"),

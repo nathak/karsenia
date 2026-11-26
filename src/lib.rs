@@ -1,6 +1,7 @@
 //! Karsenia: runs `claude` headless and serves a chat UI for it on this machine only.
 pub mod accounts;
 pub mod attachments;
+pub mod board;
 pub mod cli_sessions;
 pub mod claude;
 pub mod costs;
