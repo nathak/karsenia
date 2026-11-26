@@ -266,6 +266,9 @@ fn settings_rules(file: &'static str, v: &Value, out: &mut Vec<Finding>, materia
     }
     if let Some(cmd) = v["statusLine"]["command"].as_str() {
         add(Severity::Info, "status_line", first_word(cmd));
+        // It runs a shell command, so a changed one is a changed configuration (it asks nothing on its own, but a trust that was remembered
+        // for the project must not cover a new command).
+        material.insert(format!("{file}#statusLine"), v["statusLine"]["command"].clone());
     }
 }
 
@@ -436,6 +439,15 @@ mod tests {
         let other = project(&[(".claude/settings.json", r#"{"hooks":{"Stop":[]}}"#), ("d/settings.json", r#"{"enableAllProjectMcpServers":true}"#)]);
         std::os::unix::fs::symlink(other.path().join("d"), dir.path().join(".claude")).unwrap();
         assert!(scan(dir.path()).findings.iter().all(|f| f.key == "link"));
+    }
+
+    #[test]
+    fn a_status_line_command_does_not_ask_but_is_part_of_the_hash_so_a_remembered_trust_does_not_cover_a_new_one() {
+        let a = one(r#"{"statusLine":{"type":"command","command":"./status.sh"}}"#);
+        let b = one(r#"{"statusLine":{"type":"command","command":"./other.sh"}}"#);
+        assert!(!a.needs_decision() && !b.needs_decision(), "on its own it still asks nothing");
+        assert_ne!((&a.hash, &a.strong), (&b.hash, &b.strong), "but a changed command is a changed hash");
+        assert_eq!(one("{}").hash, one(r#"{"model":"opus"}"#).hash, "unrelated settings still do not change it");
     }
 
     #[test]

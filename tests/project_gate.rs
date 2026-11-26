@@ -72,7 +72,7 @@ async fn a_risky_project_asks_first_and_trust_holds_only_for_what_was_shown() {
     assert!(chat.project_decide("0000".into(), false, false).await.is_err());
     chat.project_decide(hash.clone(), false, false).await.unwrap();
     let info = r.server.registry.list().await.into_iter().find(|i| i.meta.sid == chat.sid).unwrap();
-    assert_eq!(info.meta.project_cfg, Some(tenrec::session::ProjectChoice::Trusted { hash: hash.clone() }));
+    assert_eq!(info.meta.project_cfg, Some(tenrec::session::ProjectChoice::Trusted { hash: hash.clone(), strong: Some(tenrec::project_check::scan(&r.project).strong) }));
 
     // The hook changes before the chat starts: the trust was for what was shown, so it asks again, with a new hash.
     std::fs::write(r.project.join(".claude/settings.json"), RISKY.replace("x.sh", "y.sh")).unwrap();
@@ -188,7 +188,7 @@ async fn a_remembered_trust_lets_a_new_chat_in_the_same_folder_start_without_ask
     idle(&mut rx2).await;
     assert_eq!(r.starts().len(), 1, "the second chat started without a question");
     let info = r.server.registry.list().await.into_iter().find(|i| i.meta.sid == second.sid).unwrap();
-    assert_eq!(info.meta.project_cfg, Some(tenrec::session::ProjectChoice::Trusted { hash: hash.clone() }), "and it holds what it was told, like any chat");
+    assert_eq!(info.meta.project_cfg, Some(tenrec::session::ProjectChoice::Trusted { hash: hash.clone(), strong: Some(tenrec::project_check::scan(&r.project).strong) }), "and it holds what it was told, like any chat");
 
     // A harmless change does not change the hash.
     std::fs::write(r.project.join(".claude/settings.json"), RISKY.replacen("{\"hooks\"", "{\"cleanupPeriodDays\":5,\"hooks\"", 1)).unwrap();

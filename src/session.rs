@@ -144,8 +144,13 @@ pub struct Meta {
 /// The decision about a project's own configuration, kept per chat (as the git settings of a worktree are).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectChoice {
-    /// The configuration was seen as it is (`hash` of its risky parts) and accepted; a change of those parts asks again.
-    Trusted { hash: String },
+    /// The configuration was seen as it is (`hash` of its risky parts, and `strong`, the SHA-256 of the same material) and accepted; a change of
+    /// those parts asks again. A trust written before `strong` existed has none and is held to `hash` alone.
+    Trusted {
+        hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        strong: Option<String>,
+    },
     /// The chat's `claude` reads only the person's own settings, never the project's.
     Without,
 }
@@ -468,7 +473,7 @@ pub fn spawn(setup: Setup) -> SessionHandle {
     let sid = setup.meta.sid.clone();
     let (bcast, _) = broadcast::channel(1024);
     let seq = setup.log.last().map(|e| e.seq).unwrap_or(0);
-    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, trust: setup.trust, instance: setup.instance, secrets: Vec::new(), cli_key: None, log_failed: false, init_seen: false, spawned_resume: None, last_stderr: String::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
+    let mut actor = Actor { meta: setup.meta, bin: setup.bin, dir: setup.dir, log: setup.log, realm: setup.realm, mcp: setup.mcp, providers: setup.providers, settings: setup.settings, trust: setup.trust, shown_strong: None, instance: setup.instance, secrets: Vec::new(), cli_key: None, log_failed: false, init_seen: false, spawned_resume: None, last_stderr: String::new(), seq, bcast, state: State::Idle, process: None, pending: HashMap::new(), retiring: false, gone: false, native_spawned: false, team_spawned: None, bg_live: 0, costs: setup.costs, cost_base: None, cost_alt: None, cost_chat: 0.0, retire_reply: None, ctl: HashMap::new(), me: tx.downgrade() };
     actor.settle_restored();
     tokio::spawn(actor.run(rx));
     SessionHandle { sid, tx }
@@ -484,6 +489,8 @@ struct Actor {
     providers: Option<Arc<ProviderStore>>,
     settings: Option<Arc<crate::settings::SettingsStore>>,
     trust: Option<Arc<crate::project_trust::TrustStore>>,
+    /// `Scan::strong` of what the last `project_check` event showed.
+    shown_strong: Option<String>,
     instance: String,
     /// The key of this chat's provider while its process runs: whatever the chat shows or stores has it replaced.
     /// The key and the subscription token of this chat's provider: replaced wherever the chat would show or store them.
@@ -871,8 +878,8 @@ impl Actor {
             }
             Cmd::SetPermMode { mode, reply } => self.set_permission_mode(mode, reply),
             Cmd::Archive { on, reply } => {
-                let result = if on && (self.state == State::Running || !self.pending.is_empty()) {
-                    Err("a turn is running or a question waits: archive the chat when it is idle".to_owned())
+                let result = if on && (self.state == State::Running || !self.pending.is_empty() || self.bg_live > 0) {
+                    Err("a turn is running, a question waits or background work is going on: archive the chat when it is idle".to_owned())
                 } else {
                     self.set_archive_flag(on);
                     Ok(())
@@ -1837,13 +1844,13 @@ impl Actor {
             return Ok(());
         }
         // A link is not followed, so what it leads to may change with the hash staying the same: it is never trusted, only left out.
-        if !scan.has_link() && matches!(&self.meta.project_cfg, Some(ProjectChoice::Trusted { hash }) if *hash == scan.hash) {
+        if !scan.has_link() && matches!(&self.meta.project_cfg, Some(ProjectChoice::Trusted { hash, strong }) if *hash == scan.hash && strong.as_ref().is_none_or(|s| *s == scan.strong)) {
             return Ok(());
         }
         // Trust the person chose to remember for this project: it skips the question only for the files exactly as they were shown (the hashes are
         // those of the files as they are now, not what the stored entry says), and the chat then holds it like a decision of its own.
         if self.remembered_trust(&scan) {
-            self.meta.project_cfg = Some(ProjectChoice::Trusted { hash: scan.hash });
+            self.meta.project_cfg = Some(ProjectChoice::Trusted { hash: scan.hash, strong: Some(scan.strong) });
             self.save_meta();
             self.emit("project_cfg", json!({"choice": "trusted", "from": "project"}));
             return Ok(());
@@ -1852,7 +1859,9 @@ impl Actor {
         Err(format!("this project's Claude Code settings need a decision before claude starts (decide in the desktop app): {}", scan.summary()))
     }
 
-    fn emit_project_check(&self, scan: &crate::project_check::Scan) {
+    fn emit_project_check(&mut self, scan: &crate::project_check::Scan) {
+        // What the window is now showing: a decision is only taken for exactly this (see `project_decide`).
+        self.shown_strong = Some(scan.strong.clone());
         let findings: Vec<Value> = scan.findings.iter().map(|f| json!({"severity": f.severity.name(), "file": f.file, "key": f.key, "text": f.text})).collect();
         self.emit_transient("project_check", json!({"hash": scan.hash, "findings": findings}));
     }
@@ -1860,7 +1869,9 @@ impl Actor {
     /// The key this chat's project is filed under in the trust store (its account and its project folder), None for a chat that cannot use it
     /// (a provider or container chat reads nothing of the project, and a folder that is not there has no key).
     fn trust_key(&self) -> Option<String> {
-        if self.meta.provider.is_some() || self.meta.container {
+        // A chat in a worktree reads the worktree's files, not the project folder's, and the form that would show and forget the trust cannot tell
+        // which subfolder it was made from: it keeps asking per chat.
+        if self.meta.provider.is_some() || self.meta.container || self.meta.worktree.is_some() {
             return None;
         }
         let project = crate::project_defaults::key_of(&self.meta.project_dir())?;
@@ -1893,7 +1904,9 @@ impl Actor {
             self.emit_project_check(&scan);
             return Err("a settings file or folder of this project is a link, which is not followed and cannot be trusted; start without the project's settings, or replace the link by the file".into());
         }
-        if scan.needs_decision() && scan.hash != hash {
+        // The hash the window sends is the short one; the strong one must be that of what the window last showed too, so what is trusted (and
+        // remembered) is what the person looked at even if the short hash is made to agree.
+        if scan.needs_decision() && (scan.hash != hash || self.shown_strong.as_deref() != Some(scan.strong.as_str())) {
             self.emit_project_check(&scan);
             return Err("the settings changed again; look at them again".into());
         }
@@ -1905,7 +1918,7 @@ impl Actor {
                 return Err("this configuration cannot be remembered for the project; trust it for this chat only".into());
             }
         }
-        self.meta.project_cfg = Some(ProjectChoice::Trusted { hash: scan.hash });
+        self.meta.project_cfg = Some(ProjectChoice::Trusted { hash: scan.hash, strong: Some(scan.strong) });
         self.save_meta();
         self.emit("project_cfg", json!({"choice": "trusted", "remembered": remember}));
         Ok(())
@@ -2087,6 +2100,15 @@ mod tests {
         let mut meta = new_meta(PathBuf::from(cwd), None, None, false, None);
         meta.worktree = Some(crate::worktree::WorktreeRef { repo: PathBuf::from(repo), branch: "tenrec/x".into(), base_branch: "main".into(), base_commit: "c".into(), removed: false, root: None, config_hash: String::new() });
         meta
+    }
+
+    #[test]
+    fn a_trust_stored_before_the_strong_hash_existed_still_reads() {
+        let old: ProjectChoice = serde_json::from_str(r#"{"Trusted":{"hash":"abc"}}"#).unwrap();
+        assert_eq!(old, ProjectChoice::Trusted { hash: "abc".into(), strong: None });
+        let new = ProjectChoice::Trusted { hash: "abc".into(), strong: Some("def".into()) };
+        assert_eq!(serde_json::from_str::<ProjectChoice>(&serde_json::to_string(&new).unwrap()).unwrap(), new);
+        assert!(!serde_json::to_string(&old).unwrap().contains("strong"));
     }
 
     #[test]

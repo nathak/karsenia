@@ -458,6 +458,8 @@ function trackOther(m) {
   // A question of a chat that is not on screen: the badge of its account shows it.
   if (m.kind === 'permission') { s.pending = (s.pending || 0) + 1; renderAcctBar() }
   if (m.kind === 'permission_resolved') { s.pending = Math.max(0, (s.pending || 0) - 1); renderAcctBar() }
+  // Put away or brought back (here or by a message sent from another page): the list follows.
+  if (m.kind === 'archived') { s.archived = m.data.archived || undefined; renderSessions() }
 }
 
 // ---- accounts: which account the panels show ----

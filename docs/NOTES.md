@@ -420,7 +420,7 @@ crash has its open requests cancelled. On Ctrl-C or SIGTERM the host kills every
 - **Archive** (`Meta.archived`, ops `archive` / `unarchive`, desktop "⋯" menu and web header button): a chat can be put away instead of deleted. It is left out of the
   chat list unless the archive is shown (a "보관함" toggle), the chat works or waits for the person, or it is the open one (it goes when another chat is opened);
   what the account choice counts does not change. Putting away is refused while a turn runs or a question waits, and a message sent to an archived chat brings it
-  back, so a chat that needs the person is never hidden. Its conversation, search entries and notes are untouched; it can still be continued in another
+  back, so a chat that needs the person is never hidden (background work counts as running: not archived while it goes on). Its conversation, search entries and notes are untouched; it can still be continued in another
   account and deleted. The flag is written only when set (`serde(default)`), so older chat files read as not archived.
 - **Project trust** (`project_trust.rs`, `<data>/project_trust.json`, `0600`; desktop only, as the card is): the card that asks about a project's own Claude Code settings
   can also "remember for this project". Only then are the hashes of exactly what was shown recorded (`Scan.hash` and the SHA-256 `Scan.strong`, own implementation in
@@ -430,7 +430,7 @@ crash has its open requests cancelled. On Ctrl-C or SIGTERM the host kills every
   is not valid, a chat on a provider or in a container (they read nothing of the project). Danger-level findings can be remembered, with stronger words in the
   confirmation. The new-chat form says when a trust is remembered for the folder and can forget it (op `project_trust_forget`, web and desktop); chats already
   made keep what they were told. The web page has no card (it never had one: it says to decide in the desktop app). A project's trust is for the account that
-  made the decision. `WorktreeRef.config_hash` is the git-settings fingerprint of a worktree, a different thing, and is not touched.
+  made the decision. Both hashes are kept in the chat's own trust too (`ProjectChoice::Trusted { hash, strong }`; one written before `strong` existed is held to `hash` alone), and a decision is only taken for the strong hash of what the window last showed, so what is trusted is what was looked at even if the short hash were made to agree. A chat in a git worktree never uses or records a project-level trust (it reads the worktree's files, and the form cannot tell which subfolder it was made from): it asks per chat as before. A `statusLine` command asks nothing on its own (as before) but is part of the hash, so a remembered trust does not cover a new one. `WorktreeRef.config_hash` is the git-settings fingerprint of a worktree, a different thing, and is not touched.
 - **Recent projects** (op `recent_projects`, `view::new_form::recent_projects`): the new-chat form lists the eight folders chats were lately made in, newest first, one per
   project (a worktree chat counts for the folder it was made from), worked out from the chats' own records (so imported and continued chats count, archived ones too,
   and nothing extra is stored), leaving out folders that are gone. A click fills the folder and asks for its remembered settings like picking it does.
