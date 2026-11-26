@@ -8,7 +8,7 @@
 
 A desktop-style host for [Claude Code](https://claude.com/claude-code). A Rust core runs the `claude` CLI headless
 (`--input-format stream-json --output-format stream-json`) and gives it a chat window of its own: a native desktop app
-(Slint, no browser, no network listener) or a local web page. It adds what a terminal does not show at a glance: permission
+(Slint, no browser, no network listener unless you switch on the local live view) or a local web page. It adds what a terminal does not show at a glance: permission
 cards that wait for you, several accounts kept apart, usage and cost, notes and skills, git-worktree chats, and one board that
 shows every chat at once.
 
@@ -180,7 +180,7 @@ scripts that stand in for mingw-w64 are in [`packaging/windows-build/`](packagin
 
 ## Security
 
-Local only: the web server binds `127.0.0.1`, checks `Host` and `Origin`, and needs a token; the desktop app has no listener.
+Local only: the web server binds `127.0.0.1`, checks `Host` and `Origin`, and needs a token; the desktop app has no listener unless you switch on the live view (a read-only page on `127.0.0.1` with its own token).
 The app can run commands through Claude Code, so treat it like a terminal. This is **not a sandbox**. Open only projects you
 trust: a project's own `.claude/settings.json` (hooks, `env`) applies to a normal chat once you trust it. Before a normal chat
 starts, the host checks three of the project's Claude Code settings files and asks first (the project check); this lowers the risk,
@@ -219,7 +219,7 @@ Source code: [MIT](LICENSE). The desktop app is built with [Slint](https://slint
 
 [Claude Code](https://claude.com/claude-code)를 위한 데스크톱형 호스트입니다. Rust 코어가 `claude` CLI를 헤드리스
 (`--input-format stream-json --output-format stream-json`)로 실행하고, 전용 채팅 화면을 제공합니다. 화면은 네이티브
-데스크톱 앱(Slint, 브라우저와 네트워크 수신 포트 없음)이거나 로컬 웹 페이지입니다. 터미널에서는 한눈에 보이지 않는 것을 더합니다:
+데스크톱 앱(Slint, 브라우저 없음, 로컬 라이브 보기를 켜지 않으면 네트워크 수신 포트 없음)이거나 로컬 웹 페이지입니다. 터미널에서는 한눈에 보이지 않는 것을 더합니다:
 사용자의 클릭을 기다리는 권한 카드, 따로 두는 여러 계정, 사용량과 비용, 메모와 스킬, git worktree 채팅, 모든 채팅을 한 화면에 모은 보드.
 
 > 상태: 초기 단계(v0.1.4). 리눅스용 테스트는 많지만 Windows는 자동 테스트 없이 손으로만 확인했습니다. macOS 앱은 빌드만 되고
@@ -379,8 +379,8 @@ cargo test --features desktop                           # 모델 호출 없음: 
 
 ## 보안
 
-로컬 전용입니다. 웹 서버는 `127.0.0.1`에만 열리고 `Host`와 `Origin`을 검사하며 토큰이 필요합니다. 데스크톱 앱은 수신 포트가
-없습니다. 이 앱은 Claude Code를 통해 명령을 실행할 수 있으므로 터미널처럼 다루세요. **샌드박스가 아닙니다.** 신뢰하는
+로컬 전용입니다. 웹 서버는 `127.0.0.1`에만 열리고 `Host`와 `Origin`을 검사하며 토큰이 필요합니다. 데스크톱 앱은 라이브 보기(자체 토큰이 있는 `127.0.0.1`의
+읽기 전용 페이지)를 켜지 않으면 수신 포트가 없습니다. 이 앱은 Claude Code를 통해 명령을 실행할 수 있으므로 터미널처럼 다루세요. **샌드박스가 아닙니다.** 신뢰하는
 프로젝트만 여세요. 신뢰한 뒤에는 일반 채팅에 프로젝트의 `.claude/settings.json`(훅, `env`)이 적용됩니다. 일반 채팅을 시작하기 전에
 프로젝트의 Claude Code 설정 파일 세 개를 확인하고 먼저 묻습니다(프로젝트 확인). 위험을 줄일 뿐 샌드박스는 아닙니다(CLAUDE.md, 스킬,
 상위 폴더는 확인하지 않음). 앱은 claude.ai 로그인이나 구독 토큰을 직접 저장하지 않습니다(`claude` 프로그램이 자체 보관). 계정 로그인을

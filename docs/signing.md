@@ -16,7 +16,7 @@ changes nothing by itself.
 | Build in a verifiable way, on GitHub-hosted runners, from the tagged source | `release.yml`: clean `ubuntu-24.04` runners, tag must equal the `Cargo.toml` version, Rust pinned, `--locked` | ok (SignPath can enforce `require_github_hosted`) |
 | Every release approved manually before signing | a SignPath signing policy with a manual approver | to set up in SignPath |
 | Signed binaries carry enforced metadata (product name, version) | the `.exe` has an icon resource but **no version-info resource** (`build.rs` writes the icon only) | **to do** (see 3) |
-| No hidden data transfer; anything sent to systems the user did not name is in a privacy policy and can be switched off | being checked (the audit of the code is separate); the app's own network use is the user's gateway or web-task address and the local servers | to confirm |
+| No hidden data transfer; anything sent to systems the user did not name is in a privacy policy and can be switched off | audited in the code (v0.1.1 and v0.1.4): the app has no HTTP/TLS client, no analytics, crash reporting or update check; its sockets are local; everything that goes out is done by `claude` (or a gateway/web task the user configured) and by plug-in installs through `claude`. It is worth stating in the policy that the app starts `claude` by itself at start-up (named chats, no message) and when Settings or the usage panel is opened | ok, to state in the policy |
 | No system changes without warning; **uninstall instructions** if there are install instructions | portable zip, nothing installed | add one line on removal to the README and the read-me in the zip (see 3) |
 | MFA for every team member on GitHub **and** SignPath | not verifiable from the repository | the maintainer must confirm |
 | Roles: Authors, Reviewers, Approvers | one maintainer would be all three | state it in the policy; ask whether a solo project is accepted |
@@ -75,7 +75,7 @@ notarization).
 > (`.github/workflows/release.yml`) and signed only from that build. Roles: Authors and Reviewers: the maintainer(s) listed in the repository; Approver:
 > the maintainer, who approves every signing request by hand. Privacy: the program itself sends nothing anywhere on its own; it runs `claude` (Claude
 > Code), which talks to Anthropic as its own documentation says, and, only if you configure them, a model gateway or a web task at the address you give.
-> (Replace this paragraph with the verified statement from the privacy audit.)
+> (Wording verified against the code in the privacy audit: the app has no HTTP or TLS client of its own; its only sockets are local; the traffic is that of `claude`, of a gateway or web task you configured, and of a plug-in install that `claude` performs.)
 
 ## 6. What the owner must do
 
