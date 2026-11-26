@@ -10,15 +10,16 @@ A desktop-style host for [Claude Code](https://claude.com/claude-code). A Rust c
 (`--input-format stream-json --output-format stream-json`) and gives it a chat window of its own: a native desktop app
 (Slint, no browser, no network listener) or a local web page.
 
-> Status: early (v0.1.3). The Linux test suite is large; Windows has no automated tests, only hand use. Expect rough edges.
+> Status: early (v0.1.4). The Linux test suite is large; Windows has no automated tests, only hand use. Expect rough edges.
 
 ## Download
 
-Prebuilt Windows app: **[Releases](https://github.com/nathak/karsenia/releases/latest)** → `karsenia-desktop-0.1.3-windows-x86_64.zip`
+Prebuilt Windows app: **[Releases](https://github.com/nathak/karsenia/releases/latest)** → `karsenia-desktop-0.1.4-windows-x86_64.zip`
 (the 0.1.0 release was published before the rename and is named `tenrec-desktop-0.1.0-…`; check the zip against the `.sha256` file
 next to it). Unzip, then double-click `karsenia-desktop.exe`. From 0.1.3 on, the zip is built by GitHub Actions from the release's tag
 (`.github/workflows/release.yml`; the Linux tests run first), not on a personal machine.
 
+- **macOS (experimental, from 0.1.4):** `karsenia-desktop-0.1.4-macos-universal.zip` (Apple silicon and Intel), built by the same workflow. It has never been run on a Mac by its author, and it is not signed by an Apple developer or notarized, so macOS asks you to allow it (the `READ-ME-FIRST.txt` in the zip says how).
 - It needs `claude` (Claude Code) on your `PATH`.
 - The `.exe` is **not signed**. Windows SmartScreen or a company security product may warn about an unknown program.
   `sign-windows.ps1` in the zip signs it on your own PC with a self-signed certificate; that makes the file tamper-evident,
@@ -109,15 +110,16 @@ Source code: [MIT](LICENSE). The desktop app is built with [Slint](https://slint
 (`--input-format stream-json --output-format stream-json`)로 실행하고, 전용 채팅 화면을 제공합니다. 화면은 네이티브
 데스크톱 앱(Slint, 브라우저와 네트워크 수신 포트 없음)이거나 로컬 웹 페이지입니다.
 
-> 상태: 초기 단계(v0.1.3). 리눅스용 테스트는 많지만 Windows는 자동 테스트 없이 손으로만 확인했습니다. 거친 부분이 있을 수 있습니다.
+> 상태: 초기 단계(v0.1.4). 리눅스용 테스트는 많지만 Windows는 자동 테스트 없이 손으로만 확인했습니다. 거친 부분이 있을 수 있습니다.
 
 ## 내려받기
 
-Windows 빌드: **[Releases](https://github.com/nathak/karsenia/releases/latest)** → `karsenia-desktop-0.1.3-windows-x86_64.zip`
+Windows 빌드: **[Releases](https://github.com/nathak/karsenia/releases/latest)** → `karsenia-desktop-0.1.4-windows-x86_64.zip`
 (0.1.0 릴리스는 이름을 바꾸기 전에 올린 것이라 `tenrec-desktop-0.1.0-…`입니다. 옆의 `.sha256` 파일로 확인하세요).
 압축을 풀고 `karsenia-desktop.exe`를 실행합니다. 0.1.3부터 zip은 개인 PC가 아니라 릴리스 태그에서 GitHub Actions가 만듭니다
 (`.github/workflows/release.yml`, 빌드 전에 리눅스 테스트를 먼저 돌립니다).
 
+- **macOS(실험적, 0.1.4부터):** `karsenia-desktop-0.1.4-macos-universal.zip`(Apple 실리콘과 Intel), 같은 워크플로로 만듭니다. 만든 사람이 Mac에서 실행해 본 적이 없고, Apple 개발자 서명과 공증이 없어 macOS가 허용 여부를 묻습니다(zip 안의 `READ-ME-FIRST.txt`에 방법이 있습니다).
 - `claude`(Claude Code)가 `PATH`에 있어야 합니다.
 - `.exe`는 **서명되어 있지 않습니다**. Windows SmartScreen이나 회사 보안 제품이 모르는 프로그램이라고 경고할 수 있습니다.
   압축 안의 `sign-windows.ps1`은 본인 PC에서 자체 서명 인증서로 서명합니다. 변조 여부를 알 수 있게 될 뿐, 보안 제품이
