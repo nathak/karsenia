@@ -39,6 +39,8 @@ export global Board {
     in-out property <int> sort: 0;
     // The page is on screen (set by the window; the host asks for lines only then).
     in-out property <bool> shown;
+    // Raised when the window gives the keys back (a palette or a card that held them went away): the page takes them again.
+    in-out property <int> focus-tick;
     callback visible(bool);
     callback view-changed();
     callback refresh();
@@ -109,8 +111,10 @@ export component BoardPage inherits Rectangle {
     // How much of a line fits: 2 from 960px, 1 from 760px, else 0.
     property <int> tier: root.width >= 960px ? 2 : root.width >= 760px ? 1 : 0;
     background: Theme.surface;
-    // Whatever was on the page before, the keys are the list's now.
+    in property <int> focus-tick;
+    // Whatever was on the page before, the keys are the list's now; and again whenever the window gives them back.
     init => { fs.focus(); }
+    changed focus-tick => { fs.focus(); }
     TouchArea { }
     fs := FocusScope {
         key-pressed(event) => {

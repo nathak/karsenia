@@ -253,7 +253,7 @@ export component AppWindow inherits Window {
     // The composer only while it is on screen: a panel or the new-chat page covers it, and typing there must not send.
     public function focus-composer() { Pal.open = false; if (root.side == 0 && !root.new-open) { composer.focus(); } else { keys.focus(); } }
     // Gives the zoom keys a focused element again after something that held focus went away.
-    public function refocus() { Pal.open = false; if (root.has-chat && root.side == 0 && !root.new-open && !root.text-view && !root.debug-view) { composer.focus(); } else if (root.side == 8 && !root.new-open) { /* the board's own list takes the keys when it is made */ } else { keys.focus(); } }
+    public function refocus() { Pal.open = false; if (root.has-chat && root.side == 0 && !root.new-open && !root.text-view && !root.debug-view) { composer.focus(); } else if (root.side == 8 && !root.new-open) { Board.focus-tick += 1; } else { keys.focus(); } }
     // The board is on screen: the host asks for its lines only then (the page being open is not enough: a new-chat form can cover it).
     out property <bool> board-shown: root.side == 8 && !root.new-open;
     changed board-shown => { Board.shown = root.board-shown; Board.visible(root.board-shown); }
@@ -855,7 +855,7 @@ export component AppWindow inherits Window {
         if !root.new-open && root.side == 2: SkillsPanel { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; }
         if !root.new-open && root.side == 6: TeamPage { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; lead: root.model-name; }
         if !root.new-open && root.side == 7: VhdbPage { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; }
-        if !root.new-open && root.side == 8: BoardPage { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; open(sid) => { root.side = 0; root.new-open = false; root.open-chat(sid); } }
+        if !root.new-open && root.side == 8: BoardPage { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; focus-tick: Board.focus-tick; open(sid) => { root.side = 0; root.new-open = false; root.open-chat(sid); } }
         if !root.new-open && (root.side == 3 || root.side == 5): SchedPanel { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; zoom-pct: root.zoom-pct; zoom(d) => { root.zoom(d); } }
         if !root.new-open && root.side == 4: FilesPanel { x: 280px; y: 56px; width: root.width - 280px; height: root.height - 56px; }
 
