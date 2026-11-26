@@ -37,7 +37,7 @@ use std::time::Duration;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, StyledText, VecModel};
 use tenrec::registry::Registry;
 use tenrec::view::i18n::{fill, tr, Lang};
-use tenrec::view::new_form::{prefill, revert, Fill, Touched};
+use tenrec::view::new_form::{differs, prefill, revert, unseen, Fill, Touched};
 use tenrec::view::panels::{ago, attention, in_context, Known, Mark, View};
 use tenrec::view::transcript::{model_label, Row, Transcript};
 
@@ -486,7 +486,15 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
     });
 
     let a = app.clone();
+    // When the form last changed fields by itself: a start right after is held back, the person has not seen what was filled in.
+    let filled_at = std::rc::Rc::new(std::cell::Cell::new(None::<std::time::Instant>));
+    let held = filled_at.clone();
     ui.on_new_chat(move |cwd, model, index, name, prov_index, prov_name, container, worktree, perm| {
+        if held.get().is_some_and(|at| unseen(at.elapsed().as_millis())) {
+            held.set(None);
+            toast_later(&a.weak, tr(a.lang, "nc_defaults_hold"));
+            return;
+        }
         let (cwd, model) = (cwd.trim().to_owned(), model.to_string());
         // The pickers' indexes are checked against the names they showed: the lists can change while they are open.
         let Ok(account) = accounts::chosen(index, &name) else {
@@ -661,6 +669,7 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
     // What the form filled in itself for the folder it last settled on: taken back when the next folder has nothing remembered for it.
     let filled = std::rc::Rc::new(std::cell::Cell::new(Fill::default()));
     let filled_here = filled.clone();
+    let stamp = filled_at.clone();
     ui.global::<NewForm>().on_cwd_settled(move |cwd| {
         let Some(ui) = a.weak.upgrade() else { return };
         let cwd = cwd.trim().to_owned();
@@ -673,6 +682,10 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
         // The fields filled in for the folder before go back to the form's start unless this folder fills them again (or the person took over).
         let start = Fill { model: Some(0), account: Some(ui.global::<Acct>().get_pre_acct()), permission: Some(0), worktree: Some(false) };
         let back = revert(&filled_here.get(), &fill, touched, &start);
+        let current = Fill { model: Some(form.get_model()), account: Some(ui.get_new_acct()), permission: Some(ui.get_new_perm()), worktree: Some(ui.get_new_worktree()) };
+        if differs(&fill, &current) || back != Fill::default() {
+            stamp.set(Some(std::time::Instant::now()));
+        }
         if let Some(i) = back.model {
             form.set_model(i);
         }
@@ -706,9 +719,11 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
     });
     // "Use defaults": the form's own starting values, and the fields stay as they are even if the folder is settled again.
     let a = app.clone();
+    let reset_stamp = filled_at.clone();
     ui.global::<NewForm>().on_reset_defaults(move || {
         let Some(ui) = a.weak.upgrade() else { return };
         filled.set(Fill::default());
+        reset_stamp.set(None);
         let form = ui.global::<NewForm>();
         form.set_model(0);
         ui.set_new_perm(0);

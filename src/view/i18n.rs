@@ -363,6 +363,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("nc_card", "새 대화", "New chat"),
     ("nc_defaults_used", "이 프로젝트의 마지막 대화 설정을 채웠습니다.", "Filled in from the last chat in this project."),
     ("nc_defaults_reset", "기본값으로", "Use defaults"),
+    ("nc_defaults_hold", "이 프로젝트의 설정을 방금 채웠습니다. 확인한 뒤 다시 누르세요.", "This project's settings were just filled in. Check them, then press again."),
     ("nc_folder_hint", "폴더의 경로를 쓰거나 찾아보기로 고르세요.", "Type the folder's path or pick it with Browse."),
     ("nc_model", "모델 선택", "Model"),
     ("nc_provider", "프로바이더", "Provider"),

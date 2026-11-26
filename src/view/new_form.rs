@@ -64,6 +64,24 @@ pub fn prefill(answer: &Value, asked: &str, touched: Touched, account_ids: &[Opt
     fill
 }
 
+/// How long after the form changed fields by itself a click on "start" is held back: the person has not had time to see what was filled in (a
+/// press on the button takes the focus from the folder field, which fills the form, and the click follows within a moment).
+pub const UNSEEN_MS: u128 = 700;
+
+/// Whether `fill` would change the form: some field it names is not already what `current` holds.
+pub fn differs(fill: &Fill, current: &Fill) -> bool {
+    let changes = |new: Option<i32>, now: Option<i32>| new.is_some() && new != now;
+    changes(fill.model, current.model)
+        || changes(fill.account, current.account)
+        || changes(fill.permission, current.permission)
+        || fill.worktree.is_some() && fill.worktree != current.worktree
+}
+
+/// Whether what the form filled in `elapsed_ms` ago may still be unseen.
+pub fn unseen(elapsed_ms: u128) -> bool {
+    elapsed_ms < UNSEEN_MS
+}
+
 /// What goes back to the form's starting values (`start`): a field `before` filled in (for the folder it was settled on earlier) that `now`
 /// does not fill in again and the person has not set by hand since, so one project's settings do not stay on a form for another.
 pub fn revert(before: &Fill, now: &Fill, touched: Touched, start: &Fill) -> Fill {
@@ -80,6 +98,16 @@ pub fn revert(before: &Fill, now: &Fill, touched: Touched, start: &Fill) -> Fill
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_fill_that_changes_nothing_on_screen_is_not_a_change_and_a_fresh_one_is_unseen() {
+        let now = Fill { model: Some(1), account: Some(0), permission: Some(2), worktree: Some(false) };
+        assert!(!differs(&Fill { model: Some(1), permission: Some(2), ..Fill::default() }, &now), "the same values again");
+        assert!(!differs(&Fill::default(), &now));
+        assert!(differs(&Fill { worktree: Some(true), ..Fill::default() }, &now));
+        assert!(differs(&Fill { model: Some(3), ..Fill::default() }, &now));
+        assert!(unseen(0) && unseen(UNSEEN_MS - 1) && !unseen(UNSEEN_MS), "a click right after is held back, one a moment later is not");
+    }
 
     #[test]
     fn what_was_filled_in_for_one_folder_goes_back_to_the_start_when_the_next_has_nothing_for_it() {

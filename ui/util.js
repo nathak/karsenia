@@ -407,6 +407,17 @@ export function formFill(answer, asked, touched, have) {
   return out
 }
 
+/** How long (ms) after the form filled itself in a "create" is held back: the person has not had time to see what changed. */
+export const FILL_UNSEEN_MS = 700
+
+/** Whether `fill` (see `formFill`) would change a form that holds `current` (`model`, `account`, `permission`, `worktree`). */
+export function fillDiffers(fill, current) {
+  return Object.keys(fill).some(field => fill[field] !== current[field])
+}
+
+/** Whether what the form filled in at `at` (ms; 0 for never) may still be unseen at `now`. */
+export const justFilled = (at, now) => at > 0 && now - at < FILL_UNSEEN_MS
+
 /**
  * The fields to take back to the form's own start when the folder changes: those the form filled in (`filled`) for the folder before, minus
  * those the person has set by hand since (`touched`). One project's settings must not stay on a form for another project.

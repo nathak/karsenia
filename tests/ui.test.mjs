@@ -3,7 +3,7 @@ import { test } from 'node:test'
 
 import { readFileSync } from 'node:fs'
 
-import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, accountName, accountOf, forAccount, inContext, viewOf, attn, PERM_MODES, permChoices, permNeedsConfirm, permOf, grantButtons, MODEL_ALIASES, modelChoices, needsAccount, withAccount, wtBlockerText, wtRemovePrompts, wtText, termFeed, termState, termText, asTextarea, diffWithin, gutterText, lineCount, relJoin, relParent, isUnder, toCrlf, baseName, checkImage, fmtTurn, imagePaths, parseSites, pathsInText, resultBlocks, toolSummary, formFill, unfill} from '../ui/util.js'
+import { systemNote, guardKind, initChips, thinkSummary, codeLang, foldInfo, foldText, editDiff, todoItems, toolHead, toolBadge, isAgentCall, accountName, accountOf, forAccount, inContext, viewOf, attn, PERM_MODES, permChoices, permNeedsConfirm, permOf, grantButtons, MODEL_ALIASES, modelChoices, needsAccount, withAccount, wtBlockerText, wtRemovePrompts, wtText, termFeed, termState, termText, asTextarea, diffWithin, gutterText, lineCount, relJoin, relParent, isUnder, toCrlf, baseName, checkImage, fmtTurn, imagePaths, parseSites, pathsInText, resultBlocks, toolSummary, formFill, unfill, fillDiffers, justFilled} from '../ui/util.js'
 
 test('a tool call is summed up by what it works on', () => {
   assert.equal(toolSummary('Bash', { command: 'ls -la\nmore' }), 'ls -la')
@@ -589,7 +589,7 @@ test('the new-chat form asks for the folder\'s remembered settings and tells whe
   assert.match(app, /m\.kind === 'project_defaults'/, 'it takes the answer')
   assert.match(app, /\$\('new-cwd'\)\.addEventListener\('change', askDefaults\)/, 'when the folder is settled')
   assert.match(app, /newTouched\.clear\(\)/, 'a form opened again starts with nothing set by hand')
-  for (const key of ['ncDefaultsUsed', 'ncDefaultsReset']) assert.equal((app.match(new RegExp(key + ':', 'g')) || []).length, 2, `${key} in both languages`)
+  for (const key of ['ncDefaultsUsed', 'ncDefaultsReset', 'ncDefaultsHold']) assert.equal((app.match(new RegExp(key + ':', 'g')) || []).length, 2, `${key} in both languages`)
   for (const id of ['new-defaults-note', 'new-defaults-reset']) assert.ok(html.includes(`id="${id}"`), id)
   assert.ok(!/permission[^\n]*bypassPermissions[^\n]*fill\./.test(app), 'the mode that skips checks is never filled in from the answer')
 })
@@ -604,4 +604,15 @@ test('what the form filled in for one folder is taken back when the folder chang
   assert.deepEqual(unfill(new Set(['model', 'account', 'permission']), new Set(['account'])), ['model', 'permission'])
   assert.deepEqual(unfill(new Set(), new Set(['model'])), [])
   assert.deepEqual(unfill(new Set(['worktree']), new Set()), ['worktree'])
+})
+
+test('a click right after the form filled itself in is held back, one a moment later is not', () => {
+  const now = { model: 'haiku', account: '', permission: 'plan', worktree: false }
+  assert.equal(fillDiffers({ model: 'haiku', permission: 'plan' }, now), false, 'the same values again change nothing')
+  assert.equal(fillDiffers({}, now), false)
+  assert.equal(fillDiffers({ worktree: true }, now), true)
+  assert.equal(fillDiffers({ model: 'opus' }, now), true)
+  assert.equal(justFilled(1000, 1500), true)
+  assert.equal(justFilled(1000, 1700), false)
+  assert.equal(justFilled(0, 5000), false, 'nothing was filled')
 })
