@@ -1,0 +1,134 @@
+name: Release
+
+# Pushing a tag `vX.Y.Z` (X.Y.Z must be the version in Cargo.toml) runs the tests, builds the Windows desktop program and publishes a GitHub
+# release with the zip and its .sha256. Run by hand (Actions -> Release -> Run workflow) it only builds: the zip is kept as a workflow
+# artifact for 14 days and nothing is published.
+#
+# Release notes: if docs/release-notes/<tag>.md exists it is the body of the release (after the install paragraph); otherwise the subjects
+# of the commits since the previous tag are listed.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  tests:
+    uses: ./.github/workflows/ci.yml
+
+  windows:
+    name: Build the Windows program
+    needs: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      commit: ${{ steps.meta.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Version and commit
+        id: meta
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          commit=$(git rev-parse --short=7 HEAD)
+          # The version goes into file names and a release title: only a plain version is accepted.
+          if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.]+)?$'; then
+            echo "::error::the version in Cargo.toml is not a plain version: ${version}"
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::the tag ${GITHUB_REF_NAME} does not match the version ${version} in Cargo.toml"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-release
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install zig (the C compiler and linker of the Windows build)
+        run: |
+          python3 -m pip install --user ziglang==0.17.0.post0
+          echo "ZIG=$(python3 -c 'import ziglang,os;print(os.path.join(os.path.dirname(ziglang.__file__),"zig"))')" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/packaging/windows-build" >> "$GITHUB_PATH"
+      - name: cargo build --release
+        env:
+          CC_x86_64_pc_windows_gnu: ${{ github.workspace }}/packaging/windows-build/zig-cc.sh
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: ${{ github.workspace }}/packaging/windows-build/zig-cc.sh
+        run: |
+          cargo fetch --locked
+          cargo build --release --target x86_64-pc-windows-gnu --features desktop --bin karsenia-desktop --locked
+      - name: Make the zip and its checksum
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          COMMIT: ${{ steps.meta.outputs.commit }}
+        run: |
+          packaging/make-windows-zip.sh "${VERSION}" "${COMMIT}" target/x86_64-pc-windows-gnu/release/karsenia-desktop.exe dist
+          (cd dist && sha256sum -c ./*.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: karsenia-desktop-${{ steps.meta.outputs.version }}-windows-x86_64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish the release
+    if: github.ref_type == 'tag'
+    needs: windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: karsenia-desktop-${{ needs.windows.outputs.version }}-windows-x86_64
+          path: dist
+      - name: The notes
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.windows.outputs.version }}
+          COMMIT: ${{ needs.windows.outputs.commit }}
+        run: |
+          sed -e "s/@VERSION@/${VERSION}/g" -e "s/@COMMIT@/${COMMIT}/g" packaging/release-intro.md > notes.md
+          echo >> notes.md
+          if [ -f "docs/release-notes/${TAG}.md" ]; then
+            cat "docs/release-notes/${TAG}.md" >> notes.md
+          else
+            prev=$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)
+            echo "**Changes since ${prev:-the start}**" >> notes.md
+            git log --no-merges --pretty='- %s' ${prev:+"${prev}..${TAG}"} >> notes.md
+          fi
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.windows.outputs.version }}
+          COMMIT: ${{ needs.windows.outputs.commit }}
+        run: |
+          title="Karsenia ${VERSION} (Windows desktop, ${COMMIT})"
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            gh release edit "${TAG}" --title "${title}" --notes-file notes.md
+            gh release upload "${TAG}" dist/*.zip dist/*.sha256 --clobber
+          else
+            gh release create "${TAG}" --verify-tag --title "${title}" --notes-file notes.md dist/*.zip dist/*.sha256
+          fi

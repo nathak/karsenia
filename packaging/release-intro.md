@@ -1,0 +1,3 @@
+Windows desktop app, built by GitHub Actions on Linux (cross-compiled) from commit `@COMMIT@`. The Linux test suite ran before the build; there is no automated test on Windows: please report what you see.
+
+**Install:** download `karsenia-desktop-@VERSION@-windows-x86_64.zip`, check it against the `.sha256` file, unzip, double-click `karsenia-desktop.exe`. It needs `claude` (Claude Code) on your `PATH`. The program is not signed; `sign-windows.ps1` in the zip signs it on your own PC with a self-signed certificate, which does not make a security product trust it. If an older build is running, quit it from its tray icon first (one app per data folder).

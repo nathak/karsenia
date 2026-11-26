@@ -1,0 +1,68 @@
+name: CI
+
+# The Linux test suite (a fake `claude` replays scenarios: no model is called, no secret is needed) and a check that the Windows program
+# still compiles. Also called by the release workflow, so a release is never built from code whose tests fail.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  linux:
+    name: Linux tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The desktop app links fontconfig and freetype (the rest of its Linux libraries are loaded when it runs, not linked).
+      - name: Install the libraries the desktop app links
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libfontconfig1-dev libfreetype-dev
+      - name: cargo test
+        run: cargo test --features desktop --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The web page's pure helpers
+        run: node --test tests/ui.test.mjs
+
+  windows-check:
+    name: Windows program compiles
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-check
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install zig (the C compiler and linker of the Windows build)
+        run: |
+          python3 -m pip install --user ziglang==0.17.0.post0
+          echo "ZIG=$(python3 -c 'import ziglang,os;print(os.path.join(os.path.dirname(ziglang.__file__),"zig"))')" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/packaging/windows-build" >> "$GITHUB_PATH"
+      - name: cargo check for Windows
+        env:
+          CC_x86_64_pc_windows_gnu: ${{ github.workspace }}/packaging/windows-build/zig-cc.sh
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: ${{ github.workspace }}/packaging/windows-build/zig-cc.sh
+        run: |
+          cargo fetch --locked
+          cargo check --features desktop --target x86_64-pc-windows-gnu --bins --locked

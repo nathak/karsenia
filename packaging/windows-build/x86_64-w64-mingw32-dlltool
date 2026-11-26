@@ -1,0 +1,3 @@
+#!/bin/sh
+# rustc looks for this name when it makes import libraries for the GNU Windows target; zig has it built in. Environment: ZIG.
+exec "${ZIG:?ZIG must name the zig program}" dlltool "$@"

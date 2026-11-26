@@ -1,0 +1,21 @@
+Karsenia desktop for Windows (native app, Slint UI)
+
+Version @VERSION@, made from commit @COMMIT@ (Settings -> About shows it). What is new is in the release notes on the release page.
+
+Double-click karsenia-desktop.exe. A window opens; there is no browser and no network listener.
+Needs claude.exe (Claude Code) on PATH. The data folder must be inside your user profile
+(default %USERPROFILE%\.local\share\tenrec: the folder keeps its old name on purpose, so the chats of earlier builds show up).
+
+Only one app runs per data folder: if an older build (karsenia-desktop.exe, or the earlier tenrec-desktop.exe) is running, quit it from its tray
+icon (right-click -> Quit) before starting this one.
+
+Signing: sign-windows.ps1 (next to the .exe) signs karsenia-desktop.exe with a self-signed certificate made on this PC:
+powershell -ExecutionPolicy Bypass -File .\sign-windows.ps1 . Check this zip against its .sha256 first, then unpack, then sign.
+A self-signed certificate does not make a security product trust the program: its administrator must allow the certificate or the file
+hash. See README.md, "Windows".
+
+This build was made by GitHub Actions: cross-compiled on Linux for x86_64-pc-windows-gnu. The Linux test suite ran before it was built;
+there is no automated test on Windows. Please report what you see.
+
+If something goes wrong: the app writes what it reports and any crash to
+%USERPROFILE%\.local\share\tenrec\logs\desktop.log - please send that file.
