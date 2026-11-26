@@ -38,6 +38,10 @@ export global NewForm {
     // A trust in the folder's own configuration is remembered for its new chats (and the way to forget it).
     in-out property <bool> trusted;
     callback forget-trust();
+    // The folders chats were lately made in (newest first), asked for when the form opens; a click fills the folder.
+    in property <[string]> recent;
+    callback refresh-recent();
+    callback pick-recent(string);
 }
 
 // The Claude logins (personal, work...). Each has its own notes, skills and history; the panels show one of them.

@@ -218,3 +218,29 @@ async fn the_form_can_forget_the_trust_remembered_for_a_folder() {
     }
     assert!(ask(&mut ws, &cwd).await.get("trusted").is_none(), "and the form is not told any more");
 }
+
+#[tokio::test]
+async fn the_recent_projects_are_the_folders_of_the_chats_newest_first_and_only_those_still_there() {
+    let fx = fixture().await;
+    let mut ws = good(&fx).await;
+    assert_eq!(next_json(&mut ws).await["kind"], "hello");
+    let other = fx._dir.path().canonicalize().unwrap().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let gone = fx._dir.path().canonicalize().unwrap().join("gone");
+    std::fs::create_dir_all(&gone).unwrap();
+    fx.server.registry.create_in(&gone.display().to_string(), None, None, false, None).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    fx.server.registry.create_in(&fx.project.display().to_string(), None, None, false, None).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    fx.server.registry.create_in(&other.display().to_string(), None, None, false, None).unwrap();
+    std::fs::remove_dir_all(&gone).unwrap();
+    ws.send(Message::Text(json!({"op": "recent_projects"}).to_string())).await.unwrap();
+    let got = loop {
+        let got = next_json(&mut ws).await;
+        if got["kind"] == "recent_projects" {
+            break got["data"].clone();
+        }
+    };
+    let folders: Vec<String> = got["folders"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_owned()).collect();
+    assert_eq!(folders, [other.display().to_string(), fx.project.display().to_string()], "newest first, and the folder that is gone is not offered: {got}");
+}

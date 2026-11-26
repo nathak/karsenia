@@ -10,7 +10,7 @@ const NEEDS_SITES = 'needs the sites it may open: edit the task and list them'
 // ---- text ----
 const TEXT = {
   ko: {
-    newChat: '＋ 새 대화', folder: '프로젝트 폴더 (절대 경로)', model: '모델', create: '만들기', cancel: '취소', ncDefaultsUsed: '이 프로젝트의 마지막 대화 설정을 채웠습니다.', ncDefaultsReset: '기본값으로', ncTrustRemembered: '이 폴더의 프로젝트 설정(훅·명령)을 새 대화에서 묻지 않고 허용하도록 기억해 두었습니다.', ncTrustForget: '신뢰 잊기', ncTrustForgotten: '이 폴더의 신뢰를 잊었습니다. 새 대화는 다시 묻습니다.', ncDefaultsHold: '이 프로젝트의 설정을 방금 채웠습니다. 확인한 뒤 다시 누르세요.', empty: '왼쪽에서 대화를 고르거나 새 대화를 만드세요.',
+    newChat: '＋ 새 대화', folder: '프로젝트 폴더 (절대 경로)', model: '모델', create: '만들기', cancel: '취소', ncDefaultsUsed: '이 프로젝트의 마지막 대화 설정을 채웠습니다.', ncDefaultsReset: '기본값으로', ncRecent: '최근 프로젝트', ncTrustRemembered: '이 폴더의 프로젝트 설정(훅·명령)을 새 대화에서 묻지 않고 허용하도록 기억해 두었습니다.', ncTrustForget: '신뢰 잊기', ncTrustForgotten: '이 폴더의 신뢰를 잊었습니다. 새 대화는 다시 묻습니다.', ncDefaultsHold: '이 프로젝트의 설정을 방금 채웠습니다. 확인한 뒤 다시 누르세요.', empty: '왼쪽에서 대화를 고르거나 새 대화를 만드세요.',
     placeholder: '메시지를 입력하세요 (Enter 전송, Shift+Enter 줄바꿈). 이미지는 붙여넣기·끌어놓기', send: '보내기', stop: '중단', attach: '이미지 첨부',
     idle: '대기', running: '작업 중', exited: '종료됨', connected: '연결됨', reconnecting: '다시 연결하는 중…', untitled: '(새 대화)', acctNoChats: '이 계정에는 대화가 없습니다.',
     plugTitle: '플러그인', plugIntro: '기본 계정에 설치된 플러그인 중 이 계정에 없는 것입니다. 계정마다 설정 폴더가 따로라 직접 설치해야 합니다.', plugNone: '설치할 플러그인이 없습니다.', plugInstall: '설치', plugBusy: '설치 중…', plugConfirm: '{p} 플러그인을 이 계정에 설치합니다. 플러그인은 코드를 실행할 수 있습니다. 계속할까요?', plugDone: '설치했습니다', plugFailed: '설치하지 못했습니다',
@@ -97,7 +97,7 @@ const TEXT = {
     wtE_config_changed: '프로젝트의 git 설정이 바뀌었습니다.', wtE_unexpected_result: '병합 결과가 점검한 것과 달라 취소했습니다.',
   },
   en: {
-    newChat: '＋ New chat', folder: 'Project folder (absolute path)', model: 'Model', create: 'Create', cancel: 'Cancel', ncDefaultsUsed: 'Filled in from the last chat in this project.', ncDefaultsReset: 'Use defaults', ncTrustRemembered: 'This folder\'s project settings (hooks, commands) are remembered as trusted for new chats.', ncTrustForget: 'Forget', ncTrustForgotten: 'Forgot the trust for this folder. New chats ask again.', ncDefaultsHold: 'This project\'s settings were just filled in. Check them, then press again.', empty: 'Pick a chat on the left or start a new one.',
+    newChat: '＋ New chat', folder: 'Project folder (absolute path)', model: 'Model', create: 'Create', cancel: 'Cancel', ncDefaultsUsed: 'Filled in from the last chat in this project.', ncDefaultsReset: 'Use defaults', ncRecent: 'Recent projects', ncTrustRemembered: 'This folder\'s project settings (hooks, commands) are remembered as trusted for new chats.', ncTrustForget: 'Forget', ncTrustForgotten: 'Forgot the trust for this folder. New chats ask again.', ncDefaultsHold: 'This project\'s settings were just filled in. Check them, then press again.', empty: 'Pick a chat on the left or start a new one.',
     placeholder: 'Message (Enter to send, Shift+Enter for a new line). Paste or drop images', send: 'Send', stop: 'Stop', attach: 'Attach image',
     idle: 'idle', running: 'working', exited: 'ended', connected: 'connected', reconnecting: 'reconnecting…', untitled: '(new chat)', acctNoChats: 'No chats under this account.',
     plugTitle: 'Plugins', plugIntro: 'Plugins the default account has and this account lacks. Each account has its own settings folder, so they are installed here separately.', plugNone: 'Nothing to install.', plugInstall: 'Install', plugBusy: 'Installing…', plugConfirm: 'Install the plugin {p} into this account? A plugin can run code. Continue?', plugDone: 'Installed', plugFailed: 'Could not install',
@@ -408,6 +408,20 @@ function onMessage(m) {
     applyDefaults(m.data)
     return
   }
+  if (m.kind === 'recent_projects') {
+    // The folders chats were lately made in: a click fills the folder and asks what is remembered for it.
+    const box = $('recent-projects')
+    box.replaceChildren(...(m.data.folders || []).map(folder => {
+      const b = el('button', 'ghost', baseName(folder) || folder)
+      b.type = 'button'
+      b.title = folder
+      b.addEventListener('click', () => { $('new-cwd').value = folder; askDefaults() })
+      return b
+    }))
+    box.hidden = !box.children.length || $('new-form').hidden
+    box.setAttribute('aria-label', t('ncRecent'))
+    return
+  }
   if (m.kind === 'project_trust_forgot') {
     if (m.data.forgot && m.data.cwd === $('new-cwd').value.trim()) { $('new-trust-note').hidden = true; toast(t('ncTrustForgotten')) }
     return
@@ -597,6 +611,7 @@ $('new-toggle').addEventListener('click', () => {
   newFilled = new Set()
   newFilledAt = 0
   $('new-trust-note').hidden = true
+  if (!$('new-form').hidden) wsSend({ op: 'recent_projects' })
   $('new-defaults-note').hidden = true
   $('new-perm').replaceChildren()
   $('new-name').value = ''

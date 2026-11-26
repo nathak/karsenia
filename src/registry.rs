@@ -924,6 +924,13 @@ impl Registry {
         self.defaults.record(&key, entry);
     }
 
+    /// The folders the person made chats in lately, newest first, for the new-chat form (see `view::new_form::recent_projects`): worked out from
+    /// the chats' own records, so chats that were imported or continued in another account count too; a folder that is gone is left out.
+    pub async fn recent_projects(&self) -> Vec<String> {
+        let chats: Vec<(String, u64)> = self.list().await.into_iter().map(|info| (info.meta.project_key(), info.meta.created)).collect();
+        crate::view::new_form::recent_projects(chats, crate::view::new_form::RECENT, |folder| std::path::Path::new(folder).is_dir())
+    }
+
     /// What the form starts with for the folder `cwd` (see `project_defaults::form_json`); `found: false` for a folder that is not there, not
     /// absolute, or never made a chat from the form.
     pub fn project_defaults(&self, cwd: &str) -> serde_json::Value {

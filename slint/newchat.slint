@@ -1,5 +1,5 @@
 // The new-chat page with the accounts beside it (Stitch "새 대화 · 계정 관리"): the left card starts a chat, the right one manages the logins.
-import { ComboBox, CheckBox, LineEdit } from "std-widgets.slint";
+import { ComboBox, CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
 import { Theme, T, Btn, Label, Badge, WText, SelText, IconBtn, Pill } from "base.slint";
 import { Acct, AcctRow, NewForm, PlugRow, Prov, ProvForm, Usage } from "panels.slint";
 
@@ -43,6 +43,21 @@ export component NewChatCard inherits Rectangle {
             Btn { text: T.tr("folder_pick"); height: 34px; show-icon: true; icon: @image-url("icons/folder.svg"); enabled: !root.picking; clicked => { root.pick-folder(); } }
         }
         WText { text: T.tr("nc_folder_hint"); size: 11px; fg: Theme.outline; }
+        if NewForm.recent.length > 0: VerticalLayout {
+            spacing: 2px;
+            Text { text: T.tr("nc_recent"); color: Theme.on-var; font-size: 11px; font-weight: 600; }
+            ScrollView {
+                height: min(rc.preferred-height, 104px);
+                rc := VerticalLayout {
+                    spacing: 2px;
+                    for f in NewForm.recent: Rectangle {
+                        height: 24px; border-radius: 6px; background: rt.has-hover ? Theme.high.with-alpha(0.6) : transparent;
+                        Text { x: 8px; width: parent.width - 16px; text: f; color: Theme.on-surface; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; overflow: elide; }
+                        rt := TouchArea { mouse-cursor: pointer; clicked => { NewForm.pick-recent(f); } }
+                    }
+                }
+            }
+        }
         Text { text: T.tr("chat_name_label"); color: Theme.on-var; font-size: 13px; font-weight: 600; }
         LineEdit { text <=> root.name; placeholder-text: T.tr("chat_name_ph"); font-size: 14px; }
         HorizontalLayout {

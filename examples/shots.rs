@@ -230,6 +230,7 @@ fn scenes(ui: &AppWindow, window: &MinimalSoftwareWindow, out: &std::path::Path)
     ui.global::<NewForm>().set_model(1);
     ui.set_new_perm(2);
     ui.global::<NewForm>().set_used(true);
+    ui.global::<NewForm>().set_recent(ModelRc::from(Rc::new(VecModel::from(vec![SharedString::from("/home/me/work/karsenia"), SharedString::from("/home/me/work/blog"), SharedString::from("/srv/clients/acme-portal")]))));
     save(window, &out.join("17-1280x800-newchat-defaults-dark.png"), 1280, 1000);
     ui.global::<NewForm>().set_used(false);
     // A trust remembered for the folder, and the way to forget it.

@@ -256,7 +256,7 @@ export component AppWindow inherits Window {
     // The text view's field held the keyboard focus and is gone when it closes: the composer (or the key scope) takes it back.
     changed text-view => { if (!root.text-view && !root.perm.visible && !Dialog.visible) { root.refocus(); } }
     changed debug-view => { if (!root.debug-view && !root.perm.visible && !Dialog.visible) { root.refocus(); } }
-    changed new-open => { if (root.new-open) { NewForm.touched-model = false; NewForm.touched-acct = false; NewForm.touched-perm = false; NewForm.touched-wt = false; NewForm.used = false; if (root.new-cwd != "") { NewForm.cwd-settled(root.new-cwd); } root.panel-open(100); } else { root.new-perm = 0; root.new-name = ""; root.refocus(); } }
+    changed new-open => { if (root.new-open) { NewForm.touched-model = false; NewForm.touched-acct = false; NewForm.touched-perm = false; NewForm.touched-wt = false; NewForm.used = false; NewForm.refresh-recent(); if (root.new-cwd != "") { NewForm.cwd-settled(root.new-cwd); } root.panel-open(100); } else { root.new-perm = 0; root.new-name = ""; root.refocus(); } }
     // A panel that goes away takes focus with it.
     changed side => { root.more-open = false; root.cont-open = false; Team.open = false; Usage.open = false; Know.adding = false; root.panel-open(root.side); root.refocus(); }
 

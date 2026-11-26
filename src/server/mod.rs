@@ -420,6 +420,11 @@ async fn handle_op(state: &AppState, op: &Value, out: &mpsc::UnboundedSender<Str
                 Err(message) => fail(&message),
             }
         }
+        // The folders chats were lately made in, for the new-chat form to offer.
+        "recent_projects" => {
+            let folders = state.registry.recent_projects().await;
+            let _ = out.send(plain("recent_projects", None, json!({"folders": folders})));
+        }
         // The trust remembered for a project folder (and an account) is forgotten: new chats there ask again.
         "project_trust_forget" => {
             let cwd = op["cwd"].as_str().unwrap_or_default();

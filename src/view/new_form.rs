@@ -64,6 +64,24 @@ pub fn prefill(answer: &Value, asked: &str, touched: Touched, account_ids: &[Opt
     fill
 }
 
+/// How many recent folders the form lists.
+pub const RECENT: usize = 8;
+
+/// The folders the person worked in lately, newest first: one per project (a worktree chat counts for the folder it was made from), by the
+/// newest chat made there, at most `limit`, and only folders that are still there (`exists`). `chats` is each chat's project folder and when it
+/// was made; archived chats count too.
+pub fn recent_projects(chats: impl IntoIterator<Item = (String, u64)>, limit: usize, exists: impl Fn(&str) -> bool) -> Vec<String> {
+    let mut newest: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for (folder, created) in chats {
+        let slot = newest.entry(folder).or_insert(0);
+        *slot = (*slot).max(created);
+    }
+    let mut folders: Vec<(String, u64)> = newest.into_iter().collect();
+    // Newest first; the same time in the folder's name order, so the list does not shuffle between calls.
+    folders.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    folders.into_iter().map(|(folder, _)| folder).filter(|folder| exists(folder)).take(limit).collect()
+}
+
 /// How long after the form changed fields by itself a click on "start" is held back: the person has not had time to see what was filled in (a
 /// press on the button takes the focus from the folder field, which fills the form, and the click follows within a moment).
 pub const UNSEEN_MS: u128 = 700;
@@ -98,6 +116,19 @@ pub fn revert(before: &Fill, now: &Fill, touched: Touched, start: &Fill) -> Fill
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn recent_projects_are_newest_first_one_per_folder_capped_and_only_those_still_there() {
+        let chats = vec![("/a".to_owned(), 10), ("/b".to_owned(), 30), ("/a".to_owned(), 50), ("/gone".to_owned(), 40), ("/c".to_owned(), 20)];
+        let exists = |f: &str| f != "/gone";
+        assert_eq!(recent_projects(chats.clone(), 8, exists), ["/a", "/b", "/c"], "/a counts by its newest chat, /gone is dropped");
+        assert_eq!(recent_projects(chats.clone(), 2, exists), ["/a", "/b"], "capped after the missing ones are dropped, so the list stays full");
+        let many: Vec<(String, u64)> = (0..12).map(|i| (format!("/p{i}"), i)).collect();
+        let list = recent_projects(many, RECENT, |_| true);
+        assert_eq!((list.len(), list[0].as_str(), list[7].as_str()), (8, "/p11", "/p4"));
+        assert_eq!(recent_projects(vec![("/x".to_owned(), 5), ("/y".to_owned(), 5)], 8, |_| true), ["/x", "/y"], "a tie does not shuffle");
+        assert!(recent_projects(Vec::new(), 8, |_| true).is_empty());
+    }
 
     #[test]
     fn a_fill_that_changes_nothing_on_screen_is_not_a_change_and_a_fresh_one_is_unseen() {

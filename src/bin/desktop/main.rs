@@ -741,6 +741,24 @@ fn wire(ui: &AppWindow, app: &Arc<App>) {
         }
         form.set_used(fill.any());
     });
+    // The folders chats were lately made in, offered under the folder field when the form opens; a click fills the folder like picking it.
+    let a = app.clone();
+    ui.global::<NewForm>().on_refresh_recent(move || {
+        let a = a.clone();
+        tokio::spawn(async move {
+            let folders = a.registry.recent_projects().await;
+            let _ = a.weak.upgrade_in_event_loop(move |ui| {
+                let rows: Vec<SharedString> = folders.into_iter().map(SharedString::from).collect();
+                ui.global::<NewForm>().set_recent(ModelRc::from(Rc::new(VecModel::from(rows))));
+            });
+        });
+    });
+    let weak = ui.as_weak();
+    ui.global::<NewForm>().on_pick_recent(move |folder| {
+        let Some(ui) = weak.upgrade() else { return };
+        ui.set_new_cwd(folder.clone());
+        ui.global::<NewForm>().invoke_cwd_settled(folder);
+    });
     // "Forget": the trust remembered for this folder (for the account its remembered settings name) goes; new chats ask again.
     let a = app.clone();
     ui.global::<NewForm>().on_forget_trust(move || {
