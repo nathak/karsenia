@@ -48,6 +48,10 @@ app looks for `claude` in the usual places (`~/.local/bin`, `~/.claude/local`, `
 `/opt/homebrew/bin`, `/usr/local/bin`); if yours is elsewhere, set `TENREC_CLAUDE=/full/path/to/claude` and start the app from that terminal.
 Not on macOS: notifications and the tray icon; the terminal page has never been tried there. `READ-ME-FIRST.txt` in the zip repeats this.
 
+**Removing it.** Nothing is installed: delete the unzipped folder (Windows) or `Karsenia.app` (macOS). Your chats and settings stay in the data folder
+(`~/.local/share/tenrec`, `%USERPROFILE%\.local\share\tenrec` on Windows); delete that folder too if you want them gone. Worktrees of chats are in `~/tenrec-worktrees`
+(or your `worktree_root`) with branches `tenrec/<id>` in your projects; clean them up from the chat before you delete the data.
+
 ## First run
 
 1. Install Claude Code and log in once in a terminal (`claude`), so that the program has a login.
@@ -251,6 +255,10 @@ Source code: [MIT](LICENSE). The desktop app is built with [Slint](https://slint
 (`~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin`, `~/.bun/bin`, `~/.volta/bin`, `/opt/homebrew/bin`, `/usr/local/bin`)을 찾아봅니다. 다른 곳에
 있으면 `TENREC_CLAUDE=/전체/경로/claude`를 지정하고 그 터미널에서 앱을 시작하세요. macOS에는 알림과 트레이 아이콘이 없고, 터미널 화면은
 시도해 본 적이 없습니다. zip 안의 `READ-ME-FIRST.txt`에도 같은 내용이 있습니다.
+
+**제거.** 설치되는 것은 없습니다. 압축을 푼 폴더(Windows) 또는 `Karsenia.app`(macOS)을 지우면 됩니다. 채팅과 설정은 데이터 폴더
+(`~/.local/share/tenrec`, Windows는 `%USERPROFILE%\.local\share\tenrec`)에 남으므로, 없애려면 그 폴더도 지우세요. 채팅의 worktree는 `~/tenrec-worktrees`(또는
+`worktree_root`)에, 브랜치 `tenrec/<id>`는 프로젝트에 있으니 데이터를 지우기 전에 채팅에서 정리하세요.
 
 ## 처음 실행
 

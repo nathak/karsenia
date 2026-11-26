@@ -19,4 +19,7 @@ Data and settings are kept in ~/.local/share/tenrec (the folder keeps its old na
 Not done on macOS: notifications (the app says nothing outside its window), the tray icon, and the terminal page has never been tried here.
 Only one app runs per data folder.
 
+Removing it: nothing is installed. Delete Karsenia.app. Your chats and settings stay in ~/.local/share/tenrec; delete that folder too to remove them.
+(Worktrees of chats are under ~/tenrec-worktrees: clean them up from the chat first.)
+
 If something goes wrong: the app writes what it reports and any crash to ~/.local/share/tenrec/logs/desktop.log - please send that file.

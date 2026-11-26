@@ -17,5 +17,8 @@ hash. See README.md, "Windows".
 This build was made by GitHub Actions: cross-compiled on Linux for x86_64-pc-windows-gnu. The Linux test suite ran before it was built;
 there is no automated test on Windows. Please report what you see.
 
+Removing it: nothing is installed. Delete this folder. Your chats and settings stay in %USERPROFILE%\.local\share\tenrec; delete that folder too to remove them.
+(Worktrees of chats are under ~\tenrec-worktrees: clean them up from the chat first.)
+
 If something goes wrong: the app writes what it reports and any crash to
 %USERPROFILE%\.local\share\tenrec\logs\desktop.log - please send that file.
