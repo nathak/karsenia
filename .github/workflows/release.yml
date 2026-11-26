@@ -16,6 +16,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # The Rust the program is tested and built with, pinned: a newer one changed what it links on Windows (-lsynchronization) and broke the build
+  # that was tried by hand. Raise it on purpose, after a release build with the new one has been tried.
+  RUST_VERSION: "1.98.1"
   CARGO_INCREMENTAL: "0"
 
 jobs:
@@ -50,8 +53,8 @@ jobs:
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "commit=${commit}" >> "$GITHUB_OUTPUT"
-      - name: Rust toolchain (stable) with the Windows target
-        run: rustup toolchain install stable --profile minimal --target x86_64-pc-windows-gnu && rustup default stable
+      - name: Rust toolchain with the Windows target
+        run: rustup toolchain install "${RUST_VERSION}" --profile minimal --target x86_64-pc-windows-gnu && rustup default "${RUST_VERSION}"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: windows-release
