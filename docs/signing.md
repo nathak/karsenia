@@ -39,6 +39,12 @@ changes nothing by itself.
   only `FONTS-LICENSE.txt`. A generated notices file (for example `cargo about`) would close that gap; not needed for SignPath as such, but a reviewer
   may ask.
 
+- **If the binary becomes GPL-3.0 (checked 2026-11-27):** the dependency tree (`cargo metadata --features desktop`, all targets, 620 crates) is MIT, Apache-2.0 (compatible
+  with GPLv3), Unicode-3.0, Zlib, BSD, Unlicense, BSL-1.0, 0BSD, CC0 and ISC, plus the Slint crates, whose **GPL-3.0-only** option would be the one taken; `r-efi` is
+  `MIT OR Apache-2.0 OR LGPL-2.1-or-later` (the permissive choice is taken). No license in the tree conflicts with GPL-3.0. Slint's GPL option is "-only", so the
+  combined work would be GPL-3.0-**only**. SignPath's project list shows GPL-3.0 projects (for example LunaBox) and Qt-based applications (Qt is also dual-licensed),
+  which suggests that using a dual-licensed library under its open-source option is accepted in practice; the terms do not say so, so ask SignPath.
+
 **Decision for the owner (before applying):** (A) keep the Royalty-free choice and ask SignPath whether it is acceptable, expecting a refusal; or
 (B) release future versions under GPLv3 for the combined binary (and keep MIT for the own files), then apply; or (C) do not use SignPath (a paid
 certificate, or no signing). Nothing here has been changed.
