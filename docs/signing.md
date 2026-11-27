@@ -5,6 +5,14 @@ nothing in the README or the releases says otherwise. This page is the preparati
 [SignPath Foundation](https://signpath.org/terms) (conditions read on 2026-11-27; they can change, read the page again before applying). It
 changes nothing by itself.
 
+**Decision taken (2026-11-27, by the owner): option B.** From version 0.1.5 the program is licensed **GPL-3.0-only** (Slint is used under its GPLv3 option).
+Done for it: `LICENSE` (the GPL-3.0 text), `Cargo.toml`, README, `THIRD-PARTY-NOTICES.txt` (made by `packaging/make-third-party-notices.py`; regenerate it when the
+dependencies change), `SECURITY.md`, `CONTRIBUTING.md` (contributions under GPL-3.0-only, review by the maintainer), the license, notices and source link in the zips and
+their read-me files, and a version-info resource (product name, version, copyright) in the Windows `.exe` (`build.rs`). Not done: the application itself, the code
+signing policy page, MFA confirmation, enabling GitHub's private vulnerability reporting (the repository setting is off; SECURITY.md describes both ways).
+The table below is the state **before** this decision; the two license rows are now expected to pass (the question for SignPath that remains: Slint's own
+commercial option; see 2).
+
 ## 1. The conditions, and what the repository has
 
 | SignPath condition | Karsenia today | Verdict |

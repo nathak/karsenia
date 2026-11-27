@@ -1,9 +1,9 @@
 [package]
 name = "tenrec"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "A desktop-style host for Claude Code: a Rust core that runs `claude` headless and serves a custom chat UI"
-license = "MIT"
+license = "GPL-3.0-only"
 default-run = "tenrec"
 
 [lib]

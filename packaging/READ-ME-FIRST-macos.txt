@@ -19,6 +19,8 @@ Data and settings are kept in ~/.local/share/tenrec (the folder keeps its old na
 Not done on macOS: notifications (the app says nothing outside its window), the tray icon, and the terminal page has never been tried here.
 Only one app runs per data folder.
 
+License: GPL-3.0-only (the file LICENSE next to this one). The notices of the third-party components are in THIRD-PARTY-NOTICES.txt, the fonts' license is
+in FONTS-LICENSE.txt. The source code of this version is https://github.com/nathak/karsenia/tree/v@VERSION@ (the same repository and tag the program was built from).
 Removing it: nothing is installed. Delete Karsenia.app. Your chats and settings stay in ~/.local/share/tenrec; delete that folder too to remove them.
 (Worktrees of chats are under ~/tenrec-worktrees: clean them up from the chat first.)
 

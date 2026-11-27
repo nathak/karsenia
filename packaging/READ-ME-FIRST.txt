@@ -17,6 +17,8 @@ hash. See README.md, "Windows".
 This build was made by GitHub Actions: cross-compiled on Linux for x86_64-pc-windows-gnu. The Linux test suite ran before it was built;
 there is no automated test on Windows. Please report what you see.
 
+License: GPL-3.0-only (the file LICENSE next to this one). The notices of the third-party components are in THIRD-PARTY-NOTICES.txt, the fonts' license is
+in FONTS-LICENSE.txt. The source code of this version is https://github.com/nathak/karsenia/tree/v@VERSION@ (the same repository and tag the program was built from).
 Removing it: nothing is installed. Delete this folder. Your chats and settings stay in %USERPROFILE%\.local\share\tenrec; delete that folder too to remove them.
 (Worktrees of chats are under ~\tenrec-worktrees: clean them up from the chat first.)
 

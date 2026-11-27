@@ -12,7 +12,7 @@ A desktop-style host for [Claude Code](https://claude.com/claude-code). A Rust c
 cards that wait for you, several accounts kept apart, usage and cost, notes and skills, git-worktree chats, and one board that
 shows every chat at once.
 
-> Status: early (v0.1.4). The Linux test suite is large; Windows has no automated tests, only hand use; the macOS app is built
+> Status: early (v0.1.5). The Linux test suite is large; Windows has no automated tests, only hand use; the macOS app is built
 > but has never been run on a Mac. Expect rough edges.
 
 **Contents:** [Download](#download) · [First run](#first-run) · [A tour of the desktop app](#a-tour-of-the-desktop-app) ·
@@ -198,16 +198,20 @@ address you gave it: use it only for an address you trust. Details and known lim
 
 ## Versions
 
-- **0.1.4** — the macOS app (experimental), built by CI. **0.1.3** — the board, per-project form defaults, archive, project trust, one account select box, a more
+- **0.1.5** — the license: GPL-3.0-only from this version on; third-party notices, `SECURITY.md`, `CONTRIBUTING.md`; the Windows program carries its name and version.
+  **0.1.4** — the macOS app (experimental), built by CI. **0.1.3** — the board, per-project form defaults, archive, project trust, one account select box, a more
   menu in the chat header; the Windows zip built by GitHub Actions. (0.1.2 was never released.)
 - **0.1.1** — the name Karsenia and a new icon; the "/" menu; the project check; usage and cost with budgets; provider headers and gateways.
 - **0.1.0** — the first public build, published as Tenrec.
 
 ## License
 
-Source code: [MIT](LICENSE). The desktop app is built with [Slint](https://slint.dev) under its Royalty-free Desktop License
-(the attribution is in Settings → About). Fonts (Pretendard, JetBrains Mono) are under the SIL Open Font License; their texts are in
-`ui/vendor/`.
+**GPL-3.0-only** (see [LICENSE](LICENSE)), from version 0.1.5 on. Karsenia's desktop app is built with [Slint](https://slint.dev), which is used here under
+its GNU GPLv3 option, so the program as a whole is GPL-3.0-only; the third-party crates are under MIT, Apache-2.0 and similar licenses that are compatible with it
+(the list is in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt)). Fonts (Pretendard, JetBrains Mono) are under the SIL Open Font License, shipped as separate
+files; their texts are in `ui/vendor/`. The source of every release is this repository at the release's tag.
+Versions up to 0.1.4 were published with the source code under the MIT license and the program built with Slint under its Royalty-free Desktop License; those
+releases stay as they were published. Contributions are accepted under GPL-3.0-only (see [CONTRIBUTING.md](CONTRIBUTING.md)); security reports: [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -222,7 +226,7 @@ Source code: [MIT](LICENSE). The desktop app is built with [Slint](https://slint
 데스크톱 앱(Slint, 브라우저 없음, 로컬 라이브 보기를 켜지 않으면 네트워크 수신 포트 없음)이거나 로컬 웹 페이지입니다. 터미널에서는 한눈에 보이지 않는 것을 더합니다:
 사용자의 클릭을 기다리는 권한 카드, 따로 두는 여러 계정, 사용량과 비용, 메모와 스킬, git worktree 채팅, 모든 채팅을 한 화면에 모은 보드.
 
-> 상태: 초기 단계(v0.1.4). 리눅스용 테스트는 많지만 Windows는 자동 테스트 없이 손으로만 확인했습니다. macOS 앱은 빌드만 되고
+> 상태: 초기 단계(v0.1.5). 리눅스용 테스트는 많지만 Windows는 자동 테스트 없이 손으로만 확인했습니다. macOS 앱은 빌드만 되고
 > Mac에서 실행해 본 적이 없습니다. 거친 부분이 있을 수 있습니다.
 
 **목차:** [내려받기](#내려받기) · [처음 실행](#처음-실행) · [데스크톱 앱 둘러보기](#데스크톱-앱-둘러보기) · [기능](#기능) ·
@@ -396,12 +400,16 @@ cargo test --features desktop                           # 모델 호출 없음: 
 
 ## 버전
 
-- **0.1.4** — macOS 앱(실험적), CI가 빌드. **0.1.3** — 보드, 프로젝트별 폼 기본값, 보관, 프로젝트 신뢰, 계정 선택 상자 하나, 채팅 헤더의 더보기 메뉴,
+- **0.1.5** — 라이선스: 이 버전부터 GPL-3.0-only. 제3자 고지, `SECURITY.md`, `CONTRIBUTING.md`, Windows 프로그램에 이름과 버전 정보.
+  **0.1.4** — macOS 앱(실험적), CI가 빌드. **0.1.3** — 보드, 프로젝트별 폼 기본값, 보관, 프로젝트 신뢰, 계정 선택 상자 하나, 채팅 헤더의 더보기 메뉴,
   GitHub Actions가 만드는 Windows zip. (0.1.2는 릴리스되지 않았습니다.)
 - **0.1.1** — Karsenia라는 이름과 새 아이콘, "/" 메뉴, 프로젝트 확인, 예산이 있는 사용량·비용, 제공자 헤더와 게이트웨이.
 - **0.1.0** — 처음 공개한 빌드(이름은 Tenrec).
 
 ## 라이선스
 
-소스 코드는 [MIT](LICENSE)입니다. 데스크톱 앱은 [Slint](https://slint.dev)의 Royalty-free Desktop License로 빌드하며
-(고지는 설정 → 정보에 있음), 글꼴(Pretendard, JetBrains Mono)은 SIL Open Font License이고 전문은 `ui/vendor/`에 있습니다.
+**GPL-3.0-only**입니다([LICENSE](LICENSE)). 0.1.5부터 적용됩니다. 데스크톱 앱은 [Slint](https://slint.dev)로 만들고 Slint는 GNU GPLv3 선택지로 쓰므로 프로그램 전체가
+GPL-3.0-only이며, 제3자 크레이트는 이와 호환되는 MIT, Apache-2.0 등입니다(목록은 [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt)). 글꼴(Pretendard, JetBrains Mono)은
+SIL Open Font License이고 별도 파일로 들어 있으며 전문은 `ui/vendor/`에 있습니다. 각 릴리스의 소스는 이 저장소의 해당 태그입니다.
+0.1.4까지는 소스 코드를 MIT로, 프로그램을 Slint의 Royalty-free Desktop License로 빌드해 공개했고 그 릴리스들은 공개된 그대로 남습니다. 기여는 GPL-3.0-only로 받습니다
+([CONTRIBUTING.md](CONTRIBUTING.md)). 보안 문제 제보: [SECURITY.md](SECURITY.md).

@@ -28,10 +28,72 @@ fn windows_icon() {
         return;
     }
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("tenrec-icon.res");
-    match std::fs::read("assets/icon.ico").map_err(|e| e.to_string()).and_then(|ico| icon_resource(&ico)).and_then(|res| std::fs::write(&out, res).map_err(|e| e.to_string())) {
+    let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+    match std::fs::read("assets/icon.ico").map_err(|e| e.to_string()).and_then(|ico| icon_resource(&ico)).and_then(|mut res| {
+        // The program's own name and version (Explorer's Properties → Details, and what a signing service checks).
+        resource(&mut res, 16, 1, 0x0030, &version_info(&version));
+        std::fs::write(&out, res).map_err(|e| e.to_string())
+    }) {
         Ok(()) => println!("cargo:rustc-link-arg-bin=karsenia-desktop={}", out.display()),
-        Err(why) => println!("cargo:warning=the program icon was not embedded: {why}"),
+        Err(why) => println!("cargo:warning=the program icon and version were not embedded: {why}"),
     }
+}
+
+/// One node of a version resource: its length, the length of its value, its kind (1 text, 0 binary), its name, the value and the nodes under it.
+/// Every part starts on a 4-byte boundary; a node's length counts what is in it, not the padding after it.
+fn version_node(key: &str, value_len: u16, kind: u16, value: &[u8], children: &[Vec<u8>]) -> Vec<u8> {
+    fn pad(out: &mut Vec<u8>) {
+        while !out.len().is_multiple_of(4) {
+            out.push(0);
+        }
+    }
+    let mut out = vec![0, 0];
+    out.extend(value_len.to_le_bytes());
+    out.extend(kind.to_le_bytes());
+    for unit in key.encode_utf16().chain([0]) {
+        out.extend(unit.to_le_bytes());
+    }
+    pad(&mut out);
+    out.extend(value);
+    for child in children {
+        pad(&mut out);
+        out.extend(child);
+    }
+    let length = out.len() as u16;
+    out[..2].copy_from_slice(&length.to_le_bytes());
+    out
+}
+
+/// The `RT_VERSION` resource of the program: product, description, version and the license line, in the neutral language with the Unicode code page.
+fn version_info(version: &str) -> Vec<u8> {
+    let mut numbers = version.split(['.', '-', '+']).map(|n| n.parse::<u16>().unwrap_or(0));
+    let parts: [u16; 4] = [numbers.next().unwrap_or(0), numbers.next().unwrap_or(0), numbers.next().unwrap_or(0), 0];
+    let (ms, ls) = ((u32::from(parts[0]) << 16) | u32::from(parts[1]), (u32::from(parts[2]) << 16) | u32::from(parts[3]));
+    // VS_FIXEDFILEINFO: the signature, the structure's version, file and product version, the flags that count (none set), Windows NT, an application.
+    let mut fixed = Vec::new();
+    for word in [0xFEEF_04BDu32, 0x0001_0000, ms, ls, ms, ls, 0x3F, 0, 0x0004_0004, 1, 0, 0, 0] {
+        fixed.extend(word.to_le_bytes());
+    }
+    let text = |name: &str, value: &str| {
+        let units: Vec<u8> = value.encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect();
+        version_node(name, (units.len() / 2) as u16, 1, &units, &[])
+    };
+    let strings = [
+        text("CompanyName", "Karsenia contributors"),
+        text("FileDescription", "Karsenia desktop"),
+        text("FileVersion", version),
+        text("InternalName", "karsenia-desktop"),
+        text("LegalCopyright", "Copyright (c) 2026 Karsenia contributors. GPL-3.0-only."),
+        text("OriginalFilename", "karsenia-desktop.exe"),
+        text("ProductName", "Karsenia"),
+        text("ProductVersion", version),
+    ];
+    let table = version_node("040904B0", 0, 1, &[], &strings);
+    let string_info = version_node("StringFileInfo", 0, 1, &[], &[table]);
+    // The language and code page this file is in: 0x0409 and 1200 (Unicode).
+    let translation = version_node("Translation", 4, 0, &[0x09, 0x04, 0xB0, 0x04], &[]);
+    let var_info = version_node("VarFileInfo", 0, 1, &[], &[translation]);
+    version_node("VS_VERSION_INFO", fixed.len() as u16, 0, &fixed, &[string_info, var_info])
 }
 
 fn u16_at(bytes: &[u8], at: usize) -> Result<u16, String> {

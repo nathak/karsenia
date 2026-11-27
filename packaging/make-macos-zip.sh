@@ -33,7 +33,7 @@ iconutil -c icns "$iconset" -o "$app/Contents/Resources/icon.icns"
 codesign --force --deep --sign - "$app"
 codesign --verify --deep --strict "$app"
 sed -e "s/@VERSION@/${version}/g" -e "s/@COMMIT@/${commit}/g" "$here/READ-ME-FIRST-macos.txt" > "$folder/READ-ME-FIRST.txt"
-cp "$here/FONTS-LICENSE.txt" "$folder/"
+cp "$here/FONTS-LICENSE.txt" "$root/LICENSE" "$root/THIRD-PARTY-NOTICES.txt" "$folder/"
 # A zip made again replaces the old one.
 [ -e "$out/$name.zip" ] && mv -f "$out/$name.zip" "$stage/old.zip"
 ditto -c -k --keepParent "$folder" "$out/$name.zip"
